@@ -13,7 +13,38 @@
 //   - Local: supabase/functions/.env (gitignored, never committed)
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { AuthMiddleware } from "../_shared/authentication.ts";
+import * as jose from "jsr:@panva/jose@6";
+
+// Self-contained auth check (rather than importing Atomic's
+// supabase/functions/_shared/authentication.ts) so this function has no
+// relative-path dependencies to get wrong across the two different ways
+// it gets deployed (Supabase MCP direct deploy vs. local `supabase start`
+// picking it up from the repo).
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
+const SUPABASE_JWT_ISSUER =
+  Deno.env.get("SB_JWT_ISSUER") ?? `${SUPABASE_URL}/auth/v1`;
+const SUPABASE_JWT_KEYS = jose.createRemoteJWKSet(
+  new URL(`${SUPABASE_URL}/auth/v1/.well-known/jwks.json`),
+);
+
+async function requireAuth(req: Request): Promise<Response | null> {
+  const authHeader = req.headers.get("authorization");
+  if (!authHeader) {
+    return jsonResponse({ error: "Missing authorization header" }, 401);
+  }
+  const [bearer, token] = authHeader.split(" ");
+  if (bearer !== "Bearer" || !token) {
+    return jsonResponse({ error: "Invalid authorization header" }, 401);
+  }
+  try {
+    await jose.jwtVerify(token, SUPABASE_JWT_KEYS, {
+      issuer: SUPABASE_JWT_ISSUER,
+    });
+    return null; // authorized
+  } catch {
+    return jsonResponse({ error: "Unauthorized" }, 401);
+  }
+}
 
 const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
 const ANTHROPIC_MODEL =
@@ -176,9 +207,22 @@ const parseJobDescription = async (req: Request) => {
   }
 };
 
-Deno.serve(async (req: Request) =>
-  AuthMiddleware(req, async (req: Request) => parseJobDescription(req)),
-);
+Deno.serve(async (req: Request) => {
+  if (req.method === "OPTIONS") {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Headers":
+          "authorization, x-client-info, apikey, content-type",
+        "Access-Control-Allow-Methods": "POST",
+      },
+    });
+  }
+  const authError = await requireAuth(req);
+  if (authError) return authError;
+  return parseJobDescription(req);
+});
 
 const jsonResponse = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), {

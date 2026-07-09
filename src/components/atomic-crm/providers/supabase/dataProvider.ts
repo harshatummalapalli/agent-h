@@ -225,6 +225,47 @@ const getDataProviderWithCustomMethods = () => {
 
       return data;
     },
+    // Agent H Stage 2: JD intake. Calls the parse-job-description edge
+    // function, which runs a single forced tool-use call against Claude to
+    // turn free-text JD content into the structured role-brief fields added
+    // in supabase/schemas/15_agent_h_structured_role_brief_fields.sql.
+    async parseJobDescription(jdText: string) {
+      const { data, error } = await getSupabaseClient().functions.invoke<{
+        data: {
+          title: string;
+          seniority: string;
+          location: string;
+          industry: string | null;
+          employment_type: string;
+          years_experience_min: number | null;
+          years_experience_max: number | null;
+          required_skills: string[];
+          must_have_keywords: string[];
+          nice_to_have_keywords: string[];
+        };
+      }>("parse-job-description", {
+        method: "POST",
+        body: { jd_text: jdText },
+      });
+
+      if (!data || error) {
+        console.error("parseJobDescription.error", error);
+        const errorDetails = await (async () => {
+          try {
+            return (await error?.context?.json()) ?? {};
+          } catch {
+            return {};
+          }
+        })();
+        throw new Error(
+          errorDetails?.message ||
+            errorDetails?.error ||
+            "Failed to parse the job description",
+        );
+      }
+
+      return data.data;
+    },
     async getConfiguration(): Promise<ConfigurationContextValue> {
       const { data } = await baseDataProvider.getOne("configuration", {
         id: 1,

@@ -91,6 +91,13 @@ type RoleBriefDetail = {
   company_size_max: number | null;
   excluded_companies: string[] | null;
   exclusion_keywords: string[] | null;
+  // Past-position search (2026-07-22): recruiter-entered, JD-intake-time
+  // sourcing preferences -- see the matching field comment in
+  // JdIntakePage.tsx's ParsedRoleBrief type for the full rationale. Read-
+  // only here, same as excluded_companies/exclusion_keywords above; edited
+  // only at intake time, not from this page.
+  past_titles: string[] | null;
+  past_companies: string[] | null;
   // Agent H, 2026-07-22: ranked primary-vs-fallback profile, only
   // populated when the JD genuinely described one (see
   // parse-job-description's header comment). Rendered as distinct tier
@@ -2925,6 +2932,19 @@ export const SourceCandidatesPage = ({
               roleBriefDetail.exclusion_keywords.length > 0 && (
                 <li>
                   Excluding: {roleBriefDetail.exclusion_keywords.join(", ")}
+                </li>
+              )}
+            {roleBriefDetail.past_titles &&
+              roleBriefDetail.past_titles.length > 0 && (
+                <li>
+                  Boosting past titles: {roleBriefDetail.past_titles.join(", ")}
+                </li>
+              )}
+            {roleBriefDetail.past_companies &&
+              roleBriefDetail.past_companies.length > 0 && (
+                <li>
+                  Boosting past companies:{" "}
+                  {roleBriefDetail.past_companies.join(", ")}
                 </li>
               )}
           </ul>

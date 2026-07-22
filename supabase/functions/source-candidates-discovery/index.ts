@@ -281,6 +281,22 @@ type RoleBrief = {
   company_type: string | null;
   company_size_min: number | null;
   company_size_max: number | null;
+  // Past-position search fix (2026-07-22 session, migration
+  // `deals_past_position_criteria`, applied live to the deals table --
+  // no local migration file, this project has no supabase/migrations/
+  // directory, schema changes go straight through the Supabase MCP against
+  // the live project). Distinct from required_skills/must_have_keywords
+  // (current-role-only, matched against the flat active_experience_title
+  // field) and excluded_companies (also current-employer-only, see the
+  // mustNot nested clause in coresignalProvider below) -- these two
+  // instead describe a candidate's WORK HISTORY, verified live-queryable
+  // against Coresignal's nested `experience` array (see the AGENT_H_HANDOFF_
+  // 2026-07-21.md test log, Query 2: "Java developers currently at
+  // Google/Meta/..., previously at Microsoft" -- 2 real matches, a genuine
+  // two-nested-clause structure, not a guess). Recruiter-entered, same as
+  // excluded_companies/exclusion_keywords above -- never LLM-derived.
+  past_titles: string[] | null;
+  past_companies: string[] | null;
   // Fields below are read only for building/caching the checkpoint 3c
   // embedding text -- not used by buildPdlQuery.
   jd_text: string | null;
@@ -316,6 +332,7 @@ async function fetchRoleBrief(
     `employment_type,must_have_keywords,nice_to_have_keywords,years_experience_min,` +
     `years_experience_max,` +
     `excluded_companies,exclusion_keywords,company_type,company_size_min,company_size_max,` +
+    `past_titles,past_companies,` +
     `role_brief_embedding,role_brief_embedding_text,role_brief_embedding_model,` +
     `role_brief_last_scroll_token,role_brief_last_scroll_query,` +
     `role_brief_title_expansions,role_brief_title_expansions_source_title`;
@@ -1055,6 +1072,17 @@ type DiscoveryCriteria = {
   companyType: string | null;
   companySizeMin: number | null;
   companySizeMax: number | null;
+  // Past-position search fix (see the RoleBrief.past_titles/past_companies
+  // field comment above for the full rationale and the live-verified
+  // Coresignal test this is based on). Distinct from `titles`/
+  // `requiredSkills` (current-role-only signals, matched against the flat
+  // active_experience_title field) and `excludedCompanies` (also current-
+  // employer-only) -- these describe a candidate's work HISTORY, matched
+  // against Coresignal's nested `experience` array without the
+  // active_experience:1 restriction those other clauses use. Null/empty
+  // when the recruiter hasn't entered any past-position preference.
+  pastTitles: string[] | null;
+  pastCompanies: string[] | null;
   // Calibration loop: ACTIVE learned criteria for this role brief (already
   // filtered by status -- see fetchLearnedCriteria). Null/empty when none
   // exist yet. Only coresignalProvider currently applies these (see its
@@ -1544,6 +1572,19 @@ const apolloProvider: DiscoveryProvider = {
 //     primary seniority signal, so the enum becomes a tie-breaker instead
 //     of a second independent gate that could zero out results again.
 //     Nice-to-have keywords are also folded in here as light score boosts.
+//   - Past-position search fix (2026-07-22 session): a NEW soft signal,
+//     also nested on `experience` but deliberately WITHOUT the
+//     active_experience:1 restriction the current-employer/current-title
+//     clauses above use -- "previously at Microsoft" means ANY entry in
+//     the candidate's work history, not specifically their current job.
+//     Live-verified against Coresignal's own query assistant (see
+//     AGENT_H_HANDOFF_2026-07-21.md, Query 2): "currently at
+//     Google/Meta/..., previously at Microsoft" resolved to a genuine
+//     two-nested-clause structure and returned 2 real matches -- the
+//     company-name half of this is high confidence. The title half
+//     (pastTitles, field `experience.position_title`) is confirmed directly
+//     against Coresignal's own Multi-source Employee API data dictionary
+//     (fetched 2026-07-22) rather than guessed -- see the note pushed below.
 const CORESIGNAL_TOP_SKILLS_COUNT = 4;
 const CORESIGNAL_TOP_SKILLS_MAJORITY_FRACTION = 0.6;
 const CORESIGNAL_NICE_TO_HAVE_BOOST_COUNT = 5;
@@ -1657,7 +1698,6 @@ const coresignalProvider: DiscoveryProvider = {
     } else if (criteria.location) {
       notes.push("Role marked remote/location-flexible -- no location constraint applied.");
     }
-
     // --- Hard filter: majority of the top required skills, not all of
     // them and not just one -- see header comment for why. ---
     //
@@ -1981,6 +2021,77 @@ const coresignalProvider: DiscoveryProvider = {
       });
       notes.push(
         `Boosting (not requiring) candidates whose current company size is ${criteria.companySizeMin ?? "any"}-${criteria.companySizeMax ?? "any"} employees. Field name not yet confirmed against a live Coresignal response -- if this silently has no effect, that's the first thing to check.`,
+      );
+    }
+
+    // --- Soft signal: past-position search (2026-07-22 session). See the
+    // header comment above and the RoleBrief.past_titles/past_companies
+    // field comment for the full rationale/verification trail. Deliberately
+    // a "should", not a "must" -- same reasoning as industry/companyType
+    // above: this describes a work-history preference the recruiter wants
+    // BOOSTED, not a hard requirement that could zero out an otherwise
+    // great candidate over an incomplete Coresignal history.
+    //
+    // pastCompanies: CONFIRMED. Matched against the nested
+    // `experience.company_name` field, deliberately WITHOUT the
+    // `experience.active_experience: 1` restriction the current-employer
+    // clauses above use -- "previously at Microsoft" should match ANY
+    // entry in the candidate's history, current or past, since Coresignal's
+    // nested array doesn't let us cleanly express "this entry AND it's not
+    // the active one" without an extra script/range clause not worth the
+    // complexity here. Live-verified two-nested-clause pattern: see
+    // AGENT_H_HANDOFF_2026-07-21.md, Query 2 ("currently at
+    // Google/Meta/..., previously at Microsoft" -- 2 real matches,
+    // Coresignal's own query assistant built exactly this shape).
+    if (criteria.pastCompanies && criteria.pastCompanies.length > 0) {
+      for (const company of criteria.pastCompanies) {
+        should.push({
+          nested: {
+            path: "experience",
+            query: {
+              bool: {
+                must: [{ match: { "experience.company_name": company } }],
+              },
+            },
+          },
+        });
+      }
+      notes.push(
+        `Boosting (not requiring) candidates who have worked at: ${criteria.pastCompanies.join(", ")} at any point in their career (matched against Coresignal's nested experience.company_name field, live-verified via Coresignal's own query assistant -- see AGENT_H_HANDOFF_2026-07-21.md).`,
+      );
+    }
+
+    // pastTitles: CONFIRMED, fixed 2026-07-22 -- the first draft of this
+    // clause used `experience.title`, a guessed field name that was never
+    // actually checked against Coresignal's own docs. Confirmed directly
+    // against Coresignal's published Multi-source Employee API data
+    // dictionary (docs.coresignal.com/employee-api/multi-source-employee-api/
+    // data-dictionary-multi-source-employee-api, fetched 2026-07-22): the
+    // nested `experience` array's real title field is `position_title`
+    // (String), alongside `active_experience` (Integer, 1 = current position,
+    // 0 = past) -- which is exactly the flag AGENT_H_HANDOFF_2026-07-21.md's
+    // Query 1 test relied on when it manually verified a real candidate's
+    // `experience` array had a distinct past position ("Founding Engineer",
+    // active_experience: 0) separate from their current one ("AI Engineer",
+    // active_experience: 1). Same "should, not must" and "no active_experience
+    // restriction" reasoning as pastCompanies above -- a past title should
+    // match any point in the candidate's history, not just their immediately
+    // prior role.
+    if (criteria.pastTitles && criteria.pastTitles.length > 0) {
+      for (const title of criteria.pastTitles) {
+        should.push({
+          nested: {
+            path: "experience",
+            query: {
+              bool: {
+                must: [{ match: { "experience.position_title": { query: title, operator: "and" } } }],
+              },
+            },
+          },
+        });
+      }
+      notes.push(
+        `Boosting (not requiring) candidates who have held a title matching: ${criteria.pastTitles.join(", ")} at any point in their career (matched against Coresignal's nested experience.position_title field, confirmed directly against Coresignal's own data dictionary).`,
       );
     }
 
@@ -2384,6 +2495,8 @@ async function handleCalibrationContextualize(
     companyType: roleBrief.company_type,
     companySizeMin: roleBrief.company_size_min,
     companySizeMax: roleBrief.company_size_max,
+    pastTitles: roleBrief.past_titles,
+    pastCompanies: roleBrief.past_companies,
     learnedCriteria: activeLearnedCriteria.length > 0 ? activeLearnedCriteria : null,
   };
 
@@ -2565,6 +2678,8 @@ async function handleCriteriaImpact(
     companyType: roleBrief.company_type,
     companySizeMin: roleBrief.company_size_min,
     companySizeMax: roleBrief.company_size_max,
+    pastTitles: roleBrief.past_titles,
+    pastCompanies: roleBrief.past_companies,
     learnedCriteria: learned && learned.length > 0 ? learned : null,
   });
 
@@ -2794,6 +2909,8 @@ const discoverCandidates = async (body: any, authHeader: string) => {
     companyType: roleBrief.company_type,
     companySizeMin: roleBrief.company_size_min,
     companySizeMax: roleBrief.company_size_max,
+    pastTitles: roleBrief.past_titles,
+    pastCompanies: roleBrief.past_companies,
     learnedCriteria: activeLearnedCriteria.length > 0 ? activeLearnedCriteria : null,
   };
 
@@ -2964,3 +3081,4 @@ Deno.serve(async (req: Request) => {
 
   return discoverCandidates(body, authHeader);
 });
+

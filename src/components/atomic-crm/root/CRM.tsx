@@ -27,6 +27,7 @@ import { ConfirmationRequired } from "../login/ConfirmationRequired";
 import { ImportPage } from "../misc/ImportPage";
 import { ChangelogPage } from "../misc/ChangelogPage";
 import { JdIntakePage } from "../jd-intake/JdIntakePage";
+import { SourceCandidatesPage } from "../sourcing/SourceCandidatesPage";
 import {
   getAuthProvider as defaultAuthProviderBuilder,
   getDataProvider as defaultDataProviderBuilder,
@@ -266,6 +267,10 @@ const DesktopAdmin = (
         <Route path={ImportPage.path} element={<ImportPage />} />
         <Route path={ChangelogPage.path} element={<ChangelogPage />} />
         <Route path={JdIntakePage.path} element={<JdIntakePage />} />
+        <Route
+          path={SourceCandidatesPage.path}
+          element={<SourceCandidatesPage />}
+        />
       </CustomRoutes>
       <Resource name="deals" {...deals} />
       <Resource name="contacts" {...contacts} />

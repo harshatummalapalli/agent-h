@@ -266,19 +266,90 @@ const getDataProviderWithCustomMethods = () => {
 
       return data.data;
     },
-    async getConfiguration(): Promise<ConfigurationContextValue> {
-      const { data } = await baseDataProvider.getOne("configuration", {
-        id: 1,
+    // Agent H Stage 3, checkpoint 3a: pure PDL discovery. Calls the
+    // source-candidates-discovery edge function, which builds a PDL Person
+    // Search query from a role brief's structured fields and returns
+    // whatever candidates PDL finds. No dedup, matching, or scoring yet --
+    // see the edge function's own header comment for the full checkpoint
+    // scope.
+    async sourceCandidates(roleBriefId: Identifier, size?: number) {
+      const { data, error } = await getSupabaseClient().functions.invoke<{
+        role_brief: { id: number; title: string | null; location: string | null };
+        query_used: unknown;
+        notes: string[];
+        total: number;
+        candidates: Array<{
+          id: string;
+          full_name?: string;
+          job_title?: string;
+          job_company_name?: string;
+          location_name?: string;
+          linkedin_url?: string;
+          emails?: { address: string; type?: string }[];
+          skills?: string[];
+        }>;
+      }>("source-candidates-discovery", {
+        method: "POST",
+        body: { role_brief_id: roleBriefId, size },
       });
-      return (data?.config as ConfigurationContextValue) ?? {};
+
+      if (!data || error) {
+        console.error("sourceCandidates.error", error);
+        const errorDetails = await (async () => {
+          try {
+            return (await error?.context?.json()) ?? {};
+          } catch {
+            return {};
+          }
+        })();
+        throw new Error(
+          errorDetails?.message ||
+            errorDetails?.error ||
+            "Failed to search for candidates",
+        );
+      }
+
+      return data;
+    },
+    // Agent H: configuration is now one row per tenant (not Atomic's
+    // original single global row with a hardcoded id of 1 -- see
+    // supabase/schemas/12_agent_h_configuration_per_tenant.sql). RLS already
+    // scopes the "configuration" table to the current tenant, so fetching
+    // "whichever row I'm allowed to see" always returns the right one,
+    // without the frontend needing to know its own tenant_id up front.
+    async getConfiguration(): Promise<ConfigurationContextValue> {
+      const { data } = await baseDataProvider.getList("configuration", {
+        pagination: { page: 1, perPage: 1 },
+        sort: { field: "id", order: "ASC" },
+        filter: {},
+      });
+      return (data?.[0]?.config as ConfigurationContextValue) ?? {};
     },
     async updateConfiguration(
       config: ConfigurationContextValue,
     ): Promise<ConfigurationContextValue> {
+      const { data: existing } = await baseDataProvider.getList(
+        "configuration",
+        {
+          pagination: { page: 1, perPage: 1 },
+          sort: { field: "id", order: "ASC" },
+          filter: {},
+        },
+      );
+      const existingRow = existing?.[0];
+
+      if (!existingRow) {
+        // First time this tenant is saving settings -- no row exists yet.
+        const { data } = await baseDataProvider.create("configuration", {
+          data: { config },
+        });
+        return data.config as ConfigurationContextValue;
+      }
+
       const { data } = await baseDataProvider.update("configuration", {
-        id: 1,
+        id: existingRow.id,
         data: { config },
-        previousData: { id: 1 },
+        previousData: existingRow,
       });
       return data.config as ConfigurationContextValue;
     },

@@ -224,8 +224,21 @@ Deno.serve(async (req: Request) => {
   return parseJobDescription(req);
 });
 
+// Bugfix: CORS headers were only being sent on the OPTIONS preflight
+// response, not on the actual POST/error responses. Browsers require the
+// Access-Control-Allow-Origin header on the real response too, not just
+// the preflight -- without it, the browser silently blocks the frontend
+// from ever reading the (successful!) response, which is exactly what
+// happened during Stage 2 integration testing.
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST",
+};
+
 const jsonResponse = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...CORS_HEADERS },
   });

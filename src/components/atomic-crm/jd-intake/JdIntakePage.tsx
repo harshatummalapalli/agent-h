@@ -108,7 +108,7 @@ export const JdIntakePage = () => {
     if (!parsed) return;
     setSaving(true);
     try {
-      const { data } = await dataProvider.create("deals", {
+      await dataProvider.create("deals", {
         data: {
           name: parsed.title,
           // "opportunity" is one of Atomic's stock deal stages so the
@@ -131,7 +131,11 @@ export const JdIntakePage = () => {
         },
       });
       notify("Role brief created", { type: "success" });
-      redirect(`/deals/${data.id}/show`);
+      // Redirect to the plain list, not /deals/:id/show -- the deals
+      // resource only registers a "list" view (see
+      // src/components/atomic-crm/deals/index.ts); show/edit are dialogs
+      // opened from within that list, not standalone routes.
+      redirect("/deals");
     } catch (error: any) {
       notify(error?.message || "Failed to create the role brief", {
         type: "error",

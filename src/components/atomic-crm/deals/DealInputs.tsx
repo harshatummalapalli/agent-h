@@ -96,7 +96,7 @@ const DealMiscInputs = () => {
         choices={dealStages}
         optionText="label"
         optionValue="value"
-        defaultValue="opportunity"
+        defaultValue="sourcing"
         helperText={false}
         validate={required()}
       />

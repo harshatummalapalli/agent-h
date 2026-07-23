@@ -15,10 +15,12 @@ import { ForgotPasswordPage } from "@/components/supabase/forgot-password-page";
 import { SetPasswordPage } from "@/components/supabase/set-password-page";
 import { OAuthConsentPage } from "@/components/supabase/oauth-consent-page";
 
+import candidates from "../candidates";
 import companies from "../companies";
 import contacts from "../contacts";
-import { Dashboard } from "../dashboard/Dashboard";
 import { MobileDashboard } from "../dashboard/MobileDashboard";
+import { InboxPage } from "../inbox/InboxPage";
+import { CanvasPage } from "../canvas/CanvasPage";
 import deals from "../deals";
 import { Layout } from "../layout/Layout";
 import { MobileLayout } from "../layout/MobileLayout";
@@ -27,6 +29,8 @@ import { ConfirmationRequired } from "../login/ConfirmationRequired";
 import { ImportPage } from "../misc/ImportPage";
 import { ChangelogPage } from "../misc/ChangelogPage";
 import { JdIntakePage } from "../jd-intake/JdIntakePage";
+import { RoleWorkspacePage } from "../roles/RoleWorkspacePage";
+import { CandidateApplicationPage } from "../apply/CandidateApplicationPage";
 import { SourceCandidatesPage } from "../sourcing/SourceCandidatesPage";
 import {
   getAuthProvider as defaultAuthProviderBuilder,
@@ -244,7 +248,7 @@ const DesktopAdmin = (
   return (
     <Admin
       layout={props.layout ?? Layout}
-      dashboard={props.dashboard ?? Dashboard}
+      dashboard={props.dashboard ?? InboxPage}
       {...props}
     >
       <CustomRoutes noLayout>
@@ -259,6 +263,10 @@ const DesktopAdmin = (
           element={<ForgotPasswordPage />}
         />
         <Route path={OAuthConsentPage.path} element={<OAuthConsentPage />} />
+        <Route
+          path={CandidateApplicationPage.path}
+          element={<CandidateApplicationPage />}
+        />
       </CustomRoutes>
 
       <CustomRoutes>
@@ -271,10 +279,16 @@ const DesktopAdmin = (
           path={SourceCandidatesPage.path}
           element={<SourceCandidatesPage />}
         />
+        <Route
+          path={RoleWorkspacePage.path}
+          element={<RoleWorkspacePage />}
+        />
+        <Route path={CanvasPage.path} element={<CanvasPage />} />
       </CustomRoutes>
       <Resource name="deals" {...deals} />
       <Resource name="contacts" {...contacts} />
       <Resource name="companies" {...companies} />
+      <Resource name="candidates" {...candidates} />
       <Resource name="contact_notes" />
       <Resource name="deal_notes" />
       <Resource name="tasks" />
@@ -328,6 +342,10 @@ const MobileAdmin = (
             element={<ForgotPasswordPage />}
           />
           <Route path={OAuthConsentPage.path} element={<OAuthConsentPage />} />
+          <Route
+            path={CandidateApplicationPage.path}
+            element={<CandidateApplicationPage />}
+          />
         </CustomRoutes>
         <CustomRoutes>
           <Route

@@ -125,6 +125,27 @@ export type Deal = {
   expected_closing_date: string;
   sales_id: Identifier;
   index: number;
+  // Agent H, schema 30 (2026-07-19): unguessable token backing the public,
+  // unauthenticated candidate-application link (/apply/:token). Every deal
+  // gets one for free via the column's DB default -- never null in
+  // practice, but optional here defensively since older client-side record
+  // shapes (fakerest fixtures, cached queries from before this column
+  // existed) may not include it.
+  public_application_token?: string;
+  // Agent H, 2026-07-22 migration (agent_h_role_brief_tiers_and_clarifications):
+  // ranked primary-vs-fallback candidate profile, only populated when the
+  // JD genuinely described one -- see parse-job-description's header
+  // comment. Null/empty for the common flat-requirement case.
+  preference_tiers?: Array<{
+    rank: number;
+    label: string;
+    keywords: string[];
+    condition: string | null;
+  }> | null;
+  // Ambiguities parse-job-description flagged at intake time (task #30),
+  // shown once as a dismissible advisory in JdIntakePage.
+  clarifying_questions?: string[] | null;
+  clarifying_questions_dismissed?: boolean;
 } & Pick<RaRecord, "id">;
 
 export type DealNote = {
@@ -143,6 +164,65 @@ export type Tag = {
   name: string;
   color: string;
 };
+
+// Agent H Stage 3: a sourced/saved job candidate (public.candidates).
+// Deliberately separate from Contact -- see 09_agent_h_candidates.sql's
+// table comment for why. Enrichment fields are all nullable: null means
+// "never attempted", not "attempted and empty" -- see the column comments in
+// 21_agent_h_contact_and_devsignal_enrichment.sql for the full status
+// vocabulary (enriched / not_found / failed).
+export type Candidate = {
+  first_name: string | null;
+  last_name: string | null;
+  current_title: string | null;
+  current_company_id?: Identifier | null;
+  linkedin_url: string | null;
+  email_jsonb?: EmailAndType[] | null;
+  phone_jsonb?: PhoneNumberAndType[] | null;
+  source: string | null;
+  source_id: string | null;
+  status: string | null;
+  contact_enrichment_status?: "enriched" | "not_found" | "failed" | null;
+  contact_enrichment_source?: "hunter" | "apollo" | null;
+  devsignal_enrichment_status?: "enriched" | "not_found" | "failed" | null;
+  github_username?: string | null;
+  github_url?: string | null;
+  stackoverflow_url?: string | null;
+  engaged_by_sales_id?: Identifier | null;
+  engaged_since?: string | null;
+  // The full search-result payload save-sourced-candidate captured at save
+  // time (2026-07-22 follow-up: this was already being written on every
+  // insert, just never read back anywhere -- see DealCandidatesSection's
+  // "Quick view" for the fix). Vendor-shaped, not a fixed schema -- read
+  // defensively (see readSourceSnapshot in DealCandidatesSection.tsx) since
+  // its exact keys depend on which sourcing edge function produced this
+  // candidate (free-portal/Exa/X-ray all normalize slightly differently).
+  source_raw?: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
+} & Pick<RaRecord, "id">;
+
+// Agent H Stage 3: links a Candidate to a role brief (Deal) they were
+// sourced for (public.deal_candidates). match_score is the Voyage rank
+// score captured at save time -- see
+// 23_agent_h_deal_candidates_match_score.sql -- null for candidates saved
+// before that column existed, or any search that didn't score.
+export type DealCandidate = {
+  deal_id: Identifier;
+  candidate_id: Identifier;
+  sourced_via: string;
+  match_score?: number | null;
+  created_at: string;
+  // Stage 1: Outreach (2026-07-22 migration
+  // agent_h_deal_candidates_outreach_stage) -- bridges "just sourced" to
+  // "actively being contacted". not_contacted (default) -> sent
+  // (send-first-outreach fired) -> responded (a reply was captured via
+  // resend-inbound-reply). Never auto-downgraded once set to responded.
+  response_status?: "not_contacted" | "sent" | "responded";
+  contacted_at?: string | null;
+  responded_at?: string | null;
+  reply_text?: string | null;
+} & Pick<RaRecord, "id">;
 
 export type Task = {
   contact_id: Identifier;

@@ -32,8 +32,16 @@ export const DealCardContent = ({
 }) => {
   const { dealCategories, currency } = useConfigurationContext();
   const redirect = useRedirect();
+  // Role Workspace (2026-07-19): clicking a role card now opens the full
+  // `/roles/:id` workspace (JD summary + sourcing/calibration + pipeline +
+  // notes, all on one screen) instead of the old quick-look DealShow
+  // dialog -- the dialog stayed useful for a fast glance at deal-shaped
+  // fields (amount, stage, contacts), but Agent H's actual work on a role
+  // (sourcing, calibrating, tracking candidates) never lived there. The
+  // dialog view is still reachable directly at /deals/:id/show if ever
+  // needed; nothing was deleted, just no longer the default click target.
   const handleClick = () => {
-    redirect(`/deals/${deal.id}/show`, undefined, undefined, undefined, {
+    redirect(`/roles/${deal.id}`, undefined, undefined, undefined, {
       _scrollToTop: false,
     });
   };
@@ -48,15 +56,15 @@ export const DealCardContent = ({
     >
       <RecordContextProvider value={deal}>
         <Card
-          className={`py-3 transition-all duration-200 ${
+          className={`py-4 rounded-xl border-border/70 shadow-none transition-all duration-200 ${
             snapshot?.isDragging
-              ? "opacity-90 transform rotate-1 shadow-lg"
-              : "shadow-sm hover:shadow-md"
+              ? "opacity-90 transform rotate-1 border-primary/40 bg-accent/40"
+              : "hover:border-primary/30 hover:bg-accent/20"
           }`}
         >
-          <CardContent className="px-3 flex flex-col">
-            <div className="flex-1 flex">
-              <p className="flex-1 text-sm font-medium mb-2">
+          <CardContent className="px-4 flex flex-col gap-2.5">
+            <div className="flex-1 flex items-start gap-2">
+              <p className="flex-1 text-sm font-medium leading-snug">
                 <ReferenceField
                   source="company_id"
                   reference="companies"

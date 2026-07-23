@@ -1,17 +1,17 @@
 export const englishCrmMessages = {
   resources: {
     companies: {
-      name: "Company |||| Companies",
-      forcedCaseName: "Company",
+      name: "Client |||| Clients",
+      forcedCaseName: "Client",
       fields: {
-        name: "Company name",
+        name: "Client name",
         website: "Website",
         linkedin_url: "LinkedIn URL",
         phone_number: "Phone number",
         created_at: "Created at",
         nb_contacts: "Number of contacts",
         revenue: "Revenue",
-        sector: "Sector",
+        sector: "Industry",
         size: "Size",
         tax_identifier: "Tax Identifier",
         address: "Address",
@@ -24,8 +24,8 @@ export const englishCrmMessages = {
         sales_id: "Account manager",
       },
       empty: {
-        description: "It seems your company list is empty.",
-        title: "No companies found",
+        description: "It seems your client list is empty.",
+        title: "No clients found",
       },
       field_categories: {
         contact: "Contact",
@@ -34,17 +34,17 @@ export const englishCrmMessages = {
         context: "Context",
       },
       action: {
-        create: "Create Company",
-        edit: "Edit company",
-        new: "New Company",
-        show: "Show company",
+        create: "Create Client",
+        edit: "Edit client",
+        new: "New Client",
+        show: "Show client",
       },
       added_on: "Added on %{date}",
       followed_by: "Followed by %{name}",
       followed_by_you: "Followed by you",
       no_contacts: "No contact",
       nb_contacts: "%{smart_count} contact |||| %{smart_count} contacts",
-      nb_deals: "%{smart_count} deal |||| %{smart_count} deals",
+      nb_deals: "%{smart_count} open role |||| %{smart_count} open roles",
       sizes: {
         one_employee: "1 employee",
         two_to_nine_employees: "2-9 employees",
@@ -58,7 +58,7 @@ export const englishCrmMessages = {
         create_label: "Start typing to create a new company",
       },
       filters: {
-        only_mine: "Only companies I manage",
+        only_mine: "Only clients I manage",
       },
     },
     contacts: {
@@ -76,7 +76,7 @@ export const englishCrmMessages = {
         last_name: "Last name",
         last_seen: "Last seen",
         title: "Title",
-        company_id: "Company",
+        company_id: "Client",
         email_jsonb: "Email addresses",
         email: "Email",
         phone_jsonb: "Phone numbers",
@@ -191,46 +191,46 @@ export const englishCrmMessages = {
       },
     },
     deals: {
-      name: "Deal |||| Deals",
+      name: "Role |||| Roles",
       fields: {
-        name: "Name",
+        name: "Role title",
         description: "Description",
-        company_id: "Company",
-        contact_ids: "Contacts",
-        category: "Category",
-        amount: "Budget",
-        expected_closing_date: "Expected closing date",
+        company_id: "Client",
+        contact_ids: "Hiring contacts",
+        category: "Department",
+        amount: "Placement fee",
+        expected_closing_date: "Target fill date",
         stage: "Stage",
       },
       action: {
-        back_to_deal: "Back to deal",
-        create: "Create deal",
-        new: "New Deal",
+        back_to_deal: "Back to role",
+        create: "Create role",
+        new: "New Role",
       },
       field_categories: {
         misc: "Misc",
       },
       archived: {
         action: "Archive",
-        error: "Error: deal not archived",
-        list_title: "Archived Deals",
-        success: "Deal archived",
-        title: "Archived Deal",
-        view: "View archived deals",
+        error: "Error: role not archived",
+        list_title: "Archived Roles",
+        success: "Role archived",
+        title: "Archived Role",
+        view: "View archived roles",
       },
       inputs: {
         linked_to: "Linked to",
       },
       unarchived: {
         action: "Send back to the board",
-        error: "Error: deal not unarchived",
-        success: "Deal unarchived",
+        error: "Error: role not unarchived",
+        success: "Role unarchived",
       },
-      updated: "Deal updated",
+      updated: "Role updated",
       empty: {
-        before_create: "before creating a deal.",
-        description: "It seems your deal list is empty.",
-        title: "No deals found",
+        before_create: "before creating a role.",
+        description: "It seems your role list is empty.",
+        title: "No open roles found",
       },
       invalid_date: "Invalid date",
     },
@@ -242,7 +242,7 @@ export const englishCrmMessages = {
         date: "Date",
         attachments: "Attachments",
         contact_id: "Contact",
-        deal_id: "Deal",
+        deal_id: "Role",
       },
       action: {
         add: "Add note",
@@ -387,7 +387,7 @@ export const englishCrmMessages = {
         creating: "Creating...",
         initial_user_created: "Initial user successfully created",
       },
-      welcome_title: "Welcome to Atomic CRM",
+      welcome_title: "Welcome to TalentCursor",
     },
     common: {
       activity: "Activity",
@@ -410,29 +410,29 @@ export const englishCrmMessages = {
       title: "Changelog",
     },
     activity: {
-      added_company: "%{name} added company",
-      you_added_company: "You added company",
+      added_company: "%{name} added client",
+      you_added_company: "You added client",
       added_contact: "%{name} added",
       you_added_contact: "You added",
       added_note: "%{name} added a note about",
       you_added_note: "You added a note about",
-      added_note_about_deal: "%{name} added a note about deal",
-      you_added_note_about_deal: "You added a note about deal",
-      added_deal: "%{name} added deal",
-      you_added_deal: "You added deal",
+      added_note_about_deal: "%{name} added a note about role",
+      you_added_note_about_deal: "You added a note about role",
+      added_deal: "%{name} added role",
+      you_added_deal: "You added role",
       at_company: "at",
       to: "to",
       load_more: "Load more activity",
     },
     dashboard: {
-      deals_chart: "Upcoming Deal Revenue",
-      deals_pipeline: "Deals Pipeline",
+      deals_chart: "Upcoming Placement Revenue",
+      deals_pipeline: "Roles Pipeline",
       latest_activity: "Latest Activity",
       latest_activity_error: "Error loading latest activity",
       latest_notes: "My Latest Notes",
       latest_notes_added_ago: "added %{timeAgo}",
       stepper: {
-        install: "Install Atomic CRM",
+        install: "Get started",
         progress: "%{step}/3 done",
         whats_next: "What's next?",
       },
@@ -459,7 +459,7 @@ export const englishCrmMessages = {
       },
       idle: {
         description_1:
-          "You can import sales, companies, contacts, companies, notes, and tasks.",
+          "You can import users, clients, contacts, notes, and tasks.",
         description_2:
           "Data must be in a JSON file matching the following sample:",
       },
@@ -478,14 +478,14 @@ export const englishCrmMessages = {
     settings: {
       about: "About",
       companies: {
-        sectors: "Sectors",
+        sectors: "Industries",
       },
       dark_mode_logo: "Dark Mode Logo",
       deals: {
-        categories: "Categories",
+        categories: "Departments",
         currency: "Currency",
         pipeline_help:
-          "Select which deal stages should count as pipeline deals.",
+          "Select which role stages should count as active pipeline.",
         pipeline_statuses: "Pipeline Statuses",
         stages: "Stages",
       },
@@ -509,7 +509,7 @@ export const englishCrmMessages = {
       validation: {
         duplicate: "Duplicate %{display_name}: %{items}",
         in_use:
-          "Cannot remove %{display_name} that are still used by deals: %{items}",
+          "Cannot remove %{display_name} that are still used by roles: %{items}",
         validating: "Validating\u2026",
         entities: {
           categories: "categories",
@@ -525,18 +525,18 @@ export const englishCrmMessages = {
     },
     language: "Language",
     navigation: {
-      label: "CRM navigation",
+      label: "Main navigation",
     },
     profile: {
       inbound: {
         description:
-          "You can start sending emails to your server's inbound email address, e.g. by adding it to the %{field} field. Atomic CRM will process the emails and add notes to the corresponding contacts.",
+          "You can start sending emails to your server's inbound email address, e.g. by adding it to the %{field} field. TalentCursor will process the emails and add notes to the corresponding contacts.",
         title: "Inbound email",
       },
       mcp: {
         title: "MCP Server",
         description:
-          "Use this URL to connect your AI assistant to your CRM data via the Model Context Protocol (MCP).",
+          "Use this URL to connect your AI assistant to your recruiting data via the Model Context Protocol (MCP).",
       },
       password: {
         change: "Change password",

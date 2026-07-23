@@ -35,6 +35,7 @@ export const CanvasPage = () => {
   const [selected, setSelected] = useState<Set<string | number>>(new Set());
   const [expandedId, setExpandedId] = useState<string | number | null>(null);
   const [expandedScore, setExpandedScore] = useState<Record<string, any>>({});
+  const [sendingOutreachFor, setSendingOutreachFor] = useState<Set<string | number>>(new Set());
   const [focusIdx, setFocusIdx] = useState(0);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -105,6 +106,28 @@ export const CanvasPage = () => {
     await Promise.all(candidateIds.map((id) => dataProvider.requestCandidateResume(id, dealId!)));
     setSelected(new Set());
     toast.success(`Requested resume from ${candidateIds.length} candidate${candidateIds.length === 1 ? "" : "s"}`);
+  };
+
+  // Agent H, Stage 1: Outreach -- sends the drafted, evidence-grounded
+  // first-outreach email for one candidate and flips their row's
+  // response_status to "sent" on success. dealCandidateId (not
+  // candidate.id) tracks the in-flight state so the per-row button only
+  // disables for the row it was clicked on.
+  const sendOutreach = async (dealCandidateId: string | number, candidateId: string | number) => {
+    setSendingOutreachFor((prev) => new Set(prev).add(dealCandidateId));
+    try {
+      await dataProvider.sendFirstOutreach(candidateId, dealId!);
+      invalidateCandidates();
+      toast.success("Outreach email sent");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to send outreach");
+    } finally {
+      setSendingOutreachFor((prev) => {
+        const next = new Set(prev);
+        next.delete(dealCandidateId);
+        return next;
+      });
+    }
   };
 
   const relaxCriterion = async (criterionId: string | number) => {
@@ -274,8 +297,8 @@ export const CanvasPage = () => {
                   </th>
                   <th style={thStyle()}>Candidate</th>
                   <th style={thStyle("70px")}>Match</th>
-                  <th style={thStyle("140px")}>Status</th>
-                  <th style={thStyle("50px")} />
+                  <th style={thStyle("180px")}>Status</th>
+                  <th style={thStyle("140px")} />
                 </tr>
               </thead>
               <tbody>
@@ -336,24 +359,60 @@ export const CanvasPage = () => {
                           {pct != null ? `${pct}%` : "—"}
                         </td>
                         <td style={tdStyle}>
-                          <span
-                            className="ah-chip"
-                            style={confident ? { background: "rgba(124,108,255,0.14)", color: "#bfb6ff", borderColor: "transparent" } : {}}
-                          >
-                            {confident ? "Confident match" : "Needs review"}
-                          </span>
+                          <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                            <span
+                              className="ah-chip"
+                              style={confident ? { background: "rgba(124,108,255,0.14)", color: "#bfb6ff", borderColor: "transparent" } : {}}
+                            >
+                              {confident ? "Confident match" : "Needs review"}
+                            </span>
+                            {/* Agent H, Stage 1: Outreach status badge -- only shown once a
+                                candidate has actually been contacted, so "not_contacted"
+                                (the default for every freshly-sourced candidate) stays
+                                silent instead of cluttering every row. */}
+                            {dealCandidate.response_status && dealCandidate.response_status !== "not_contacted" && (
+                              <span
+                                className="ah-chip"
+                                style={
+                                  dealCandidate.response_status === "responded"
+                                    ? { background: "rgba(79,216,196,0.18)", color: "var(--ah-good)", borderColor: "transparent" }
+                                    : { background: "rgba(255,255,255,0.06)", color: "var(--ah-text-2)", borderColor: "transparent" }
+                                }
+                              >
+                                {dealCandidate.response_status === "responded" ? "Replied" : "Sent"}
+                              </span>
+                            )}
+                          </div>
                         </td>
                         <td style={tdStyle}>
-                          <button
-                            className="ah-btn-ghost"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              toggleExpand(candidate.id, dealCandidate.id);
-                            }}
-                            style={{ width: 26, height: 26, fontSize: 11 }}
-                          >
-                            {isExpanded ? "⤥" : "⤤"}
-                          </button>
+                          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                            <button
+                              className="ah-btn-ghost"
+                              disabled={sendingOutreachFor.has(dealCandidate.id)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                sendOutreach(dealCandidate.id, candidate.id);
+                              }}
+                              style={{ fontSize: 11, padding: "5px 9px" }}
+                              title="Draft and send a personalized first-outreach email"
+                            >
+                              {sendingOutreachFor.has(dealCandidate.id)
+                                ? "Sending…"
+                                : dealCandidate.response_status && dealCandidate.response_status !== "not_contacted"
+                                  ? "Resend"
+                                  : "Send outreach"}
+                            </button>
+                            <button
+                              className="ah-btn-ghost"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleExpand(candidate.id, dealCandidate.id);
+                              }}
+                              style={{ width: 26, height: 26, fontSize: 11 }}
+                            >
+                              {isExpanded ? "⤥" : "⤤"}
+                            </button>
+                          </div>
                         </td>
                       </tr>
                       {isExpanded && (

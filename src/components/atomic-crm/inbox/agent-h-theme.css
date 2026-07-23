@@ -1,0 +1,120 @@
+/*
+ * Agent H, Triage Inbox + Command Canvas redesign (approved mockup
+ * v4-triage): a scoped dark glass-morphic theme, intentionally NOT applied
+ * to the app's global :root/.dark tokens in src/index.css. Every existing
+ * screen consumes those tokens via Tailwind utilities (bg-background,
+ * border-border, etc.), so redefining them globally would visually break
+ * every other page. Instead this file defines its own custom-property
+ * namespace, scoped under the .ah-scope wrapper class that InboxPage and
+ * CanvasPage render at their root -- the rest of the app is unaffected.
+ */
+
+.ah-scope {
+  --ah-bg-0: #0a0b0f;
+  --ah-bg-1: #101218;
+  --ah-glass: rgba(255, 255, 255, 0.045);
+  --ah-glass-strong: rgba(255, 255, 255, 0.07);
+  --ah-border: rgba(255, 255, 255, 0.09);
+  --ah-border-strong: rgba(255, 255, 255, 0.16);
+  --ah-text-1: #f2f3f7;
+  --ah-text-2: #a8adba;
+  --ah-text-3: #6b7080;
+  --ah-accent: #7c6cff;
+  --ah-accent-2: #4fd8c4;
+  --ah-accent-grad: linear-gradient(135deg, #7c6cff 0%, #5aa0ff 50%, #4fd8c4 100%);
+  --ah-danger: #ff6b6b;
+  --ah-warn: #ffb454;
+  --ah-good: #4fd8c4;
+  --ah-radius: 14px;
+  --ah-radius-sm: 9px;
+  --ah-serif: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  --ah-mono: "SF Mono", "Roboto Mono", monospace;
+
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  color: var(--ah-text-1);
+  background:
+    radial-gradient(1100px 600px at 20% -10%, rgba(124, 108, 255, 0.14), transparent 60%),
+    radial-gradient(900px 500px at 100% 0%, rgba(79, 216, 196, 0.08), transparent 55%),
+    var(--ah-bg-0);
+  font-family: -apple-system, BlinkMacSystemFont, "Inter Variable", "Segoe UI", sans-serif;
+}
+
+.ah-scope ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.ah-scope ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+}
+
+.ah-glass-card {
+  background: var(--ah-glass);
+  border: 1px solid var(--ah-border);
+  border-radius: var(--ah-radius);
+}
+.ah-glass-card:hover {
+  border-color: var(--ah-border-strong);
+}
+
+.ah-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  padding: 5px 11px;
+  border-radius: 100px;
+  background: var(--ah-glass);
+  border: 1px solid var(--ah-border);
+  color: var(--ah-text-2);
+}
+
+.ah-kbd {
+  font-family: var(--ah-mono);
+  font-size: 10.5px;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid var(--ah-border-strong);
+  color: var(--ah-text-2);
+  padding: 3px 7px;
+  border-radius: 5px;
+}
+
+.ah-btn-primary {
+  background: var(--ah-accent-grad);
+  color: #0a0b0f;
+  font-weight: 600;
+  border: none;
+  border-radius: 100px;
+  cursor: pointer;
+}
+
+.ah-btn-ghost {
+  background: transparent;
+  border: 1px solid var(--ah-border);
+  color: var(--ah-text-2);
+  border-radius: 100px;
+  cursor: pointer;
+}
+.ah-btn-ghost:hover {
+  border-color: var(--ah-border-strong);
+  color: var(--ah-text-1);
+}
+
+.ah-pulse-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ah-accent);
+  animation: ah-pulse 1.2s infinite;
+}
+@keyframes ah-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}

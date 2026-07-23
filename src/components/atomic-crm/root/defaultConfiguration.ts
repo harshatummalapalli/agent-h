@@ -5,7 +5,7 @@ export const defaultLightModeLogo = "./logos/logo_atomic_crm_light.svg";
 
 export const defaultCurrency = "USD";
 
-export const defaultTitle = "Atomic CRM";
+export const defaultTitle = "TalentCursor";
 
 export const defaultCompanySectors = [
   { value: "communication-services", label: "Communication Services" },
@@ -21,23 +21,34 @@ export const defaultCompanySectors = [
   { value: "utilities", label: "Utilities" },
 ];
 
+// Agent H: replaced Atomic CRM's sales-deal lifecycle (Opportunity / Proposal
+// Sent / In Negotiation / Won / Lost / Delayed) with a recruiting pipeline.
+// "value" is the literal string stored in deals.stage (free text column, no
+// DB constraint -- see supabase/schemas/01_tables.sql) so renaming a label
+// here never requires a migration; only the id itself needs one, and this
+// pass migrated the few existing rows via SQL rather than keeping the old
+// "opportunity" id around under a new label. Offer/Placed/Lost are included
+// even though there's no dedicated Offer-stage tooling yet -- the stage
+// field itself (drag-to-reorder, filtering) already works for any value;
+// only the automation behind later stages is still to be built.
 export const defaultDealStages = [
-  { value: "opportunity", label: "Opportunity" },
-  { value: "proposal-sent", label: "Proposal Sent" },
-  { value: "in-negociation", label: "In Negotiation" },
-  { value: "won", label: "Won" },
-  { value: "lost", label: "Lost" },
-  { value: "delayed", label: "Delayed" },
+  { value: "sourcing", label: "Sourcing" },
+  { value: "screening", label: "Screening" },
+  { value: "client-review", label: "Client Review" },
+  { value: "offer", label: "Offer Extended" },
+  { value: "placed", label: "Placed" },
+  { value: "lost", label: "Lost / Closed" },
 ];
 
-export const defaultDealPipelineStatuses = ["won"];
+export const defaultDealPipelineStatuses = ["placed"];
 
 export const defaultDealCategories = [
   { value: "other", label: "Other" },
-  { value: "copywriting", label: "Copywriting" },
-  { value: "print-project", label: "Print project" },
-  { value: "ui-design", label: "UI Design" },
-  { value: "website-design", label: "Website design" },
+  { value: "engineering", label: "Engineering" },
+  { value: "product", label: "Product" },
+  { value: "design", label: "Design" },
+  { value: "sales", label: "Sales" },
+  { value: "operations", label: "Operations" },
 ];
 
 export const defaultNoteStatuses = [

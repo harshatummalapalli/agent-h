@@ -1,4 +1,4 @@
-import { FileText, Import, Settings, User, Users } from "lucide-react";
+import { Settings, User, Users } from "lucide-react";
 import { CanAccess, useTranslate, useUserMenu } from "ra-core";
 import { Link, matchPath, useLocation } from "react-router";
 import { RefreshButton } from "@/components/admin/refresh-button";
@@ -7,9 +7,16 @@ import { UserMenu } from "@/components/admin/user-menu";
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 
 import { useConfigurationContext } from "../root/ConfigurationContext";
-import { ImportPage } from "../misc/ImportPage";
-import { ChangelogPage } from "../misc/ChangelogPage";
+import { SourceCandidatesPage } from "../sourcing/SourceCandidatesPage";
 
+// Agent H: nav is scoped to the ATS narrative, not the underlying CRM base
+// -- no top-level Contacts / Companies links (those stay registered
+// Resources so ReferenceFields inside a role/candidate view keep working;
+// they're just not front-nav entry points), and no Import/Changelog admin
+// clutter in the user menu. See "remove all CRM specific language" pass
+// (2026-07-12) and root/productScope.ts for how later phases (Scheduling,
+// Offer) get added here once their backend functions actually exist --
+// don't add a nav item for a stage before it's real.
 const Header = () => {
   const { darkModeLogo, lightModeLogo, title } = useConfigurationContext();
   const location = useLocation();
@@ -18,10 +25,10 @@ const Header = () => {
   let currentPath: string | boolean = "/";
   if (matchPath("/", location.pathname)) {
     currentPath = "/";
-  } else if (matchPath("/contacts/*", location.pathname)) {
-    currentPath = "/contacts";
-  } else if (matchPath("/companies/*", location.pathname)) {
-    currentPath = "/companies";
+  } else if (matchPath(`${SourceCandidatesPage.path}/*`, location.pathname)) {
+    currentPath = SourceCandidatesPage.path;
+  } else if (matchPath("/candidates/*", location.pathname)) {
+    currentPath = "/candidates";
   } else if (matchPath("/deals/*", location.pathname)) {
     currentPath = "/deals";
   } else {
@@ -58,18 +65,14 @@ const Header = () => {
                     isActive={currentPath === "/"}
                   />
                   <NavigationTab
-                    label={translate("resources.contacts.name", {
-                      smart_count: 2,
-                    })}
-                    to="/contacts"
-                    isActive={currentPath === "/contacts"}
+                    label="Source Candidates"
+                    to={SourceCandidatesPage.path}
+                    isActive={currentPath === SourceCandidatesPage.path}
                   />
                   <NavigationTab
-                    label={translate("resources.companies.name", {
-                      smart_count: 2,
-                    })}
-                    to="/companies"
-                    isActive={currentPath === "/companies"}
+                    label="Candidates"
+                    to="/candidates"
+                    isActive={currentPath === "/candidates"}
                   />
                   <NavigationTab
                     label={translate("resources.deals.name", {
@@ -91,8 +94,6 @@ const Header = () => {
                   <CanAccess resource="configuration" action="edit">
                     <SettingsMenu />
                   </CanAccess>
-                  <ImportFromJsonMenuItem />
-                  <ChangelogMenuItem />
                 </UserMenu>
               </div>
             </div>
@@ -116,7 +117,7 @@ const NavigationTab = ({
     to={to}
     className={`px-6 py-3 text-sm font-medium transition-colors border-b-2 ${
       isActive
-        ? "text-secondary-foreground border-secondary-foreground"
+        ? "text-primary border-primary"
         : "text-secondary-foreground/70 border-transparent hover:text-secondary-foreground/80"
     }`}
   >
@@ -172,35 +173,4 @@ const SettingsMenu = () => {
   );
 };
 
-const ImportFromJsonMenuItem = () => {
-  const translate = useTranslate();
-  const userMenuContext = useUserMenu();
-  if (!userMenuContext) {
-    throw new Error("<ImportFromJsonMenuItem> must be used inside <UserMenu>");
-  }
-  return (
-    <DropdownMenuItem asChild onClick={userMenuContext.onClose}>
-      <Link to={ImportPage.path} className="flex items-center gap-2">
-        <Import />
-        {translate("crm.header.import_data")}
-      </Link>
-    </DropdownMenuItem>
-  );
-};
-
-const ChangelogMenuItem = () => {
-  const translate = useTranslate();
-  const userMenuContext = useUserMenu();
-  if (!userMenuContext) {
-    throw new Error("<ChangelogMenuItem> must be used inside <UserMenu>");
-  }
-  return (
-    <DropdownMenuItem asChild onClick={userMenuContext.onClose}>
-      <Link to={ChangelogPage.path} className="flex items-center gap-2">
-        <FileText />
-        {translate("crm.changelog.title")}
-      </Link>
-    </DropdownMenuItem>
-  );
-};
 export default Header;

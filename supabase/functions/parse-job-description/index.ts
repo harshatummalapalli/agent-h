@@ -11,6 +11,30 @@
 // Requires ANTHROPIC_API_KEY to be set:
 //   - Cloud: Project Settings > Edge Functions > Secrets
 //   - Local: supabase/functions/.env (gitignored, never committed)
+//
+// Ranked preference tiers (2026-07-22, live-demo follow-up): some JDs
+// describe a real primary-vs-fallback candidate profile -- Epiq's own brief:
+// "PRIMARY PREFERENCE: .NET/C# engineers who organically picked up AI/ML
+// engineering... SECONDARY/ACCEPTABLE: AI/ML engineers with genuine .NET/C#
+// exposure." Before this, there was nowhere structured to put that -- the
+// whole tiered paragraph got crammed into a single must_have_keywords
+// string, which is why the role brief panel showed one giant run-on
+// sentence instead of two clean tiers. preference_tiers (see the
+// 2026-07-22 migration on public.deals) is additive: a flat-requirement JD
+// returns an empty array and required_skills/must_have_keywords behave
+// exactly as before; only a JD that ACTUALLY describes ranked fallback
+// preferences populates it. The prompt is deliberately conservative --
+// most JDs are flat, and inventing tiers where none exist would be worse
+// than not having the feature.
+//
+// Clarifying questions (2026-07-22, same follow-up, task #30): rather than
+// only learning about JD ambiguity after the fact through "not a fit"
+// calibration feedback, this asks the model to flag genuine ambiguities up
+// front -- conflicting seniority signals, unclear remote/relocation policy,
+// two different tech stacks described, a vague/missing location, etc.
+// Deliberately capped small and conservative -- most JDs aren't ambiguous.
+// v1 scope is a read-only/dismissible advisory in the UI, not a back-and-
+// forth conversation -- see JdIntakePage.tsx's own comment for why.
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import * as jose from "jsr:@panva/jose@6";
@@ -106,13 +130,49 @@ const EXTRACTION_TOOL = {
         type: "array",
         items: { type: "string" },
         description:
-          "Hard requirements explicitly framed as required/must-have. Short keyword/phrase form.",
+          "Hard requirements explicitly framed as required/must-have. Short keyword/phrase form. If the JD describes a genuine ranked primary-vs-fallback profile, put that structure in preference_tiers instead of cramming the whole paragraph in here -- this field is for flat, non-tiered hard requirements.",
       },
       nice_to_have_keywords: {
         type: "array",
         items: { type: "string" },
         description:
           "Preferred-but-not-required qualifications (framed as 'nice to have', 'bonus', 'preferred'). Short keyword/phrase form.",
+      },
+      preference_tiers: {
+        type: "array",
+        description:
+          "ONLY populate this when the JD explicitly describes a ranked, primary-vs-fallback candidate profile (e.g. 'ideally X, but Y is also acceptable', 'primary preference... secondary/acceptable...'). Leave as an empty array for the common case of a single flat requirement set -- do not invent tiers that aren't really there. Order by preference, rank 1 = most preferred.",
+        items: {
+          type: "object",
+          properties: {
+            rank: {
+              type: "integer",
+              description: "1 = most preferred tier, 2 = next fallback, etc.",
+            },
+            label: {
+              type: "string",
+              description:
+                "Short human label for this tier, e.g. 'Primary preference' or 'Secondary / acceptable'.",
+            },
+            keywords: {
+              type: "array",
+              items: { type: "string" },
+              description: "The concrete skills/qualifications that define this specific tier.",
+            },
+            condition: {
+              type: ["string", "null"],
+              description:
+                "Any extra qualifying condition for this tier stated in the JD (e.g. 'must be currently hands-on in AI engineering work'), or null if the keywords alone fully describe it.",
+            },
+          },
+          required: ["rank", "label", "keywords"],
+        },
+      },
+      clarifying_questions: {
+        type: "array",
+        items: { type: "string" },
+        description:
+          "A SHORT list (0-3) of genuine ambiguities in this JD worth confirming with the hiring team before sourcing starts -- e.g. conflicting seniority signals, an unclear remote/relocation policy, two different tech stacks both described, a vague or missing location. Leave empty for a clear, unambiguous JD -- do not manufacture questions just to fill the list.",
       },
     },
     required: [
@@ -123,6 +183,8 @@ const EXTRACTION_TOOL = {
       "required_skills",
       "must_have_keywords",
       "nice_to_have_keywords",
+      "preference_tiers",
+      "clarifying_questions",
     ],
   },
 };
@@ -164,7 +226,7 @@ const parseJobDescription = async (req: Request) => {
       },
       body: JSON.stringify({
         model: ANTHROPIC_MODEL,
-        max_tokens: 1024,
+        max_tokens: 1536,
         tools: [EXTRACTION_TOOL],
         tool_choice: { type: "tool", name: "extract_role_brief" },
         messages: [

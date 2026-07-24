@@ -29,7 +29,6 @@ import { ChangelogPage } from "../misc/ChangelogPage";
 import { JdIntakePage } from "../jd-intake/JdIntakePage";
 import { RoleWorkspacePage } from "../roles/RoleWorkspacePage";
 import { CandidateApplicationPage } from "../apply/CandidateApplicationPage";
-import { SourceCandidatesPage } from "../sourcing/SourceCandidatesPage";
 import {
   getAuthProvider as defaultAuthProviderBuilder,
   getDataProvider as defaultDataProviderBuilder,
@@ -273,10 +272,6 @@ const DesktopAdmin = (
         <Route path={ImportPage.path} element={<ImportPage />} />
         <Route path={ChangelogPage.path} element={<ChangelogPage />} />
         <Route path={JdIntakePage.path} element={<JdIntakePage />} />
-        <Route
-          path={SourceCandidatesPage.path}
-          element={<SourceCandidatesPage />}
-        />
         <Route path={RoleWorkspacePage.path} element={<RoleWorkspacePage />} />
         <Route path={CanvasPage.path} element={<CanvasPage />} />
       </CustomRoutes>
@@ -369,10 +364,6 @@ const MobileAdmin = (
           <Route path={ChangelogPage.path} element={<ChangelogPage />} />
           <Route path={ImportPage.path} element={<ImportPage />} />
           <Route path={JdIntakePage.path} element={<JdIntakePage />} />
-          <Route
-            path={SourceCandidatesPage.path}
-            element={<SourceCandidatesPage />}
-          />
           <Route
             path={RoleWorkspacePage.path}
             element={<RoleWorkspacePage />}

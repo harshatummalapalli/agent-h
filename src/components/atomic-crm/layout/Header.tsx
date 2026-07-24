@@ -7,7 +7,6 @@ import { UserMenu } from "@/components/admin/user-menu";
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 
 import { useConfigurationContext } from "../root/ConfigurationContext";
-import { SourceCandidatesPage } from "../sourcing/SourceCandidatesPage";
 
 // Agent H: nav is scoped to the ATS narrative, not the underlying CRM base
 // -- no top-level Contacts / Companies links (those stay registered
@@ -25,11 +24,13 @@ const Header = () => {
   let currentPath: string | boolean = "/";
   if (matchPath("/", location.pathname)) {
     currentPath = "/";
-  } else if (matchPath(`${SourceCandidatesPage.path}/*`, location.pathname)) {
-    currentPath = SourceCandidatesPage.path;
   } else if (matchPath("/candidates/*", location.pathname)) {
     currentPath = "/candidates";
-  } else if (matchPath("/deals/*", location.pathname)) {
+  } else if (
+    matchPath("/deals/*", location.pathname) ||
+    matchPath("/roles/*", location.pathname) ||
+    matchPath("/canvas/*", location.pathname)
+  ) {
     currentPath = "/deals";
   } else {
     currentPath = false;
@@ -65,19 +66,12 @@ const Header = () => {
                     isActive={currentPath === "/"}
                   />
                   <NavigationTab
-                    label="Source Candidates"
-                    to={SourceCandidatesPage.path}
-                    isActive={currentPath === SourceCandidatesPage.path}
-                  />
-                  <NavigationTab
                     label="Candidates"
                     to="/candidates"
                     isActive={currentPath === "/candidates"}
                   />
                   <NavigationTab
-                    label={translate("resources.deals.name", {
-                      smart_count: 2,
-                    })}
+                    label="Roles"
                     to="/deals"
                     isActive={currentPath === "/deals"}
                   />

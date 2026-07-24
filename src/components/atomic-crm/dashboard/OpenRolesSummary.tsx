@@ -31,9 +31,7 @@ const StatCard = ({
         {value === undefined ? (
           <Skeleton className="h-6 w-10" />
         ) : (
-          <span className="text-2xl font-semibold leading-none">
-            {value}
-          </span>
+          <span className="text-2xl font-semibold leading-none">{value}</span>
         )}
         <span className="text-xs text-muted-foreground mt-1">{label}</span>
       </div>
@@ -43,18 +41,18 @@ const StatCard = ({
 
 export const OpenRolesSummary = () => {
   const { dealStages } = useConfigurationContext();
-  const { data: roles, total: totalRoles, isPending } = useGetList<Deal>(
-    "deals",
-    {
-      pagination: { page: 1, perPage: 8 },
-      sort: { field: "updated_at", order: "DESC" },
-      filter: { "archived_at@is": null },
-    },
-  );
-  const { total: totalCandidates } = useGetList(
-    "candidates",
-    { pagination: { page: 1, perPage: 1 } },
-  );
+  const {
+    data: roles,
+    total: totalRoles,
+    isPending,
+  } = useGetList<Deal>("deals", {
+    pagination: { page: 1, perPage: 8 },
+    sort: { field: "updated_at", order: "DESC" },
+    filter: { "archived_at@is": null },
+  });
+  const { total: totalCandidates } = useGetList("candidates", {
+    pagination: { page: 1, perPage: 1 },
+  });
 
   const stageLabel = (value: string) =>
     dealStages.find((s) => s.value === value)?.label ?? value;
@@ -80,7 +78,7 @@ export const OpenRolesSummary = () => {
           <Card>
             <CardContent className="py-6 text-sm text-muted-foreground">
               No open roles yet.{" "}
-              <Link to="/source-candidates" className="underline">
+              <Link to="/jd-intake" className="underline">
                 Create one from a job description
               </Link>
               .
@@ -92,7 +90,7 @@ export const OpenRolesSummary = () => {
               {roles.map((role) => (
                 <Link
                   key={role.id}
-                  to={`/deals/${role.id}/show`}
+                  to={`/roles/${role.id}`}
                   className="flex items-center justify-between gap-2 px-3 py-2.5 text-sm hover:bg-accent rounded-md"
                 >
                   <span className="font-medium">{role.name}</span>

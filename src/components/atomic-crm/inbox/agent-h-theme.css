@@ -1,52 +1,61 @@
 /*
- * Agent H, Triage Inbox + Command Canvas redesign (approved mockup
- * v4-triage): a scoped dark glass-morphic theme, intentionally NOT applied
- * to the app's global :root/.dark tokens in src/index.css. Every existing
- * screen consumes those tokens via Tailwind utilities (bg-background,
- * border-border, etc.), so redefining them globally would visually break
- * every other page. Instead this file defines its own custom-property
- * namespace, scoped under the .ah-scope wrapper class that InboxPage and
- * CanvasPage render at their root -- the rest of the app is unaffected.
+ * Agent H inbox/canvas scoped theme — unified with the shared light CRM
+ * shadcn tokens in src/index.css (:root). Legacy --ah-* names are remapped
+ * so Inbox, Canvas, CommandBar, and SourcingSidebar read the same surface
+ * language as Deals/Candidates without a page-by-page rewrite.
+ *
+ * Use .ah-theme for variable definitions only; .ah-scope adds the inbox/canvas
+ * page shell (no longer a fixed full-viewport dark overlay).
  */
 
+.ah-theme,
 .ah-scope {
-  --ah-bg-0: #0a0b0f;
-  --ah-bg-1: #101218;
-  --ah-glass: rgba(255, 255, 255, 0.045);
-  --ah-glass-strong: rgba(255, 255, 255, 0.07);
-  --ah-border: rgba(255, 255, 255, 0.09);
-  --ah-border-strong: rgba(255, 255, 255, 0.16);
-  --ah-text-1: #f2f3f7;
-  --ah-text-2: #a8adba;
-  --ah-text-3: #6b7080;
-  --ah-accent: #7c6cff;
-  --ah-accent-2: #4fd8c4;
-  --ah-accent-grad: linear-gradient(135deg, #7c6cff 0%, #5aa0ff 50%, #4fd8c4 100%);
-  --ah-danger: #ff6b6b;
-  --ah-warn: #ffb454;
-  --ah-good: #4fd8c4;
+  --ah-bg-0: var(--background);
+  --ah-bg-1: var(--card);
+  --ah-glass: color-mix(in oklch, var(--muted) 55%, var(--card));
+  --ah-glass-strong: var(--accent);
+  --ah-border: var(--border);
+  --ah-border-strong: color-mix(in oklch, var(--border) 65%, var(--foreground));
+  --ah-text-1: var(--foreground);
+  --ah-text-2: var(--muted-foreground);
+  --ah-text-3: color-mix(in oklch, var(--muted-foreground) 80%, transparent);
+  --ah-accent: var(--primary);
+  --ah-accent-2: oklch(0.72 0.12 180);
+  --ah-accent-grad: linear-gradient(
+    135deg,
+    var(--primary) 0%,
+    oklch(0.62 0.16 250) 50%,
+    oklch(0.72 0.12 180) 100%
+  );
+  --ah-danger: var(--destructive);
+  --ah-warn: oklch(0.75 0.15 70);
+  --ah-good: oklch(0.72 0.12 180);
   --ah-radius: 14px;
   --ah-radius-sm: 9px;
   --ah-serif: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
   --ah-mono: "SF Mono", "Roboto Mono", monospace;
 
-  position: fixed;
-  inset: 0;
-  overflow: hidden;
   color: var(--ah-text-1);
-  background:
-    radial-gradient(1100px 600px at 20% -10%, rgba(124, 108, 255, 0.14), transparent 60%),
-    radial-gradient(900px 500px at 100% 0%, rgba(79, 216, 196, 0.08), transparent 55%),
-    var(--ah-bg-0);
-  font-family: -apple-system, BlinkMacSystemFont, "Inter Variable", "Segoe UI", sans-serif;
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Inter Variable", "Segoe UI", sans-serif;
 }
 
+.ah-scope {
+  position: relative;
+  width: 100%;
+  min-height: calc(100dvh - 8rem);
+  overflow: visible;
+  background: var(--ah-bg-0);
+}
+
+.ah-theme ::-webkit-scrollbar,
 .ah-scope ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
+.ah-theme ::-webkit-scrollbar-thumb,
 .ah-scope ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.12);
+  background: color-mix(in oklch, var(--border) 80%, var(--foreground));
   border-radius: 8px;
 }
 
@@ -74,16 +83,16 @@
 .ah-kbd {
   font-family: var(--ah-mono);
   font-size: 10.5px;
-  background: rgba(255, 255, 255, 0.07);
-  border: 1px solid var(--ah-border-strong);
+  background: var(--muted);
+  border: 1px solid var(--ah-border);
   color: var(--ah-text-2);
   padding: 3px 7px;
   border-radius: 5px;
 }
 
 .ah-btn-primary {
-  background: var(--ah-accent-grad);
-  color: #0a0b0f;
+  background: var(--primary);
+  color: var(--primary-foreground);
   font-weight: 600;
   border: none;
   border-radius: 100px;
@@ -100,6 +109,7 @@
 .ah-btn-ghost:hover {
   border-color: var(--ah-border-strong);
   color: var(--ah-text-1);
+  background: var(--accent);
 }
 
 .ah-pulse-dot {

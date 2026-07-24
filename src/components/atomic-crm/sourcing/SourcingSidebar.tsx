@@ -13,6 +13,7 @@ import { useRef, useState } from "react";
 
 import type { CrmDataProvider } from "../providers/types";
 import type { Deal } from "../types";
+import "../inbox/agent-h-theme.css";
 import { useSourcingThread } from "./useSourcingThread";
 import { useVoiceInput } from "./useVoiceInput";
 import type { SourcingStep, ThreadItem } from "./sourcingThreadTypes";
@@ -24,7 +25,15 @@ const STEP_DOT: Record<SourcingStep["status"], string> = {
 };
 
 const StepRow = ({ step }: { step: SourcingStep }) => (
-  <div style={{ display: "flex", alignItems: "center", gap: 9, fontSize: 12.5, padding: "3px 0" }}>
+  <div
+    style={{
+      display: "flex",
+      alignItems: "center",
+      gap: 9,
+      fontSize: 12.5,
+      padding: "3px 0",
+    }}
+  >
     <div
       style={{
         width: 6,
@@ -32,10 +41,17 @@ const StepRow = ({ step }: { step: SourcingStep }) => (
         borderRadius: "50%",
         flexShrink: 0,
         background: STEP_DOT[step.status],
-        ...(step.status === "active" ? { animation: "ah-pulse 1.2s infinite" } : {}),
+        ...(step.status === "active"
+          ? { animation: "ah-pulse 1.2s infinite" }
+          : {}),
       }}
     />
-    <span style={{ color: step.status === "pending" ? "var(--ah-text-3)" : "var(--ah-text-2)" }}>
+    <span
+      style={{
+        color:
+          step.status === "pending" ? "var(--ah-text-3)" : "var(--ah-text-2)",
+      }}
+    >
       {step.label}
       {step.status === "done" ? " — done" : step.status === "active" ? "…" : ""}
     </span>
@@ -64,7 +80,12 @@ const ThreadEntry = ({ item }: { item: ThreadItem }) => {
   }
 
   if (item.kind === "assistant") {
-    const color = item.tone === "error" ? "var(--ah-danger)" : item.tone === "success" ? "var(--ah-good)" : "var(--ah-text-2)";
+    const color =
+      item.tone === "error"
+        ? "var(--ah-danger)"
+        : item.tone === "success"
+          ? "var(--ah-good)"
+          : "var(--ah-text-2)";
     return (
       <div style={{ fontSize: 13, color, lineHeight: 1.5 }}>{item.text}</div>
     );
@@ -73,13 +94,29 @@ const ThreadEntry = ({ item }: { item: ThreadItem }) => {
   // kind === "sourcing"
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <div className="ah-glass-card" style={{ padding: "12px 14px", display: "flex", flexDirection: "column", gap: 2 }}>
-        <div style={{ fontSize: 12, color: "var(--ah-text-3)", marginBottom: 4 }}>Sourcing for {item.dealName}</div>
+      <div
+        className="ah-glass-card"
+        style={{
+          padding: "12px 14px",
+          display: "flex",
+          flexDirection: "column",
+          gap: 2,
+        }}
+      >
+        <div
+          style={{ fontSize: 12, color: "var(--ah-text-3)", marginBottom: 4 }}
+        >
+          Sourcing for {item.dealName}
+        </div>
         {item.steps.map((step) => (
           <StepRow key={step.key} step={step} />
         ))}
         {item.error && (
-          <div style={{ fontSize: 12.5, color: "var(--ah-danger)", marginTop: 6 }}>{item.error}</div>
+          <div
+            style={{ fontSize: 12.5, color: "var(--ah-danger)", marginTop: 6 }}
+          >
+            {item.error}
+          </div>
         )}
       </div>
 
@@ -87,7 +124,9 @@ const ThreadEntry = ({ item }: { item: ThreadItem }) => {
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <div style={{ fontSize: 12, color: "var(--ah-text-3)" }}>
             Found {item.result.foundCount}, saved {item.result.savedCount}
-            {item.result.filteredCount > 0 ? `, ${item.result.filteredCount} filtered as not relevant` : ""}
+            {item.result.filteredCount > 0
+              ? `, ${item.result.filteredCount} filtered as not relevant`
+              : ""}
           </div>
           {item.result.savedCandidates.map((candidate) => (
             <div
@@ -96,9 +135,19 @@ const ThreadEntry = ({ item }: { item: ThreadItem }) => {
               className="ah-glass-card"
               style={{ padding: "10px 13px", cursor: "pointer" }}
             >
-              <div style={{ fontSize: 13, fontWeight: 600 }}>{candidate.fullName}</div>
-              <div style={{ fontSize: 12, color: "var(--ah-text-3)", marginTop: 2 }}>
-                {[candidate.title, candidate.company].filter(Boolean).join(" · ") || "No details yet"}
+              <div style={{ fontSize: 13, fontWeight: 600 }}>
+                {candidate.fullName}
+              </div>
+              <div
+                style={{
+                  fontSize: 12,
+                  color: "var(--ah-text-3)",
+                  marginTop: 2,
+                }}
+              >
+                {[candidate.title, candidate.company]
+                  .filter(Boolean)
+                  .join(" · ") || "No details yet"}
               </div>
             </div>
           ))}
@@ -130,7 +179,11 @@ export const SourcingSidebar = ({
     onNavigate: navigate,
   });
 
-  const { isSupported: voiceSupported, isListening, toggleListening } = useVoiceInput((transcript) => {
+  const {
+    isSupported: voiceSupported,
+    isListening,
+    toggleListening,
+  } = useVoiceInput((transcript) => {
     setValue((prev) => (prev ? `${prev} ${transcript}` : transcript));
   });
 
@@ -144,6 +197,7 @@ export const SourcingSidebar = ({
 
   return (
     <div
+      className="ah-theme"
       style={{
         position: "fixed",
         top: 0,
@@ -152,8 +206,9 @@ export const SourcingSidebar = ({
         width: 380,
         zIndex: 60,
         background: "var(--ah-bg-1)",
-        borderLeft: "1px solid var(--ah-border-strong)",
-        boxShadow: "-20px 0 50px rgba(0,0,0,0.35)",
+        borderLeft: "1px solid var(--ah-border)",
+        boxShadow:
+          "-8px 0 24px color-mix(in oklch, var(--foreground) 8%, transparent)",
         display: "flex",
         flexDirection: "column",
       }}
@@ -171,7 +226,13 @@ export const SourcingSidebar = ({
         <span style={{ fontSize: 14, fontWeight: 600 }}>Sourcing</span>
         <div
           onClick={onClose}
-          style={{ marginLeft: "auto", cursor: "pointer", color: "var(--ah-text-3)", fontSize: 18, lineHeight: 1 }}
+          style={{
+            marginLeft: "auto",
+            cursor: "pointer",
+            color: "var(--ah-text-3)",
+            fontSize: 18,
+            lineHeight: 1,
+          }}
           aria-label="Close sourcing panel"
         >
           &times;
@@ -189,8 +250,16 @@ export const SourcingSidebar = ({
         }}
       >
         {thread.length === 0 && (
-          <div style={{ fontSize: 13, color: "var(--ah-text-3)", lineHeight: 1.6, padding: "8px 2px" }}>
-            Tell me who you're looking for — paste a JD, describe the role, or ask me to keep sourcing for one that's open.
+          <div
+            style={{
+              fontSize: 13,
+              color: "var(--ah-text-3)",
+              lineHeight: 1.6,
+              padding: "8px 2px",
+            }}
+          >
+            Tell me who you're looking for — paste a JD, describe the role, or
+            ask me to keep sourcing for one that's open.
           </div>
         )}
         {thread.map((item) => (
@@ -212,7 +281,9 @@ export const SourcingSidebar = ({
           <button
             className="ah-btn-ghost"
             onClick={toggleListening}
-            aria-label={isListening ? "Stop listening" : "Talk instead of typing"}
+            aria-label={
+              isListening ? "Stop listening" : "Talk instead of typing"
+            }
             style={{
               width: 34,
               height: 34,
@@ -232,7 +303,9 @@ export const SourcingSidebar = ({
           type="text"
           value={value}
           disabled={isBusy}
-          placeholder={isBusy ? "Working on it…" : "Relax the company size a bit"}
+          placeholder={
+            isBusy ? "Working on it…" : "Relax the company size a bit"
+          }
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter") {
@@ -256,7 +329,16 @@ export const SourcingSidebar = ({
           onClick={runSubmit}
           disabled={isBusy}
           aria-label="Send"
-          style={{ width: 34, height: 34, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, flexShrink: 0, opacity: isBusy ? 0.5 : 1 }}
+          style={{
+            width: 34,
+            height: 34,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: 13,
+            flexShrink: 0,
+            opacity: isBusy ? 0.5 : 1,
+          }}
         >
           &#8593;
         </button>

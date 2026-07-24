@@ -39,6 +39,9 @@ dist/
 # Shadcn Registry
 public/r/
 
+# Local commit-hook shim (Windows only — not part of the app)
+.git-hooks-bin/
+
 !supabase/functions/.env
 .claude/settings.local.json
 

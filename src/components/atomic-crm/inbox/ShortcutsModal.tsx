@@ -24,7 +24,11 @@ export const ShortcutsModal = ({
   extraRows?: ShortcutRow[];
 }) => {
   if (!open) return null;
-  const rows = [...SHARED_SHORTCUTS.slice(0, 4), ...extraRows, ...SHARED_SHORTCUTS.slice(4)];
+  const rows = [
+    ...SHARED_SHORTCUTS.slice(0, 4),
+    ...extraRows,
+    ...SHARED_SHORTCUTS.slice(4),
+  ];
 
   return (
     <div
@@ -32,7 +36,7 @@ export const ShortcutsModal = ({
       style={{
         position: "fixed",
         inset: 0,
-        background: "rgba(6,7,11,0.6)",
+        background: "var(--ah-overlay)",
         backdropFilter: "blur(3px)",
         display: "flex",
         alignItems: "center",
@@ -51,7 +55,14 @@ export const ShortcutsModal = ({
           padding: 22,
         }}
       >
-        <h2 style={{ fontFamily: "var(--ah-serif)", fontWeight: 400, fontSize: 18, margin: "0 0 14px" }}>
+        <h2
+          style={{
+            fontFamily: "var(--ah-serif)",
+            fontWeight: 400,
+            fontSize: 18,
+            margin: "0 0 14px",
+          }}
+        >
           Keyboard shortcuts
         </h2>
         {rows.map((row, i) => (

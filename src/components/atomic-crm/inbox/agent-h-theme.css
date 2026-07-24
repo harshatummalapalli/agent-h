@@ -34,6 +34,21 @@
   --ah-radius-sm: 9px;
   --ah-serif: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
   --ah-mono: "SF Mono", "Roboto Mono", monospace;
+  --ah-accent-soft: color-mix(in oklch, var(--primary) 10%, transparent);
+  --ah-accent-soft-border: color-mix(in oklch, var(--primary) 25%, transparent);
+  --ah-accent-text: var(--accent-foreground);
+  --ah-accent-row: color-mix(in oklch, var(--primary) 7%, transparent);
+  --ah-accent-chip: color-mix(in oklch, var(--primary) 14%, transparent);
+  --ah-accent-focus-ring: 0 0 0 3px
+    color-mix(in oklch, var(--primary) 8%, transparent);
+  --ah-shadow-lg: 0 20px 50px
+    color-mix(in oklch, var(--foreground) 12%, transparent);
+  --ah-shadow-md: 0 8px 24px
+    color-mix(in oklch, var(--foreground) 8%, transparent);
+  --ah-good-soft: color-mix(in oklch, var(--ah-good) 18%, transparent);
+  --ah-danger-soft: color-mix(in oklch, var(--destructive) 18%, transparent);
+  --ah-muted-row: color-mix(in oklch, var(--muted-foreground) 4%, transparent);
+  --ah-overlay: color-mix(in oklch, var(--foreground) 35%, transparent);
 
   color: var(--ah-text-1);
   font-family:

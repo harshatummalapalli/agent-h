@@ -67,7 +67,7 @@ const ThreadEntry = ({ item }: { item: ThreadItem }) => {
         style={{
           alignSelf: "flex-end",
           maxWidth: "85%",
-          background: "rgba(124,108,255,0.14)",
+          background: "var(--ah-accent-chip)",
           color: "var(--ah-text-1)",
           borderRadius: 12,
           padding: "9px 13px",

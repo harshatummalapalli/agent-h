@@ -48,7 +48,9 @@ export const CommandBar = ({
   };
 
   return (
-    <div style={{ padding: "12px 22px 16px", flexShrink: 0, position: "relative" }}>
+    <div
+      style={{ padding: "12px 22px 16px", flexShrink: 0, position: "relative" }}
+    >
       {showSlashMenu && slashActions.length > 0 && (
         <div
           className="ah-glass-card"
@@ -62,7 +64,7 @@ export const CommandBar = ({
             overflow: "hidden",
             background: "var(--ah-bg-1)",
             borderColor: "var(--ah-border-strong)",
-            boxShadow: "0 20px 50px rgba(0,0,0,.4)",
+            boxShadow: "var(--ah-shadow-lg)",
           }}
         >
           {slashActions.map((action) => (
@@ -82,8 +84,12 @@ export const CommandBar = ({
                 alignItems: "center",
                 gap: 10,
               }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(124,108,255,0.1)")}
-              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+              onMouseEnter={(e) =>
+                (e.currentTarget.style.background = "var(--ah-accent-soft)")
+              }
+              onMouseLeave={(e) =>
+                (e.currentTarget.style.background = "transparent")
+              }
             >
               <span
                 style={{
@@ -113,10 +119,12 @@ export const CommandBar = ({
           background: "var(--ah-bg-1)",
           borderColor: "var(--ah-border-strong)",
           padding: "9px 9px 9px 16px",
-          boxShadow: "0 20px 50px rgba(0,0,0,0.35)",
+          boxShadow: "var(--ah-shadow-md)",
         }}
       >
-        <span style={{ color: "var(--ah-text-3)", fontSize: 13 }}>&#10024;</span>
+        <span style={{ color: "var(--ah-text-3)", fontSize: 13 }}>
+          &#10024;
+        </span>
         <input
           ref={inputRef}
           type="text"
@@ -149,13 +157,28 @@ export const CommandBar = ({
         <button
           className="ah-btn-primary"
           onClick={runCommand}
-          style={{ width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12 }}
+          style={{
+            width: 28,
+            height: 28,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: 12,
+          }}
           aria-label="Send"
         >
           &#8593;
         </button>
       </div>
-      <div style={{ maxWidth: 760, margin: "7px auto 0", fontSize: 10.5, color: "var(--ah-text-3)", textAlign: "center" }}>
+      <div
+        style={{
+          maxWidth: 760,
+          margin: "7px auto 0",
+          fontSize: 10.5,
+          color: "var(--ah-text-3)",
+          textAlign: "center",
+        }}
+      >
         {hint}
       </div>
     </div>

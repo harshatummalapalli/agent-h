@@ -252,9 +252,9 @@ export const InboxPage = () => {
           <div
             className="ah-chip"
             style={{
-              background: "rgba(124,108,255,0.1)",
-              borderColor: "rgba(124,108,255,0.25)",
-              color: "#bfb6ff",
+              background: "var(--ah-accent-soft)",
+              borderColor: "var(--ah-accent-soft-border)",
+              color: "var(--ah-accent-text)",
             }}
           >
             <div className="ah-pulse-dot" />
@@ -398,11 +398,9 @@ export const InboxPage = () => {
                       marginBottom: 7,
                       cursor: "pointer",
                       borderColor: focused ? "var(--ah-accent)" : undefined,
-                      background: focused
-                        ? "rgba(124,108,255,0.08)"
-                        : undefined,
+                      background: focused ? "var(--ah-accent-row)" : undefined,
                       boxShadow: focused
-                        ? "0 0 0 3px rgba(124,108,255,0.08)"
+                        ? "var(--ah-accent-focus-ring)"
                         : undefined,
                     }}
                   >

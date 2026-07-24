@@ -20,7 +20,13 @@ const timeAgo = (ts: number) => {
   return `${Math.round(minutes / 60)}h ago`;
 };
 
-export const ActivityPanel = ({ open, onClose }: { open: boolean; onClose: () => void }) => {
+export const ActivityPanel = ({
+  open,
+  onClose,
+}: {
+  open: boolean;
+  onClose: () => void;
+}) => {
   const entries = useAgentActivityLog();
   if (!open) return null;
 
@@ -36,14 +42,21 @@ export const ActivityPanel = ({ open, onClose }: { open: boolean; onClose: () =>
         background: "var(--ah-bg-1)",
         border: "1px solid var(--ah-border-strong)",
         borderRadius: "var(--ah-radius)",
-        boxShadow: "0 20px 50px rgba(0,0,0,0.45)",
+        boxShadow: "var(--ah-shadow-lg)",
         zIndex: 45,
         padding: 14,
       }}
     >
       <div style={{ display: "flex", alignItems: "center", marginBottom: 10 }}>
         <div style={{ fontSize: 13, fontWeight: 600 }}>Agent H activity</div>
-        <div onClick={onClose} style={{ marginLeft: "auto", cursor: "pointer", color: "var(--ah-text-3)" }}>
+        <div
+          onClick={onClose}
+          style={{
+            marginLeft: "auto",
+            cursor: "pointer",
+            color: "var(--ah-text-3)",
+          }}
+        >
           &times;
         </div>
       </div>
@@ -54,7 +67,16 @@ export const ActivityPanel = ({ open, onClose }: { open: boolean; onClose: () =>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {entries.map((entry) => (
-            <div key={entry.id} className="ah-glass-card" style={{ padding: "8px 10px", display: "flex", gap: 8, alignItems: "flex-start" }}>
+            <div
+              key={entry.id}
+              className="ah-glass-card"
+              style={{
+                padding: "8px 10px",
+                display: "flex",
+                gap: 8,
+                alignItems: "flex-start",
+              }}
+            >
               <div
                 style={{
                   width: 6,
@@ -66,8 +88,18 @@ export const ActivityPanel = ({ open, onClose }: { open: boolean; onClose: () =>
                 }}
               />
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 12.5, color: "var(--ah-text-1)" }}>{entry.summary}</div>
-                <div style={{ fontSize: 10.5, color: "var(--ah-text-3)", marginTop: 2 }}>{timeAgo(entry.createdAt)}</div>
+                <div style={{ fontSize: 12.5, color: "var(--ah-text-1)" }}>
+                  {entry.summary}
+                </div>
+                <div
+                  style={{
+                    fontSize: 10.5,
+                    color: "var(--ah-text-3)",
+                    marginTop: 2,
+                  }}
+                >
+                  {timeAgo(entry.createdAt)}
+                </div>
               </div>
             </div>
           ))}

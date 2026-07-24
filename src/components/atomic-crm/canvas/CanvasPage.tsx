@@ -476,7 +476,7 @@ export const CanvasPage = () => {
                             : undefined,
                           outlineOffset: "-1.5px",
                           background: selected.has(dealCandidate.id)
-                            ? "rgba(124,108,255,0.07)"
+                            ? "var(--ah-accent-row)"
                             : undefined,
                           cursor: "pointer",
                         }}
@@ -502,14 +502,13 @@ export const CanvasPage = () => {
                                 width: 30,
                                 height: 30,
                                 borderRadius: "50%",
-                                background:
-                                  "linear-gradient(135deg,#5aa0ff,#7c6cff)",
+                                background: "var(--ah-accent-grad)",
                                 display: "flex",
                                 alignItems: "center",
                                 justifyContent: "center",
                                 fontSize: 11,
                                 fontWeight: 700,
-                                color: "#0a0b0f",
+                                color: "var(--primary-foreground)",
                                 flexShrink: 0,
                               }}
                             >
@@ -555,8 +554,8 @@ export const CanvasPage = () => {
                               style={
                                 confident
                                   ? {
-                                      background: "rgba(124,108,255,0.14)",
-                                      color: "#bfb6ff",
+                                      background: "var(--ah-accent-chip)",
+                                      color: "var(--ah-accent-text)",
                                       borderColor: "transparent",
                                     }
                                   : {}
@@ -577,12 +576,12 @@ export const CanvasPage = () => {
                                     dealCandidate.response_status ===
                                     "responded"
                                       ? {
-                                          background: "rgba(79,216,196,0.18)",
+                                          background: "var(--ah-good-soft)",
                                           color: "var(--ah-good)",
                                           borderColor: "transparent",
                                         }
                                       : {
-                                          background: "rgba(255,255,255,0.06)",
+                                          background: "var(--ah-muted-row)",
                                           color: "var(--ah-text-2)",
                                           borderColor: "transparent",
                                         }
@@ -641,7 +640,7 @@ export const CanvasPage = () => {
                           <td
                             colSpan={5}
                             style={{
-                              background: "rgba(255,255,255,0.015)",
+                              background: "var(--ah-muted-row)",
                               padding: "0 14px 14px 56px",
                               fontSize: 12.5,
                               color: "var(--ah-text-2)",
@@ -674,8 +673,8 @@ export const CanvasPage = () => {
                                             fontSize: 9,
                                             background:
                                               m.status === "absent"
-                                                ? "rgba(255,107,107,0.18)"
-                                                : "rgba(79,216,196,0.18)",
+                                                ? "var(--ah-danger-soft)"
+                                                : "var(--ah-good-soft)",
                                             color:
                                               m.status === "absent"
                                                 ? "var(--ah-danger)"
@@ -722,7 +721,7 @@ export const CanvasPage = () => {
                 border: "1px solid var(--ah-border-strong)",
                 borderRadius: 100,
                 padding: "8px 8px 8px 18px",
-                boxShadow: "0 20px 50px rgba(0,0,0,0.45)",
+                boxShadow: "var(--ah-shadow-lg)",
                 zIndex: 35,
               }}
             >

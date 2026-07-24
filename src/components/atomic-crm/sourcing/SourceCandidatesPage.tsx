@@ -56,7 +56,7 @@
 // re-showing them. v1 scope: this is display/review only, saved for later
 // reference -- it does not change ranking or query logic.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useDataProvider, useNotify } from "ra-core";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -102,14 +102,12 @@ type RoleBriefDetail = {
   // populated when the JD genuinely described one (see
   // parse-job-description's header comment). Rendered as distinct tier
   // groups below instead of folding into the flat "Must have" line.
-  preference_tiers:
-    | Array<{
-        rank: number;
-        label: string;
-        keywords: string[];
-        condition: string | null;
-      }>
-    | null;
+  preference_tiers: Array<{
+    rank: number;
+    label: string;
+    keywords: string[];
+    condition: string | null;
+  }> | null;
   // Task #43 (2026-07-22): ambiguities parse-job-description flagged at
   // intake time. Surfaced here too (not just in JdIntakePage's one-time
   // review screen) so a recruiter who comes back to this role brief later
@@ -187,6 +185,12 @@ type SourceResult = {
   query_used: unknown;
   notes: string[];
   total: number;
+  // Real total match count across the full search index, distinct from
+  // `total` (how many candidates are in this response). Null when the
+  // active provider doesn't supply this separately. Backend already
+  // returns this as `total_matches_all` -- this field was previously
+  // dropped on the frontend rather than requiring any backend change.
+  total_matches_all: number | null;
   candidates: PdlCandidate[];
   scroll_token: string | null;
 };
@@ -213,8 +217,9 @@ function titleCase(value: unknown): string | undefined {
   // "value.replace is not a function" and broke the whole screen for any
   // search that included one of these records.
   if (typeof value !== "string" || value.length === 0) return undefined;
-  return value.replace(/\w\S*/g, (word) =>
-    word.charAt(0).toUpperCase() + word.slice(1),
+  return value.replace(
+    /\w\S*/g,
+    (word) => word.charAt(0).toUpperCase() + word.slice(1),
   );
 }
 
@@ -239,7 +244,11 @@ function titleCase(value: unknown): string | undefined {
 function buildXrayQueries(
   roleBrief: RoleBriefDetail,
 ): Array<{ label: string; url: string }> {
-  const topSkills = (roleBrief.required_skills ?? roleBrief.must_have_keywords ?? []).slice(0, 3);
+  const topSkills = (
+    roleBrief.required_skills ??
+    roleBrief.must_have_keywords ??
+    []
+  ).slice(0, 3);
   const terms = [roleBrief.name, ...topSkills].filter(
     (t): t is string => typeof t === "string" && t.length > 0,
   );
@@ -249,16 +258,30 @@ function buildXrayQueries(
       : "";
 
   const buildQuery = (siteFilter: string) =>
-    [siteFilter, ...terms.map((t) => `"${t}"`), locationTerm].filter((s) => s.length > 0).join(" ");
+    [siteFilter, ...terms.map((t) => `"${t}"`), locationTerm]
+      .filter((s) => s.length > 0)
+      .join(" ");
 
   const linkedinQuery = buildQuery("site:linkedin.com/in");
   const webQuery = buildQuery("");
 
   return [
-    { label: "Google -- LinkedIn X-ray", url: `https://www.google.com/search?q=${encodeURIComponent(linkedinQuery)}` },
-    { label: "Bing -- LinkedIn X-ray", url: `https://www.bing.com/search?q=${encodeURIComponent(linkedinQuery)}` },
-    { label: "DuckDuckGo -- LinkedIn X-ray", url: `https://duckduckgo.com/?q=${encodeURIComponent(linkedinQuery)}` },
-    { label: "Google -- general web", url: `https://www.google.com/search?q=${encodeURIComponent(webQuery)}` },
+    {
+      label: "Google -- LinkedIn X-ray",
+      url: `https://www.google.com/search?q=${encodeURIComponent(linkedinQuery)}`,
+    },
+    {
+      label: "Bing -- LinkedIn X-ray",
+      url: `https://www.bing.com/search?q=${encodeURIComponent(linkedinQuery)}`,
+    },
+    {
+      label: "DuckDuckGo -- LinkedIn X-ray",
+      url: `https://duckduckgo.com/?q=${encodeURIComponent(linkedinQuery)}`,
+    },
+    {
+      label: "Google -- general web",
+      url: `https://www.google.com/search?q=${encodeURIComponent(webQuery)}`,
+    },
   ];
 }
 
@@ -269,12 +292,66 @@ function buildXrayQueries(
 // rather than the top -- an unscored result isn't necessarily a bad match,
 // but a scored, high-similarity one is a more confident recommendation, so
 // it's shown first. This never removes anyone from the list, only reorders.
-function sortByScore(candidates: PdlCandidate[]): PdlCandidate[] {
-  return [...candidates].sort((a, b) => {
-    const scoreA = typeof a._match_score === "number" ? a._match_score : -Infinity;
-    const scoreB = typeof b._match_score === "number" ? b._match_score : -Infinity;
-    return scoreB - scoreA;
-  });
+// Design decision (2026-07-24, after a legal-compliance discussion about
+// AI candidate ranking -- NYC Local Law 144 / EEOC algorithmic-
+// discrimination enforcement risk): candidate order is NOT sorted by match
+// score by default any more. "default" returns candidates in exactly the
+// order the backend/vendor responded with -- no client-side re-sort at
+// all. The AI-influenced "match evidence" sort is opt-in only (see
+// sortByMatchEvidence state) and, even when chosen, is applied as an
+// explicit, visible recruiter action rather than a silent default.
+// Card redesign (2026-07-24): initials for the avatar circle, replacing
+// any idea of a hotlinked vendor photo URL -- photo licensing/hotlinking
+// terms across vendors haven't been confirmed, so initials-on-a-circle
+// (zero licensing risk, zero extra cost) is the deliberate default rather
+// than a placeholder to upgrade later.
+function getInitials(fullName: string | undefined): string {
+  if (!fullName) return "?";
+  const parts = fullName.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  const first = parts[0]?.[0] ?? "";
+  const last = parts.length > 1 ? (parts[parts.length - 1]?.[0] ?? "") : "";
+  return (first + last).toUpperCase();
+}
+
+// "years_experience" and "company_size" were dropped from v1: neither
+// normalizeCoresignalCandidate nor normalizeCrustdataCandidate (see
+// source-candidates-discovery/index.ts) currently surfaces a per-candidate
+// years-of-experience or current-company-size value on PdlCandidate --
+// those fields exist today only as ROLE BRIEF search criteria, not as
+// per-result data. Shipping a sort option with nothing to sort by would be
+// the same non-functional-option mistake flagged earlier for
+// "recently changed jobs" -- wiring the underlying normalizer fields
+// through is real, separate backend scope, not a frontend sort change.
+type CandidateSortField = "default" | "name" | "location";
+
+function sortCandidatesForDisplay(
+  candidates: PdlCandidate[],
+  sortField: CandidateSortField,
+  sortByMatchEvidence: boolean,
+): PdlCandidate[] {
+  if (sortByMatchEvidence) {
+    return [...candidates].sort((a, b) => {
+      const scoreA =
+        typeof a._match_score === "number" ? a._match_score : -Infinity;
+      const scoreB =
+        typeof b._match_score === "number" ? b._match_score : -Infinity;
+      return scoreB - scoreA;
+    });
+  }
+  switch (sortField) {
+    case "name":
+      return [...candidates].sort((a, b) =>
+        (a.full_name ?? "").localeCompare(b.full_name ?? ""),
+      );
+    case "location":
+      return [...candidates].sort((a, b) =>
+        (a.location_name ?? "").localeCompare(b.location_name ?? ""),
+      );
+    case "default":
+    default:
+      return candidates;
+  }
 }
 
 // Per-result "Add to pipeline" state, keyed by PDL candidate id. Separate
@@ -346,7 +423,11 @@ type FullProfileData = {
 // ported verbatim vs. adapted) -- scores the currently-selected role brief
 // against one already-saved candidate. Same "only after Add to pipeline"
 // gating as every other enrichment on this screen.
-type DimensionScore = { score: number; rationale: string; quote: string | null };
+type DimensionScore = {
+  score: number;
+  rationale: string;
+  quote: string | null;
+};
 type MustHaveCheck = {
   requirement: string;
   status: "found" | "inferred" | "absent";
@@ -362,9 +443,17 @@ type RecruiterCard = {
 };
 type ScoreResult = {
   overall_score: number;
-  verdict: "EXCEPTIONAL MATCH" | "STRONG MATCH" | "POTENTIAL MATCH" | "WEAK MATCH" | "NOT A MATCH";
+  verdict:
+    | "EXCEPTIONAL MATCH"
+    | "STRONG MATCH"
+    | "POTENTIAL MATCH"
+    | "WEAK MATCH"
+    | "NOT A MATCH";
   confidence_level: "high" | "medium" | "low";
-  dimension_scores: Record<"skills" | "trajectory" | "domain" | "seniority" | "tenure", DimensionScore>;
+  dimension_scores: Record<
+    "skills" | "trajectory" | "domain" | "seniority" | "tenure",
+    DimensionScore
+  >;
   deal_breaker_warning: string | null;
   must_haves_check: MustHaveCheck[];
   green_flags: string[];
@@ -392,13 +481,14 @@ const ACTION_LABELS: Record<ScoreResult["recommended_action"], string> = {
   reject: "Reject",
 };
 
-const DIMENSION_LABELS: Record<keyof ScoreResult["dimension_scores"], string> = {
-  skills: "Technical Skills",
-  trajectory: "Career Growth",
-  domain: "Industry Experience",
-  seniority: "Seniority Level",
-  tenure: "Job Stability",
-};
+const DIMENSION_LABELS: Record<keyof ScoreResult["dimension_scores"], string> =
+  {
+    skills: "Technical Skills",
+    trajectory: "Career Growth",
+    domain: "Industry Experience",
+    seniority: "Seniority Level",
+    tenure: "Job Stability",
+  };
 
 // Agent H Stage 3: Sourcing -- LinkedIn-stage holistic fit assessment.
 // Deliberately NOT a number/verdict -- see assess-candidate-fit's own
@@ -468,7 +558,13 @@ type CriteriaImpact = {
 type InterviewResult = {
   already_booked: boolean;
   interview_id?: number | null;
-  status: "link_sent" | "booked" | "rescheduled" | "cancelled" | "completed" | "no_show";
+  status:
+    | "link_sent"
+    | "booked"
+    | "rescheduled"
+    | "cancelled"
+    | "completed"
+    | "no_show";
   booking_link_url: string;
   scheduled_at?: string | null;
   scheduled_end_at?: string | null;
@@ -653,9 +749,7 @@ function FullProfilePanel({ profile }: { profile: FullProfileData }) {
                 </div>
                 <div className="text-xs text-muted-foreground">
                   {formatDateRange(job.date_from, job.date_to)}
-                  {job.duration_months
-                    ? ` (${job.duration_months} mo)`
-                    : ""}
+                  {job.duration_months ? ` (${job.duration_months} mo)` : ""}
                 </div>
                 {job.description && (
                   <div className="text-xs text-muted-foreground mt-0.5">
@@ -706,7 +800,9 @@ function FullProfilePanel({ profile }: { profile: FullProfileData }) {
           <span className="font-medium">Languages: </span>
           {languages
             .map((lang: any) =>
-              lang.proficiency ? `${lang.language} (${lang.proficiency})` : lang.language,
+              lang.proficiency
+                ? `${lang.language} (${lang.proficiency})`
+                : lang.language,
             )
             .join(", ")}
         </div>
@@ -725,8 +821,8 @@ function FullProfilePanel({ profile }: { profile: FullProfileData }) {
         certifications.length === 0 &&
         skills.length === 0 && (
           <p className="text-xs text-muted-foreground">
-            Profile was enriched, but no experience, education, or skills
-            fields came back for this candidate.
+            Profile was enriched, but no experience, education, or skills fields
+            came back for this candidate.
           </p>
         )}
     </div>
@@ -780,10 +876,16 @@ function ScorePanel({ result }: { result: ScoreResult }) {
           {dims.map(([key, dim]) => (
             <div key={key} className="flex flex-col">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-medium">{DIMENSION_LABELS[key]}</span>
-                <span className="text-xs text-muted-foreground">{dim.score}/100</span>
+                <span className="text-xs font-medium">
+                  {DIMENSION_LABELS[key]}
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  {dim.score}/100
+                </span>
               </div>
-              <div className="text-xs text-muted-foreground">{dim.rationale}</div>
+              <div className="text-xs text-muted-foreground">
+                {dim.rationale}
+              </div>
               {dim.quote && (
                 <div className="text-xs italic text-muted-foreground">
                   "{dim.quote}"
@@ -809,10 +911,16 @@ function ScorePanel({ result }: { result: ScoreResult }) {
                         : "text-red-700"
                   }
                 >
-                  {m.status === "found" ? "✓" : m.status === "inferred" ? "~" : "✗"}
+                  {m.status === "found"
+                    ? "✓"
+                    : m.status === "inferred"
+                      ? "~"
+                      : "✗"}
                 </span>
                 <span>{m.requirement}</span>
-                <span className="text-muted-foreground">({m.confidence} confidence)</span>
+                <span className="text-muted-foreground">
+                  ({m.confidence} confidence)
+                </span>
               </div>
             ))}
           </div>
@@ -834,7 +942,9 @@ function ScorePanel({ result }: { result: ScoreResult }) {
           )}
           {result.recommended_action_risks.length > 0 && (
             <div>
-              <div className="font-medium text-xs mb-1">Risks / worth exploring</div>
+              <div className="font-medium text-xs mb-1">
+                Risks / worth exploring
+              </div>
               <ul className="text-xs text-muted-foreground list-disc pl-4">
                 {result.recommended_action_risks.map((r, i) => (
                   <li key={i}>{r}</li>
@@ -847,7 +957,9 @@ function ScorePanel({ result }: { result: ScoreResult }) {
 
       {result.recruiter_card?.interview_questions?.length > 0 && (
         <div>
-          <div className="font-medium text-xs mb-1">Suggested interview questions</div>
+          <div className="font-medium text-xs mb-1">
+            Suggested interview questions
+          </div>
           <ul className="text-xs text-muted-foreground list-disc pl-4">
             {result.recruiter_card.interview_questions.map((q, i) => (
               <li key={i}>{q}</li>
@@ -856,7 +968,9 @@ function ScorePanel({ result }: { result: ScoreResult }) {
         </div>
       )}
 
-      {(result.green_flags.length > 0 || result.watch_signals.length > 0 || result.review_flags.length > 0) && (
+      {(result.green_flags.length > 0 ||
+        result.watch_signals.length > 0 ||
+        result.review_flags.length > 0) && (
         <div className="text-xs flex flex-col gap-1">
           {result.green_flags.length > 0 && (
             <div>
@@ -896,8 +1010,8 @@ function FitAssessmentPanel({ result }: { result: FitAssessmentResult }) {
         </span>
         {result.scored_text_source === "plain_fields" && (
           <span className="text-xs text-amber-700">
-            Limited discovery fields only -- run "View full profile" first
-            for a better read.
+            Limited discovery fields only -- run "View full profile" first for a
+            better read.
           </span>
         )}
       </div>
@@ -917,7 +1031,9 @@ function FitAssessmentPanel({ result }: { result: FitAssessmentResult }) {
 
       {result.worth_verifying.length > 0 && (
         <div>
-          <div className="font-medium text-xs mb-1">Worth verifying in a screen</div>
+          <div className="font-medium text-xs mb-1">
+            Worth verifying in a screen
+          </div>
           <ul className="text-xs text-muted-foreground list-disc pl-4">
             {result.worth_verifying.map((w, i) => (
               <li key={i}>{w}</li>
@@ -928,7 +1044,9 @@ function FitAssessmentPanel({ result }: { result: FitAssessmentResult }) {
 
       {result.clear_gaps.length > 0 && (
         <div>
-          <div className="font-medium text-xs mb-1 text-red-700">Clear gaps</div>
+          <div className="font-medium text-xs mb-1 text-red-700">
+            Clear gaps
+          </div>
           <ul className="text-xs text-muted-foreground list-disc pl-4">
             {result.clear_gaps.map((g, i) => (
               <li key={i}>{g}</li>
@@ -977,9 +1095,9 @@ function CalibrationFeedbackWidget({
   return (
     <div className="flex flex-col gap-2 pt-2 border-t">
       <p className="text-xs text-muted-foreground">
-        Not a fit? Give a reason -- it becomes a real search criterion for
-        this role, and you'll see how many candidates it would exclude
-        before it's ever applied.
+        Not a fit? Give a reason -- it becomes a real search criterion for this
+        role, and you'll see how many candidates it would exclude before it's
+        ever applied.
       </p>
       <textarea
         className="border rounded-md p-2 text-sm"
@@ -1045,9 +1163,9 @@ function CalibrationFeedbackWidget({
                 {applyState === "applying"
                   ? "Applying..."
                   : contextualizeResult.rejected_count !== null &&
-                    contextualizeResult.rejected_count !== undefined
-                  ? `Apply (${contextualizeResult.rejected_count} excluded)`
-                  : "Apply"}
+                      contextualizeResult.rejected_count !== undefined
+                    ? `Apply (${contextualizeResult.rejected_count} excluded)`
+                    : "Apply"}
               </Button>
             )}
           </div>
@@ -1351,9 +1469,10 @@ function CandidateActionsPanel({
                 : " (name match only -- verify)"}
             </div>
           )}
-          {!devSignalResult.github_url && !devSignalResult.stackoverflow_url && (
-            <span>No confident dev-signal match found.</span>
-          )}
+          {!devSignalResult.github_url &&
+            !devSignalResult.stackoverflow_url && (
+              <span>No confident dev-signal match found.</span>
+            )}
           {devSignalResult.notes.length > 0 && (
             <ul className="list-disc pl-4 mt-1">
               {devSignalResult.notes.map((note, i) => (
@@ -1487,7 +1606,9 @@ function OfferPanel({ info }: { info: OfferInfo }) {
       {info.position_title && (
         <p className="text-xs font-medium">{info.position_title}</p>
       )}
-      {detailLine && <p className="text-xs text-muted-foreground">{detailLine}</p>}
+      {detailLine && (
+        <p className="text-xs text-muted-foreground">{detailLine}</p>
+      )}
       {info.response_text && (
         <p className="text-xs text-muted-foreground italic">
           "{info.response_text.slice(0, 200)}
@@ -1623,6 +1744,15 @@ export const SourceCandidatesPage = ({
   const [selectedId, setSelectedId] = useState<string>("");
   const [size, setSize] = useState(10);
 
+  // Funnel bar Relax/Tighten (2026-07-24): both scroll to and reveal the
+  // existing Control Panel rather than duplicating its logic -- "Relax"
+  // auto-loads the criteria list (if not already loaded) so the recruiter
+  // can pick which one to relax, "Tighten" also focuses the steering box
+  // input. Neither button guesses which criterion to touch on the
+  // recruiter's behalf.
+  const controlPanelRef = useRef<HTMLDivElement | null>(null);
+  const steeringInputRef = useRef<HTMLInputElement | null>(null);
+
   const [stage, setStage] = useState<Stage>("idle");
   const [previewLoading, setPreviewLoading] = useState(false);
   const [fetchLoading, setFetchLoading] = useState(false);
@@ -1630,8 +1760,21 @@ export const SourceCandidatesPage = ({
 
   const [roleBriefTitle, setRoleBriefTitle] = useState<string | null>(null);
   const [total, setTotal] = useState(0);
+  // Real total-match-count across the full search index (see SourceResult's
+  // total_matches_all comment) -- drives the funnel bar above the candidate
+  // list. Vendor-agnostic by construction: it's just a number, no vendor
+  // name attached anywhere near it.
+  const [totalMatchesAll, setTotalMatchesAll] = useState<number | null>(null);
   const [notes, setNotes] = useState<string[]>([]);
   const [candidates, setCandidates] = useState<PdlCandidate[]>([]);
+  // Sort control state (design discussion 2026-07-24): "default" passes
+  // through whatever order the backend returned with NO client-side
+  // re-sort applied -- see sortCandidatesForDisplay below. The AI-assisted
+  // "match evidence" sort is a separate opt-in boolean, deliberately not
+  // just another option in the same dropdown, so a recruiter has to
+  // actively choose it rather than land on it by default.
+  const [sortField, setSortField] = useState<CandidateSortField>("default");
+  const [sortByMatchEvidence, setSortByMatchEvidence] = useState(false);
   const [scrollToken, setScrollToken] = useState<string | null>(null);
   const [saveStates, setSaveStates] = useState<Record<string, SaveState>>({});
   // Real public.candidates row id for each PDL/vendor candidate id shown on
@@ -1639,9 +1782,9 @@ export const SourceCandidatesPage = ({
   // result comes back already-saved) or from save-sourced-candidate's own
   // response right after "Add to pipeline" succeeds. Enrichment always
   // targets this real row id, never the vendor's own candidate id.
-  const [candidateDbIds, setCandidateDbIds] = useState<
-    Record<string, number>
-  >({});
+  const [candidateDbIds, setCandidateDbIds] = useState<Record<string, number>>(
+    {},
+  );
   const [contactEnrichStates, setContactEnrichStates] = useState<
     Record<string, EnrichState>
   >({});
@@ -1666,9 +1809,22 @@ export const SourceCandidatesPage = ({
   const [scoreStates, setScoreStates] = useState<Record<string, EnrichState>>(
     {},
   );
-  const [scoreResults, setScoreResults] = useState<
-    Record<string, ScoreResult>
+  // Card redesign (2026-07-24): collapsed-by-default "Why this could be a
+  // fit" evidence section, keyed by candidate id. Reuses the existing
+  // score-candidate machinery (scoreStates/scoreResults/handleScoreCandidate)
+  // rather than adding a new fetch path -- expanding this for the first
+  // time on a given candidate triggers the same call "Score candidate"
+  // already made, it's just surfaced earlier/differently. Only rendered
+  // for candidates with a real candidateId (i.e. already added to
+  // pipeline) since scoring has always required a saved candidate row --
+  // a not-yet-saved search hit has no evidence data to show, so no
+  // evidence trigger is rendered for it rather than showing a broken one.
+  const [evidenceExpanded, setEvidenceExpanded] = useState<
+    Record<string, boolean>
   >({});
+  const [scoreResults, setScoreResults] = useState<Record<string, ScoreResult>>(
+    {},
+  );
   const [fitStates, setFitStates] = useState<Record<string, EnrichState>>({});
   const [fitResults, setFitResults] = useState<
     Record<string, FitAssessmentResult>
@@ -1685,9 +1841,9 @@ export const SourceCandidatesPage = ({
 
   // Agent H, task 76: per-candidate resume-request state. "loading" covers
   // both sending the request and re-checking for a reply.
-  const [resumeStates, setResumeStates] = useState<
-    Record<string, EnrichState>
-  >({});
+  const [resumeStates, setResumeStates] = useState<Record<string, EnrichState>>(
+    {},
+  );
   const [resumeInfos, setResumeInfos] = useState<Record<string, ResumeInfo>>(
     {},
   );
@@ -1734,6 +1890,28 @@ export const SourceCandidatesPage = ({
   const [applyStates, setApplyStates] = useState<
     Record<string, "idle" | "applying" | "applied">
   >({});
+
+  // Natural-language steering box (2026-07-24): lets a recruiter or hiring
+  // team describe a live criteria change in plain English mid-search
+  // ("actually we also need Kubernetes now") without reopening the
+  // original JD. Reuses the EXACT same two-step contextualize/apply
+  // machinery as per-candidate calibration feedback above -- no new edge
+  // function or DB change was needed, since contextualizeCalibrationFeedback
+  // already treats `reason` as generic free text and applyLearnedCriterion
+  // already defaults source_feedback_id to null when omitted, exactly the
+  // "future entry point... without a calibration judgment behind it" the
+  // role_brief_learned_criteria schema comment anticipated. Role-brief-
+  // scoped (not per-candidate), so this is a single set of state values,
+  // not a Record keyed by candidate id.
+  const [steeringText, setSteeringText] = useState("");
+  const [steeringState, setSteeringState] = useState<
+    "idle" | "loading" | "done"
+  >("idle");
+  const [steeringResult, setSteeringResult] =
+    useState<ContextualizeResult | null>(null);
+  const [steeringApplyState, setSteeringApplyState] = useState<
+    "idle" | "applying" | "applied"
+  >("idle");
 
   // Real calibration loop: Control Panel data (Noon-style live per-rule
   // reject counts, with Relax/Reapply) -- loaded on demand, not
@@ -1818,9 +1996,7 @@ export const SourceCandidatesPage = ({
         filter: {},
       })
       .then(({ data }) => {
-        setRoleBriefs(
-          (data as any[]).map((d) => ({ id: d.id, name: d.name })),
-        );
+        setRoleBriefs((data as any[]).map((d) => ({ id: d.id, name: d.name })));
       })
       .catch(() => {
         notify("Failed to load role briefs", { type: "error" });
@@ -1869,7 +2045,10 @@ export const SourceCandidatesPage = ({
         .getCalibrationFeedback(Number(value))
         .then((rows) =>
           setExistingCalibrationFeedback(
-            (rows as any[]).map((r) => ({ source_id: r.source_id, fit: r.fit })),
+            (rows as any[]).map((r) => ({
+              source_id: r.source_id,
+              fit: r.fit,
+            })),
           ),
         )
         .catch(() => {
@@ -1879,13 +2058,27 @@ export const SourceCandidatesPage = ({
 
       dataProvider
         .getOne("deals", { id: Number(value) })
-        .then(({ data }) => setRoleBriefDetail(data as unknown as RoleBriefDetail))
+        .then(({ data }) =>
+          setRoleBriefDetail(data as unknown as RoleBriefDetail),
+        )
         .catch(() => {
           // Non-fatal -- just means the "Searching for:" panel won't show;
           // Preview/Fetch still work off the backend's own read of the row.
         });
     }
   };
+
+  // Re-order the already-fetched candidates in place when the recruiter
+  // changes the sort control -- no re-fetch, no re-charge against the
+  // vendor. Intentionally does NOT run on first mount with empty
+  // candidates; only matters once there's something to sort.
+  useEffect(() => {
+    setCandidates((prev) =>
+      prev.length > 0
+        ? sortCandidatesForDisplay(prev, sortField, sortByMatchEvidence)
+        : prev,
+    );
+  }, [sortField, sortByMatchEvidence]);
 
   // Role Workspace embedding (2026-07-19): when a role brief id arrives via
   // props instead of the dropdown, select it exactly once on mount by
@@ -1931,7 +2124,8 @@ export const SourceCandidatesPage = ({
               ? parsed.preference_tiers
               : null,
           clarifying_questions:
-            parsed.clarifying_questions && parsed.clarifying_questions.length > 0
+            parsed.clarifying_questions &&
+            parsed.clarifying_questions.length > 0
               ? parsed.clarifying_questions
               : null,
           role_status: "new",
@@ -1998,9 +2192,16 @@ export const SourceCandidatesPage = ({
         Number(selectedId),
         size,
       )) as SourceResult;
-      setCandidates(sortByScore(data.candidates));
+      setCandidates(
+        sortCandidatesForDisplay(
+          data.candidates,
+          sortField,
+          sortByMatchEvidence,
+        ),
+      );
       setScrollToken(data.scroll_token);
       setTotal(data.total);
+      setTotalMatchesAll(data.total_matches_all);
       setNotes(data.notes);
       const seeded: Record<string, SaveState> = {};
       const seededDbIds: Record<string, number> = {};
@@ -2036,8 +2237,15 @@ export const SourceCandidatesPage = ({
         size,
         scrollToken,
       )) as SourceResult;
-      setCandidates((prev) => sortByScore([...prev, ...data.candidates]));
+      setCandidates((prev) =>
+        sortCandidatesForDisplay(
+          [...prev, ...data.candidates],
+          sortField,
+          sortByMatchEvidence,
+        ),
+      );
       setScrollToken(data.scroll_token);
+      setTotalMatchesAll(data.total_matches_all);
       setNotes(data.notes);
       const seeded: Record<string, SaveState> = {};
       const seededDbIds: Record<string, number> = {};
@@ -2110,14 +2318,24 @@ export const SourceCandidatesPage = ({
     setFreePortalLoading(true);
     try {
       const [freePortalOutcome, exaOutcome] = await Promise.allSettled([
-        dataProvider.sourceFreePortalCandidates(Number(selectedId), 10) as Promise<FreePortalResult>,
-        dataProvider.sourceExaCandidates(Number(selectedId), 10) as Promise<ExaResult>,
+        dataProvider.sourceFreePortalCandidates(
+          Number(selectedId),
+          10,
+        ) as Promise<FreePortalResult>,
+        dataProvider.sourceExaCandidates(
+          Number(selectedId),
+          10,
+        ) as Promise<ExaResult>,
       ]);
 
       const freePortalCandidatesRaw =
-        freePortalOutcome.status === "fulfilled" ? freePortalOutcome.value.candidates ?? [] : [];
+        freePortalOutcome.status === "fulfilled"
+          ? (freePortalOutcome.value.candidates ?? [])
+          : [];
       const exaCandidatesRaw =
-        exaOutcome.status === "fulfilled" ? exaOutcome.value.candidates ?? [] : [];
+        exaOutcome.status === "fulfilled"
+          ? (exaOutcome.value.candidates ?? [])
+          : [];
 
       const combinedNotes: string[] = [];
       if (freePortalOutcome.status === "fulfilled") {
@@ -2135,10 +2353,11 @@ export const SourceCandidatesPage = ({
         );
       }
 
-      const { merged, mergedAwayCount } = mergeCandidatesAcrossSources<PdlCandidate>([
-        freePortalCandidatesRaw,
-        exaCandidatesRaw,
-      ]);
+      const { merged, mergedAwayCount } =
+        mergeCandidatesAcrossSources<PdlCandidate>([
+          freePortalCandidatesRaw,
+          exaCandidatesRaw,
+        ]);
       if (mergedAwayCount > 0) {
         combinedNotes.push(
           `${mergedAwayCount} candidate(s) appeared in more than one source and were merged into a single card -- matched by name only, so a shared common name could occasionally merge two different people.`,
@@ -2187,10 +2406,11 @@ export const SourceCandidatesPage = ({
         Number(selectedId),
       )) as FreePortalResult;
       const combinedNotes = [...freePortalNotes, ...(result.notes ?? [])];
-      const { merged, mergedAwayCount } = mergeCandidatesAcrossSources<PdlCandidate>([
-        freePortalCandidates,
-        result.candidates ?? [],
-      ]);
+      const { merged, mergedAwayCount } =
+        mergeCandidatesAcrossSources<PdlCandidate>([
+          freePortalCandidates,
+          result.candidates ?? [],
+        ]);
       if (mergedAwayCount > 0) {
         combinedNotes.push(
           `${mergedAwayCount} candidate(s) from X-ray matched someone already in this list and were merged -- matched by name only.`,
@@ -2352,8 +2572,7 @@ export const SourceCandidatesPage = ({
       notify(
         `${result.verdict} (${result.overall_score}/100) -- recommended: ${ACTION_LABELS[result.recommended_action]}`,
         {
-          type:
-            result.recommended_action === "reject" ? "warning" : "success",
+          type: result.recommended_action === "reject" ? "warning" : "success",
         },
       );
     } catch (error: any) {
@@ -2483,7 +2702,10 @@ export const SourceCandidatesPage = ({
   // Agent H Stage 6: opens (or closes) the inline offer-compose form for one
   // candidate, seeding a blank draft the first time it's opened.
   const handleToggleOfferForm = (candidate: PdlCandidate) => {
-    setOfferFormOpen((prev) => ({ ...prev, [candidate.id]: !prev[candidate.id] }));
+    setOfferFormOpen((prev) => ({
+      ...prev,
+      [candidate.id]: !prev[candidate.id],
+    }));
     setOfferDrafts((prev) => ({
       ...prev,
       [candidate.id]: prev[candidate.id] ?? { ...EMPTY_OFFER_DRAFT },
@@ -2497,7 +2719,10 @@ export const SourceCandidatesPage = ({
   ) => {
     setOfferDrafts((prev) => ({
       ...prev,
-      [candidateKey]: { ...(prev[candidateKey] ?? EMPTY_OFFER_DRAFT), [field]: value },
+      [candidateKey]: {
+        ...(prev[candidateKey] ?? EMPTY_OFFER_DRAFT),
+        [field]: value,
+      },
     }));
   };
 
@@ -2509,18 +2734,25 @@ export const SourceCandidatesPage = ({
     if (!candidateId || !selectedId || !draft) return;
     setOfferStates((prev) => ({ ...prev, [candidate.id]: "loading" }));
     try {
-      const result = await dataProvider.sendOffer(candidateId, Number(selectedId), {
-        position_title: draft.position_title,
-        compensation_amount: draft.compensation_amount
-          ? Number(draft.compensation_amount)
-          : null,
-        compensation_currency: draft.compensation_currency,
-        compensation_frequency: draft.compensation_frequency,
-        start_date: draft.start_date || null,
-        expiry_date: draft.expiry_date || null,
-        benefits_summary: draft.benefits_summary || null,
-      });
-      setOfferInfos((prev) => ({ ...prev, [candidate.id]: result.offer as OfferInfo }));
+      const result = await dataProvider.sendOffer(
+        candidateId,
+        Number(selectedId),
+        {
+          position_title: draft.position_title,
+          compensation_amount: draft.compensation_amount
+            ? Number(draft.compensation_amount)
+            : null,
+          compensation_currency: draft.compensation_currency,
+          compensation_frequency: draft.compensation_frequency,
+          start_date: draft.start_date || null,
+          expiry_date: draft.expiry_date || null,
+          benefits_summary: draft.benefits_summary || null,
+        },
+      );
+      setOfferInfos((prev) => ({
+        ...prev,
+        [candidate.id]: result.offer as OfferInfo,
+      }));
       setOfferStates((prev) => ({ ...prev, [candidate.id]: "done" }));
       setOfferFormOpen((prev) => ({ ...prev, [candidate.id]: false }));
       notify("Offer sent", { type: "success" });
@@ -2602,7 +2834,13 @@ export const SourceCandidatesPage = ({
         false,
         provider,
       )) as SourceResult;
-      setCalibrationCandidates(sortByScore(data.candidates));
+      // Calibration review is a distinct, small on-demand flow (recruiter
+      // explicitly asks to review a few candidates and give fit/not-fit
+      // feedback) -- not the main results funnel this ticket changed the
+      // default ordering for. Score order is still the right default here.
+      setCalibrationCandidates(
+        sortCandidatesForDisplay(data.candidates, "default", true),
+      );
       setCalibrationStarted(true);
       setNotes(data.notes);
       setTotal(data.total);
@@ -2674,7 +2912,10 @@ export const SourceCandidatesPage = ({
   // criterion suggestion + blast-radius preview (edge function's
   // calibration_contextualize mode). Never persists anything by itself --
   // see handleApplyCriterion for the recruiter-confirmed commit step.
-  const handleContextualize = async (candidate: PdlCandidate, reason: string) => {
+  const handleContextualize = async (
+    candidate: PdlCandidate,
+    reason: string,
+  ) => {
     setContextualizeStates((prev) => ({ ...prev, [candidate.id]: "loading" }));
     try {
       const result = await dataProvider.contextualizeCalibrationFeedback(
@@ -2685,7 +2926,8 @@ export const SourceCandidatesPage = ({
       setContextualizeResults((prev) => ({ ...prev, [candidate.id]: result }));
     } catch (error: any) {
       notify(
-        error?.message || "Failed to check whether this reason implies a search criterion",
+        error?.message ||
+          "Failed to check whether this reason implies a search criterion",
         { type: "error" },
       );
     } finally {
@@ -2713,6 +2955,53 @@ export const SourceCandidatesPage = ({
       void handleRefreshCriteriaImpact();
     } catch (error: any) {
       setApplyStates((prev) => ({ ...prev, [candidateId]: "idle" }));
+      notify(error?.message || "Failed to apply criterion", { type: "error" });
+    }
+  };
+
+  // Steering box: same two-step contextualize/apply flow as
+  // handleContextualize/handleApplyCriterion above, just role-brief-scoped
+  // instead of candidate-scoped -- see steeringText's declaration for why
+  // no backend change was needed.
+  const handleSteeringContextualize = async () => {
+    if (!selectedId || !steeringText.trim()) return;
+    setSteeringState("loading");
+    try {
+      const result = await dataProvider.contextualizeCalibrationFeedback(
+        Number(selectedId),
+        steeringText.trim(),
+      );
+      setSteeringResult(result);
+    } catch (error: any) {
+      notify(
+        error?.message ||
+          "Failed to check whether this implies a search criterion",
+        { type: "error" },
+      );
+    } finally {
+      setSteeringState("done");
+    }
+  };
+
+  const handleApplySteeringCriterion = async () => {
+    if (!steeringResult?.criterion || !selectedId) return;
+    setSteeringApplyState("applying");
+    try {
+      await dataProvider.applyLearnedCriterion(
+        Number(selectedId),
+        steeringResult.criterion,
+      );
+      setSteeringApplyState("applied");
+      notify("Criterion applied to future searches for this role", {
+        type: "success",
+      });
+      setSteeringText("");
+      setSteeringResult(null);
+      setSteeringState("idle");
+      setSteeringApplyState("idle");
+      void handleRefreshCriteriaImpact();
+    } catch (error: any) {
+      setSteeringApplyState("idle");
       notify(error?.message || "Failed to apply criterion", { type: "error" });
     }
   };
@@ -2786,7 +3075,9 @@ export const SourceCandidatesPage = ({
       await dataProvider.reapplyLearnedCriterion(criterionId);
       await handleRefreshCriteriaImpact();
     } catch (error: any) {
-      notify(error?.message || "Failed to reapply criterion", { type: "error" });
+      notify(error?.message || "Failed to reapply criterion", {
+        type: "error",
+      });
     } finally {
       setCriteriaActionStates((prev) => ({ ...prev, [criterionId]: "idle" }));
     }
@@ -2806,13 +3097,12 @@ export const SourceCandidatesPage = ({
         <div>
           <h1 className="text-2xl font-semibold">Source Candidates</h1>
           <p className="text-muted-foreground text-sm">
-            Pick a role brief and preview how many people match before
-            pulling any real candidate records -- previewing costs almost
-            nothing. Results are sorted by match score (best first), but
-            nothing is ever hidden -- every candidate returned stays visible
-            and reviewable. Click "Add to pipeline" on anyone worth
-            tracking; nothing is saved just for showing up in a search
-            result.
+            Pick a role brief and preview how many people match before pulling
+            any real candidate records -- previewing costs almost nothing.
+            Results are sorted by match score (best first), but nothing is ever
+            hidden -- every candidate returned stays visible and reviewable.
+            Click "Add to pipeline" on anyone worth tracking; nothing is saved
+            just for showing up in a search result.
           </p>
         </div>
       )}
@@ -2873,7 +3163,9 @@ export const SourceCandidatesPage = ({
           <ul className="text-sm list-disc pl-4 flex flex-col gap-0.5">
             <li>
               {roleBriefDetail.name ?? "(untitled role)"}
-              {roleBriefDetail.seniority ? ` · ${roleBriefDetail.seniority}` : ""}
+              {roleBriefDetail.seniority
+                ? ` · ${roleBriefDetail.seniority}`
+                : ""}
             </li>
             {roleBriefDetail.location && <li>{roleBriefDetail.location}</li>}
             {(roleBriefDetail.years_experience_min ||
@@ -2913,7 +3205,8 @@ export const SourceCandidatesPage = ({
                 Companies (preferred):{" "}
                 {[
                   roleBriefDetail.company_type,
-                  roleBriefDetail.company_size_min || roleBriefDetail.company_size_max
+                  roleBriefDetail.company_size_min ||
+                  roleBriefDetail.company_size_max
                     ? `${roleBriefDetail.company_size_min ?? "any"}-${roleBriefDetail.company_size_max ?? "any"} employees`
                     : null,
                 ]
@@ -3011,7 +3304,10 @@ export const SourceCandidatesPage = ({
           Loaded on demand since computing it spends a few cheap Coresignal
           preview calls -- not shown until the recruiter asks for it. */}
       {selectedId && (
-        <div className="flex flex-col gap-2 border rounded-lg p-4">
+        <div
+          ref={controlPanelRef}
+          className="flex flex-col gap-2 border rounded-lg p-4"
+        >
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-medium">Control panel</h3>
             <Button
@@ -3023,26 +3319,105 @@ export const SourceCandidatesPage = ({
               {CRITERIA_IMPACT_DISABLED
                 ? "Temporarily disabled"
                 : criteriaImpactLoading
-                ? "Computing..."
-                : criteriaImpact
-                ? "Refresh"
-                : "Load"}
+                  ? "Computing..."
+                  : criteriaImpact
+                    ? "Refresh"
+                    : "Load"}
             </Button>
           </div>
           {CRITERIA_IMPACT_DISABLED && (
             <p className="text-xs text-amber-700">
-              Temporarily disabled to stop unbounded Coresignal spend (one
-              live search per learned criterion, every refresh). Being
-              fixed server-side.
+              Temporarily disabled to stop unbounded Coresignal spend (one live
+              search per learned criterion, every refresh). Being fixed
+              server-side.
             </p>
           )}
-          {!CRITERIA_IMPACT_DISABLED && !criteriaImpact && !criteriaImpactLoading && (
+
+          {/* Steering box (2026-07-24): free-form criteria changes without
+              reopening the JD -- see steeringText's declaration above for
+              why this needed no backend change. Costs a couple of live
+              search-preview calls per check (same blast-radius preview the
+              per-candidate calibration flow already uses), disclosed
+              inline rather than hidden, since search credits are a real,
+              finite cost. */}
+          <div className="flex flex-col gap-2 border-t pt-3">
+            <label className="text-xs font-medium">
+              Describe a change to this search
+            </label>
+            <div className="flex gap-2">
+              <input
+                ref={steeringInputRef}
+                type="text"
+                className="flex-1 border border-input bg-background text-foreground rounded-md h-9 px-2 text-sm"
+                placeholder="e.g. we also need Kubernetes now"
+                value={steeringText}
+                onChange={(e) => setSteeringText(e.target.value)}
+                disabled={steeringState === "loading"}
+              />
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleSteeringContextualize}
+                disabled={steeringState === "loading" || !steeringText.trim()}
+              >
+                {steeringState === "loading" ? "Checking..." : "Check"}
+              </Button>
+            </div>
             <p className="text-xs text-muted-foreground">
-              Shows every criterion learned from calibration feedback for
-              this role, with how many candidates each one is currently
-              excluding -- and lets you undo any single one.
+              Checking costs a couple of search credits (a before/after preview)
+              -- nothing is applied to future searches until you review and
+              confirm below.
             </p>
-          )}
+
+            {steeringState === "done" &&
+              steeringResult &&
+              !steeringResult.applicable && (
+                <p className="text-xs text-muted-foreground">
+                  That doesn't map onto a concrete, checkable criterion --
+                  nothing was applied.
+                </p>
+              )}
+
+            {steeringResult?.applicable && steeringResult.criterion && (
+              <div className="border rounded-md p-2 flex flex-col gap-1.5 bg-muted/30">
+                <p className="text-xs">{steeringResult.criterion.label}</p>
+                <p className="text-xs text-muted-foreground">
+                  {steeringResult.current_total ?? "?"} candidates currently
+                  match &rarr; {steeringResult.projected_total ?? "?"} if
+                  applied
+                  {typeof steeringResult.rejected_count === "number"
+                    ? ` (excludes ${steeringResult.rejected_count})`
+                    : ""}
+                  .
+                </p>
+                <Button
+                  size="sm"
+                  onClick={handleApplySteeringCriterion}
+                  disabled={
+                    steeringApplyState === "applying" ||
+                    steeringApplyState === "applied"
+                  }
+                  className="self-start"
+                >
+                  {steeringApplyState === "applied"
+                    ? "Applied"
+                    : steeringApplyState === "applying"
+                      ? "Applying..."
+                      : "Apply"}
+                </Button>
+              </div>
+            )}
+          </div>
+
+          {!CRITERIA_IMPACT_DISABLED &&
+            !criteriaImpact &&
+            !criteriaImpactLoading && (
+              <p className="text-xs text-muted-foreground">
+                Shows every criterion learned from calibration feedback for this
+                role, with how many candidates each one is currently excluding
+                -- and lets you undo any single one.
+              </p>
+            )}
           {criteriaImpact && (
             <>
               <p className="text-xs text-muted-foreground">
@@ -3079,8 +3454,8 @@ export const SourceCandidatesPage = ({
                                 ? `${c.rejected_count} rejected`
                                 : "reject count unavailable"
                               : c.rejected_count !== null
-                              ? `would reject ${c.rejected_count} if reapplied`
-                              : "reapply impact unavailable"}
+                                ? `would reject ${c.rejected_count} if reapplied`
+                                : "reapply impact unavailable"}
                           </span>
                         </div>
                         <Button
@@ -3096,8 +3471,8 @@ export const SourceCandidatesPage = ({
                           {actionState === "working"
                             ? "Working..."
                             : c.status === "active"
-                            ? "Relax"
-                            : "Reapply"}
+                              ? "Relax"
+                              : "Reapply"}
                         </Button>
                       </li>
                     );
@@ -3110,7 +3485,10 @@ export const SourceCandidatesPage = ({
       )}
 
       <div>
-        <Button onClick={handlePreview} disabled={previewLoading || !selectedId}>
+        <Button
+          onClick={handlePreview}
+          disabled={previewLoading || !selectedId}
+        >
           {previewLoading ? "Searching..." : "Preview matches"}
         </Button>
       </div>
@@ -3138,16 +3516,16 @@ export const SourceCandidatesPage = ({
                 Free & low-cost search (GitHub, Stack Exchange, Exa)
               </h3>
               <p className="text-xs text-muted-foreground">
-                GitHub/Stack Exchange are official free APIs -- no
-                scraping, no vendor bill. Exa is a paid, general public-web
-                people-search API (roughly $0.015 per search) run alongside
-                them since its cost is negligible -- results from all three
-                are merged into one list below, with duplicates combined.
-                Hugging Face/Kaggle are excluded here by design (noisy for
-                non-ML roles -- see notes below after a search). Try this
-                before Coresignal, which costs real money per candidate
-                record. Learned criteria from calibration feedback narrow
-                these results too, where they can honestly apply.
+                GitHub/Stack Exchange are official free APIs -- no scraping, no
+                vendor bill. Exa is a paid, general public-web people-search API
+                (roughly $0.015 per search) run alongside them since its cost is
+                negligible -- results from all three are merged into one list
+                below, with duplicates combined. Hugging Face/Kaggle are
+                excluded here by design (noisy for non-ML roles -- see notes
+                below after a search). Try this before Coresignal, which costs
+                real money per candidate record. Learned criteria from
+                calibration feedback narrow these results too, where they can
+                honestly apply.
               </p>
             </div>
             <Button
@@ -3159,8 +3537,8 @@ export const SourceCandidatesPage = ({
               {freePortalLoading
                 ? "Searching..."
                 : freePortalSearched
-                ? "Search again"
-                : "Search free & low-cost portals"}
+                  ? "Search again"
+                  : "Search free & low-cost portals"}
             </Button>
           </div>
 
@@ -3184,15 +3562,14 @@ export const SourceCandidatesPage = ({
                 X-ray search (LinkedIn, CodeChef, HackerRank)
               </h4>
               <p className="text-xs text-muted-foreground">
-                Runs a narrow-to-broad query ladder per site via Exa
-                (restricted to linkedin.com / codechef.com /
-                hackerrank.com): exact title/location first, then a title
-                synonym, then the candidate's state name, then nearby
-                relocation-candidate metros, then a skill-only wide net --
-                roughly $0.015 per query, a few cents per run. Cards from a
-                broadened rung show why they surfaced. CodeChef/HackerRank
-                hits are cross-referenced with GitHub for free. Results
-                merge into the list below.
+                Runs a narrow-to-broad query ladder per site via Exa (restricted
+                to linkedin.com / codechef.com / hackerrank.com): exact
+                title/location first, then a title synonym, then the candidate's
+                state name, then nearby relocation-candidate metros, then a
+                skill-only wide net -- roughly $0.015 per query, a few cents per
+                run. Cards from a broadened rung show why they surfaced.
+                CodeChef/HackerRank hits are cross-referenced with GitHub for
+                free. Results merge into the list below.
               </p>
             </div>
             <Button
@@ -3249,9 +3626,11 @@ export const SourceCandidatesPage = ({
                 // full profile", which genuinely is PDL/Coresignal-only and
                 // stays hidden here via showFullProfile={false}). Same
                 // shared per-candidate state maps as the Coresignal list.
-                const contactState = contactEnrichStates[candidate.id] ?? "idle";
+                const contactState =
+                  contactEnrichStates[candidate.id] ?? "idle";
                 const contactResult = contactEnrichResults[candidate.id];
-                const devSignalState = devSignalEnrichStates[candidate.id] ?? "idle";
+                const devSignalState =
+                  devSignalEnrichStates[candidate.id] ?? "idle";
                 const devSignalResult = devSignalEnrichResults[candidate.id];
                 const scoreState = scoreStates[candidate.id] ?? "idle";
                 const scoreResult = scoreResults[candidate.id];
@@ -3262,7 +3641,8 @@ export const SourceCandidatesPage = ({
                 const offerState = offerStates[candidate.id] ?? "idle";
                 const offerInfo = offerInfos[candidate.id];
                 const offerFormIsOpen = Boolean(offerFormOpen[candidate.id]);
-                const offerDraft = offerDrafts[candidate.id] ?? EMPTY_OFFER_DRAFT;
+                const offerDraft =
+                  offerDrafts[candidate.id] ?? EMPTY_OFFER_DRAFT;
                 // Blast-radius calibration feedback (2026-07-19): the same
                 // reason -> contextualize -> blast-radius-preview -> Apply
                 // flow the dedicated Coresignal calibration ritual already
@@ -3281,34 +3661,36 @@ export const SourceCandidatesPage = ({
                     key={candidate.id}
                     className="flex flex-col gap-3 border rounded-md p-3 text-sm"
                   >
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="flex flex-col gap-0.5">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-medium">
-                          {candidate.full_name ?? candidate.id}
-                        </span>
-                        <span className="text-xs uppercase text-muted-foreground border rounded px-1">
-                          {candidate._source_vendor}
-                        </span>
-                        {/* Merge disclosure (2026-07-19): this card
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex flex-col gap-0.5">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-medium">
+                            {candidate.full_name ?? candidate.id}
+                          </span>
+                          <span className="text-xs uppercase text-muted-foreground border rounded px-1">
+                            {candidate._source_vendor}
+                          </span>
+                          {/* Merge disclosure (2026-07-19): this card
                             represents more than one raw search hit, merged
                             by name match -- see mergeCandidates.ts. Shown as
                             extra source tags, not hidden, since the merge is
                             a heuristic (name-only) that could occasionally
                             be wrong. */}
-                        {candidate._all_portals &&
-                          candidate._all_portals.length > 1 &&
-                          candidate._all_portals
-                            .filter((p) => p.vendor !== candidate._source_vendor)
-                            .map((p, i) => (
-                              <span
-                                key={i}
-                                className="text-xs uppercase text-muted-foreground border rounded px-1"
-                              >
-                                +{p.vendor}
-                              </span>
-                            ))}
-                        {/* Location disclosure (2026-07-19): flagged directly
+                          {candidate._all_portals &&
+                            candidate._all_portals.length > 1 &&
+                            candidate._all_portals
+                              .filter(
+                                (p) => p.vendor !== candidate._source_vendor,
+                              )
+                              .map((p, i) => (
+                                <span
+                                  key={i}
+                                  className="text-xs uppercase text-muted-foreground border rounded px-1"
+                                >
+                                  +{p.vendor}
+                                </span>
+                              ))}
+                          {/* Location disclosure (2026-07-19): flagged directly
                             after a saved Kaggle candidate turned out not to
                             be India-based -- Hugging Face and Kaggle expose
                             no location field at all, and Exa's location is
@@ -3317,74 +3699,78 @@ export const SourceCandidatesPage = ({
                             reliably location-filtered. A per-card badge, not
                             just a note in the list above, since that's
                             exactly what got missed the first time. */}
-                        {(candidate._source_vendor === "huggingface" ||
-                          candidate._source_vendor === "kaggle" ||
-                          candidate._source_vendor === "exa") &&
-                          roleBriefDetail?.location &&
-                          !/remote/i.test(roleBriefDetail.location) && (
-                            <span className="text-xs text-amber-600 dark:text-amber-400 border border-amber-600 dark:border-amber-400 rounded px-1">
-                              location unverified
-                            </span>
-                          )}
-                      </div>
-                      {candidate.job_title && (
-                        <span className="text-muted-foreground text-xs">
-                          {candidate.job_title}
-                        </span>
-                      )}
-                      {candidate.location_name && (
-                        <span className="text-muted-foreground text-xs">
-                          {candidate.location_name}
-                        </span>
-                      )}
-                      {candidate._match_evidence && (
-                        <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mt-1">
-                          Why this surfaced: {candidate._match_evidence}
+                          {(candidate._source_vendor === "huggingface" ||
+                            candidate._source_vendor === "kaggle" ||
+                            candidate._source_vendor === "exa") &&
+                            roleBriefDetail?.location &&
+                            !/remote/i.test(roleBriefDetail.location) && (
+                              <span className="text-xs text-amber-600 dark:text-amber-400 border border-amber-600 dark:border-amber-400 rounded px-1">
+                                location unverified
+                              </span>
+                            )}
                         </div>
-                      )}
-                      <div className="flex gap-2 flex-wrap">
-                        {candidate._portal_url && (
-                          <a
-                            href={candidate._portal_url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-xs underline text-muted-foreground"
-                          >
-                            View profile
-                          </a>
+                        {candidate.job_title && (
+                          <span className="text-muted-foreground text-xs">
+                            {candidate.job_title}
+                          </span>
                         )}
-                        {candidate._all_portals
-                          ?.filter((p) => p.url && p.url !== candidate._portal_url)
-                          .map((p, i) => (
+                        {candidate.location_name && (
+                          <span className="text-muted-foreground text-xs">
+                            {candidate.location_name}
+                          </span>
+                        )}
+                        {candidate._match_evidence && (
+                          <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mt-1">
+                            Why this surfaced: {candidate._match_evidence}
+                          </div>
+                        )}
+                        <div className="flex gap-2 flex-wrap">
+                          {candidate._portal_url && (
                             <a
-                              key={i}
-                              href={p.url ?? undefined}
+                              href={candidate._portal_url}
                               target="_blank"
                               rel="noreferrer"
                               className="text-xs underline text-muted-foreground"
                             >
-                              View on {p.vendor}
+                              View profile
                             </a>
-                          ))}
+                          )}
+                          {candidate._all_portals
+                            ?.filter(
+                              (p) => p.url && p.url !== candidate._portal_url,
+                            )
+                            .map((p, i) => (
+                              <a
+                                key={i}
+                                href={p.url ?? undefined}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-xs underline text-muted-foreground"
+                              >
+                                View on {p.vendor}
+                              </a>
+                            ))}
+                        </div>
                       </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={
+                          saveState !== "idle" || candidate._already_saved
+                        }
+                        onClick={() => handleAddToPipeline(candidate)}
+                      >
+                        {candidate._already_saved
+                          ? "Already saved"
+                          : saveState === "saving"
+                            ? "Saving..."
+                            : saveState === "saved"
+                              ? "Saved"
+                              : "Add to pipeline"}
+                      </Button>
                     </div>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={saveState !== "idle" || candidate._already_saved}
-                      onClick={() => handleAddToPipeline(candidate)}
-                    >
-                      {candidate._already_saved
-                        ? "Already saved"
-                        : saveState === "saving"
-                        ? "Saving..."
-                        : saveState === "saved"
-                        ? "Saved"
-                        : "Add to pipeline"}
-                    </Button>
-                  </div>
 
-                  {/* Full action cluster only becomes reachable once this
+                    {/* Full action cluster only becomes reachable once this
                       candidate has a real candidates.id -- same "an
                       unreviewed hit isn't a candidate someone decided to
                       track" gating "Add to pipeline" itself already follows
@@ -3392,67 +3778,79 @@ export const SourceCandidatesPage = ({
                       because "View full profile" calls Coresignal's Collect
                       API / PDL's Enrich API, which has no equivalent for
                       free-portal/Exa candidates. */}
-                  {candidateId && (
-                    <CandidateActionsPanel
-                      candidate={candidate}
-                      showFullProfile={false}
-                      contactState={contactState}
-                      contactResult={contactResult}
-                      onEnrichContact={() => handleEnrichContact(candidate)}
-                      devSignalState={devSignalState}
-                      devSignalResult={devSignalResult}
-                      onEnrichDevSignals={() => handleEnrichDevSignals(candidate)}
-                      fullProfileState="idle"
-                      fullProfile={undefined}
-                      fullProfileIsOpen={false}
-                      onViewFullProfile={() => {}}
-                      scoreState={scoreState}
-                      scoreResult={scoreResult}
-                      onScoreCandidate={() => handleScoreCandidate(candidate)}
-                      fitState={fitState}
-                      fitResult={fitResult}
-                      onAssessFit={() => handleAssessFit(candidate)}
-                      interviewState={interviewState}
-                      interviewResult={interviewResult}
-                      onCreateBookingLink={() => handleCreateBookingLink(candidate)}
-                      resumeState={resumeState}
-                      resumeInfo={resumeInfo}
-                      onRequestResume={() => handleRequestResume(candidate)}
-                      onCheckForResume={() => handleCheckForResume(candidate)}
-                      offerState={offerState}
-                      offerInfo={offerInfo}
-                      offerFormIsOpen={offerFormIsOpen}
-                      offerDraft={offerDraft}
-                      onToggleOfferForm={() => handleToggleOfferForm(candidate)}
-                      onOfferDraftChange={(field, value) =>
-                        handleOfferDraftChange(String(candidate.id), field, value)
+                    {candidateId && (
+                      <CandidateActionsPanel
+                        candidate={candidate}
+                        showFullProfile={false}
+                        contactState={contactState}
+                        contactResult={contactResult}
+                        onEnrichContact={() => handleEnrichContact(candidate)}
+                        devSignalState={devSignalState}
+                        devSignalResult={devSignalResult}
+                        onEnrichDevSignals={() =>
+                          handleEnrichDevSignals(candidate)
+                        }
+                        fullProfileState="idle"
+                        fullProfile={undefined}
+                        fullProfileIsOpen={false}
+                        onViewFullProfile={() => {}}
+                        scoreState={scoreState}
+                        scoreResult={scoreResult}
+                        onScoreCandidate={() => handleScoreCandidate(candidate)}
+                        fitState={fitState}
+                        fitResult={fitResult}
+                        onAssessFit={() => handleAssessFit(candidate)}
+                        interviewState={interviewState}
+                        interviewResult={interviewResult}
+                        onCreateBookingLink={() =>
+                          handleCreateBookingLink(candidate)
+                        }
+                        resumeState={resumeState}
+                        resumeInfo={resumeInfo}
+                        onRequestResume={() => handleRequestResume(candidate)}
+                        onCheckForResume={() => handleCheckForResume(candidate)}
+                        offerState={offerState}
+                        offerInfo={offerInfo}
+                        offerFormIsOpen={offerFormIsOpen}
+                        offerDraft={offerDraft}
+                        onToggleOfferForm={() =>
+                          handleToggleOfferForm(candidate)
+                        }
+                        onOfferDraftChange={(field, value) =>
+                          handleOfferDraftChange(
+                            String(candidate.id),
+                            field,
+                            value,
+                          )
+                        }
+                        onSendOffer={() => handleSendOffer(candidate)}
+                        onCheckOffer={() => handleCheckOffer(candidate)}
+                        onMarkOfferStatus={(status) =>
+                          handleMarkOfferStatus(candidate, status)
+                        }
+                      />
+                    )}
+
+                    <CalibrationFeedbackWidget
+                      reason={calibrationReasons[candidate.id] ?? ""}
+                      onReasonChange={(value) =>
+                        setCalibrationReasons((prev) => ({
+                          ...prev,
+                          [candidate.id]: value,
+                        }))
                       }
-                      onSendOffer={() => handleSendOffer(candidate)}
-                      onCheckOffer={() => handleCheckOffer(candidate)}
-                      onMarkOfferStatus={(status) =>
-                        handleMarkOfferStatus(candidate, status)
+                      submitted={calibSubmitted}
+                      entryState={calibEntryState}
+                      onSubmitJudgment={(fit) =>
+                        handleSubmitCalibrationJudgment(candidate, fit)
+                      }
+                      contextualizeState={contextualizeStates[candidate.id]}
+                      contextualizeResult={contextualizeResults[candidate.id]}
+                      applyState={applyStates[candidate.id] ?? "idle"}
+                      onApplyCriterion={() =>
+                        handleApplyCriterion(candidate.id)
                       }
                     />
-                  )}
-
-                  <CalibrationFeedbackWidget
-                    reason={calibrationReasons[candidate.id] ?? ""}
-                    onReasonChange={(value) =>
-                      setCalibrationReasons((prev) => ({
-                        ...prev,
-                        [candidate.id]: value,
-                      }))
-                    }
-                    submitted={calibSubmitted}
-                    entryState={calibEntryState}
-                    onSubmitJudgment={(fit) =>
-                      handleSubmitCalibrationJudgment(candidate, fit)
-                    }
-                    contextualizeState={contextualizeStates[candidate.id]}
-                    contextualizeResult={contextualizeResults[candidate.id]}
-                    applyState={applyStates[candidate.id] ?? "idle"}
-                    onApplyCriterion={() => handleApplyCriterion(candidate.id)}
-                  />
                   </li>
                 );
               })}
@@ -3472,9 +3870,9 @@ export const SourceCandidatesPage = ({
         <div className="flex flex-col gap-2 border rounded-lg p-4">
           <h3 className="text-sm font-medium">X-ray Assist</h3>
           <p className="text-xs text-muted-foreground">
-            Opens a search engine with a ready-made query for this role --
-            you do the actual searching and reviewing, same as manual X-ray
-            search always worked. Nothing here touches LinkedIn directly.
+            Opens a search engine with a ready-made query for this role -- you
+            do the actual searching and reviewing, same as manual X-ray search
+            always worked. Nothing here touches LinkedIn directly.
           </p>
           <div className="flex flex-wrap gap-2">
             {buildXrayQueries(roleBriefDetail).map(({ label, url }) => (
@@ -3526,8 +3924,8 @@ export const SourceCandidatesPage = ({
                     : "Calibrate first (review top 3)"}
                 </Button>
                 <span className="text-muted-foreground text-xs">
-                  Cheap gut-check before pulling more -- mark the top 3
-                  matches fit / not a fit with a reason.
+                  Cheap gut-check before pulling more -- mark the top 3 matches
+                  fit / not a fit with a reason.
                 </span>
               </div>
               <div className="flex items-end gap-3">
@@ -3543,7 +3941,10 @@ export const SourceCandidatesPage = ({
                     onChange={(e) => setSize(Number(e.target.value))}
                   />
                 </div>
-                <Button onClick={handleFetch} disabled={fetchLoading || total === 0}>
+                <Button
+                  onClick={handleFetch}
+                  disabled={fetchLoading || total === 0}
+                >
                   {fetchLoading ? "Fetching..." : "Fetch candidates"}
                 </Button>
               </div>
@@ -3629,7 +4030,9 @@ export const SourceCandidatesPage = ({
                       contextualizeState={contextualizeStates[candidate.id]}
                       contextualizeResult={contextualizeResults[candidate.id]}
                       applyState={applyStates[candidate.id] ?? "idle"}
-                      onApplyCriterion={() => handleApplyCriterion(candidate.id)}
+                      onApplyCriterion={() =>
+                        handleApplyCriterion(candidate.id)
+                      }
                     />
                   </div>
                 );
@@ -3648,7 +4051,10 @@ export const SourceCandidatesPage = ({
                     onChange={(e) => setSize(Number(e.target.value))}
                   />
                 </div>
-                <Button onClick={handleFetch} disabled={fetchLoading || total === 0}>
+                <Button
+                  onClick={handleFetch}
+                  disabled={fetchLoading || total === 0}
+                >
                   {fetchLoading ? "Fetching..." : "Fetch candidates"}
                 </Button>
               </div>
@@ -3657,7 +4063,93 @@ export const SourceCandidatesPage = ({
 
           {stage === "fetched" && candidates.length === 0 && (
             <p className="text-muted-foreground text-sm">
-              No PDL profiles matched this query.
+              No candidates matched this query.
+            </p>
+          )}
+
+          {/* Funnel bar + sort control (design discussion 2026-07-24):
+              total_matches_all is the real match count across the full
+              search index -- already returned by the backend on every
+              search response, just not previously read on this screen. No
+              vendor name shown anywhere here on purpose (the recruiter-
+              facing product should not reveal which data vendor powers a
+              given search). "Default order" applies no client-side
+              re-sort at all; "Sort by match evidence" is the one
+              AI-influenced option and is kept visually separate and
+              off by default, not just another item in the dropdown. */}
+          {stage === "fetched" && candidates.length > 0 && (
+            <div className="flex items-center justify-between gap-3 flex-wrap border rounded-md bg-muted/30 p-3">
+              <div className="flex items-center gap-3 flex-wrap">
+                <div className="text-sm text-muted-foreground">
+                  {totalMatchesAll !== null
+                    ? `${totalMatchesAll.toLocaleString()} candidates match · `
+                    : ""}
+                  <span className="text-foreground font-medium">
+                    {candidates.length} shown
+                  </span>
+                </div>
+                {/* Relax/Tighten (2026-07-24): both reveal the existing
+                    Control Panel rather than guessing which criterion to
+                    touch -- see controlPanelRef's declaration above. */}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    controlPanelRef.current?.scrollIntoView({
+                      behavior: "smooth",
+                      block: "center",
+                    });
+                    if (!criteriaImpact && !criteriaImpactLoading) {
+                      void handleRefreshCriteriaImpact();
+                    }
+                  }}
+                >
+                  Relax criteria
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    controlPanelRef.current?.scrollIntoView({
+                      behavior: "smooth",
+                      block: "center",
+                    });
+                    steeringInputRef.current?.focus();
+                  }}
+                >
+                  Tighten
+                </Button>
+              </div>
+              <div className="flex items-center gap-3 flex-wrap">
+                <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                  Sort by
+                  <select
+                    className="border border-input bg-background text-foreground rounded-md h-8 px-2 text-xs"
+                    value={sortField}
+                    onChange={(e) =>
+                      setSortField(e.target.value as CandidateSortField)
+                    }
+                  >
+                    <option value="default">Default order</option>
+                    <option value="name">Name (A&ndash;Z)</option>
+                    <option value="location">Location</option>
+                  </select>
+                </label>
+                <label className="flex items-center gap-2 text-xs bg-accent/40 rounded-md px-2 py-1.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={sortByMatchEvidence}
+                    onChange={(e) => setSortByMatchEvidence(e.target.checked)}
+                  />
+                  Sort by match evidence
+                </label>
+              </div>
+            </div>
+          )}
+          {stage === "fetched" && candidates.length > 0 && (
+            <p className="text-xs text-muted-foreground -mt-2">
+              Default order is the order these candidates were found in &mdash;
+              not a ranking Agent H applied.
             </p>
           )}
 
@@ -3692,41 +4184,52 @@ export const SourceCandidatesPage = ({
                 className="border rounded-md p-3 flex flex-col gap-3"
               >
                 <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="font-medium flex items-center gap-2">
-                      {titleCase(candidate.full_name) ?? "(name unavailable)"}
-                      {typeof candidate._match_score === "number" && (
-                        <span className="text-xs font-normal text-muted-foreground border rounded px-1.5 py-0.5">
-                          Match {Math.round(candidate._match_score * 100)}
-                        </span>
+                  <div className="flex gap-3">
+                    <div
+                      className="w-10 h-10 rounded-full bg-muted flex items-center justify-center text-sm font-medium text-muted-foreground shrink-0"
+                      aria-hidden="true"
+                    >
+                      {getInitials(candidate.full_name)}
+                    </div>
+                    <div>
+                      <div className="font-medium">
+                        {titleCase(candidate.full_name) ?? "(name unavailable)"}
+                      </div>
+                      <div className="text-sm text-muted-foreground">
+                        {titleCase(candidate.job_title)}
+                        {candidate.job_company_name
+                          ? ` at ${titleCase(candidate.job_company_name)}`
+                          : ""}
+                      </div>
+                      <div className="text-sm text-muted-foreground">
+                        {titleCase(candidate.location_name)}
+                      </div>
+                      <div className="flex items-center gap-2 mt-1">
+                        {candidate.emails && candidate.emails.length > 0 && (
+                          <span
+                            className="text-xs text-muted-foreground border rounded px-1.5 py-0.5"
+                            title="Email on file"
+                          >
+                            Email
+                          </span>
+                        )}
+                        {candidate.linkedin_url && (
+                          <a
+                            href={`https://${candidate.linkedin_url}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-xs text-blue-600 underline"
+                          >
+                            LinkedIn
+                          </a>
+                        )}
+                      </div>
+                      {candidate.skills && candidate.skills.length > 0 && (
+                        <div className="text-xs text-muted-foreground mt-1">
+                          Skills: {candidate.skills.slice(0, 10).join(", ")}
+                        </div>
                       )}
                     </div>
-                    <div className="text-sm text-muted-foreground">
-                      {titleCase(candidate.job_title)}
-                      {candidate.job_company_name
-                        ? ` at ${titleCase(candidate.job_company_name)}`
-                        : ""}
-                    </div>
-                    <div className="text-sm text-muted-foreground">
-                      {titleCase(candidate.location_name)}
-                    </div>
-                    {candidate.linkedin_url && (
-                      <div className="text-sm">
-                        <a
-                          href={`https://${candidate.linkedin_url}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-blue-600 underline"
-                        >
-                          LinkedIn
-                        </a>
-                      </div>
-                    )}
-                    {candidate.skills && candidate.skills.length > 0 && (
-                      <div className="text-xs text-muted-foreground mt-1">
-                        Skills: {candidate.skills.slice(0, 10).join(", ")}
-                      </div>
-                    )}
                   </div>
 
                   <Button
@@ -3742,6 +4245,83 @@ export const SourceCandidatesPage = ({
                         : "Add to pipeline"}
                   </Button>
                 </div>
+
+                {/* Collapsed-by-default evidence panel -- see
+                    evidenceExpanded's declaration above for why this only
+                    appears once a candidate has a real candidateId, and why
+                    it reuses handleScoreCandidate rather than a new fetch.
+                    Deliberately does NOT render scoreResult.overall_score or
+                    .verdict -- only the plain-language must_haves_check
+                    evidence, per the no-composite-score design decision. */}
+                {candidateId && (
+                  <div className="border-t pt-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const isOpen = Boolean(evidenceExpanded[candidate.id]);
+                        setEvidenceExpanded((prev) => ({
+                          ...prev,
+                          [candidate.id]: !isOpen,
+                        }));
+                        if (!isOpen && !scoreResult && scoreState === "idle") {
+                          handleScoreCandidate(candidate);
+                        }
+                      }}
+                      className="text-xs text-blue-600 flex items-center gap-1"
+                    >
+                      Why this could be a fit
+                      <span aria-hidden="true">
+                        {evidenceExpanded[candidate.id] ? "▲" : "▼"}
+                      </span>
+                    </button>
+                    {evidenceExpanded[candidate.id] && (
+                      <div className="mt-2 flex flex-col gap-1">
+                        {scoreState === "loading" && (
+                          <p className="text-xs text-muted-foreground">
+                            Gathering evidence...
+                          </p>
+                        )}
+                        {/* No result and not loading: either the first
+                            render right after clicking (about to start
+                            loading) or the request failed and reset to
+                            idle -- either way, the existing toast from
+                            handleScoreCandidate's catch block already
+                            communicates a failure, so nothing extra is
+                            shown here to avoid a misleading flash. */}
+                        {scoreResult &&
+                          scoreResult.must_haves_check.length === 0 && (
+                            <p className="text-xs text-muted-foreground">
+                              No specific evidence available for this candidate.
+                            </p>
+                          )}
+                        {scoreResult?.must_haves_check.map((m, i) => (
+                          <div
+                            key={i}
+                            className="text-xs flex items-center gap-1.5"
+                          >
+                            <span
+                              className={
+                                m.status === "found"
+                                  ? "text-green-700"
+                                  : m.status === "inferred"
+                                    ? "text-amber-700"
+                                    : "text-red-700"
+                              }
+                              aria-hidden="true"
+                            >
+                              {m.status === "found"
+                                ? "✓"
+                                : m.status === "inferred"
+                                  ? "~"
+                                  : "✗"}
+                            </span>
+                            <span>{m.requirement}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* Pipeline action cluster -- see CandidateActionsPanel's
                     header comment. Only reachable once this candidate has a
@@ -3770,7 +4350,9 @@ export const SourceCandidatesPage = ({
                     onAssessFit={() => handleAssessFit(candidate)}
                     interviewState={interviewState}
                     interviewResult={interviewResult}
-                    onCreateBookingLink={() => handleCreateBookingLink(candidate)}
+                    onCreateBookingLink={() =>
+                      handleCreateBookingLink(candidate)
+                    }
                     resumeState={resumeState}
                     resumeInfo={resumeInfo}
                     onRequestResume={() => handleRequestResume(candidate)}

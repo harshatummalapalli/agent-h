@@ -285,11 +285,11 @@ const getDataProviderWithCustomMethods = () => {
     // whatever candidates PDL finds. No dedup, matching, or scoring yet --
     // see the edge function's own header comment for the full checkpoint
     // scope.
-async sourceCandidates(
+    async sourceCandidates(
       roleBriefId: Identifier,
       size?: number,
       scrollToken?: string | null,
-    isPreview?: boolean,
+      isPreview?: boolean,
       // Taxonomy/boolean-logic test addition: optional forced vendor name
       // ("apollo" | "coresignal"), passed straight through to the edge
       // function's runDiscovery preferredProvider param -- lets the same
@@ -300,10 +300,19 @@ async sourceCandidates(
       provider?: string,
     ) {
       const { data, error } = await getSupabaseClient().functions.invoke<{
-        role_brief: { id: number; title: string | null; location: string | null };
+        role_brief: {
+          id: number;
+          title: string | null;
+          location: string | null;
+        };
         query_used: unknown;
         notes: string[];
         total: number;
+        // Real total-match-count across the full search index; null for a
+        // provider that doesn't supply it separately. Was already returned
+        // by the edge function -- just not declared in this invoke<> type
+        // until the funnel-bar UI needed to read it.
+        total_matches_all: number | null;
         candidates: Array<{
           id: string;
           full_name?: string;
@@ -321,7 +330,7 @@ async sourceCandidates(
           role_brief_id: roleBriefId,
           size,
           ...(scrollToken ? { scroll_token: scrollToken } : {}),
-        ...(isPreview ? { is_preview: true } : {}),
+          ...(isPreview ? { is_preview: true } : {}),
           ...(provider ? { provider } : {}),
         },
       });
@@ -514,12 +523,20 @@ async sourceCandidates(
     async continueSourcingForDeal(dealId: Identifier) {
       const MAX_AUTO_SAVE = 15;
       const [dealResult, freePortalResult, exaResult] = await Promise.all([
-        baseDataProvider.getOne("deals", { id: dealId }).catch((error: Error) => {
-          console.error("continueSourcingForDeal: failed to fetch deal", error);
-          return null;
-        }),
+        baseDataProvider
+          .getOne("deals", { id: dealId })
+          .catch((error: Error) => {
+            console.error(
+              "continueSourcingForDeal: failed to fetch deal",
+              error,
+            );
+            return null;
+          }),
         this.sourceFreePortalCandidates(dealId).catch((error: Error) => {
-          console.error("continueSourcingForDeal: free-portal search failed", error);
+          console.error(
+            "continueSourcingForDeal: free-portal search failed",
+            error,
+          );
           return null;
         }),
         this.sourceExaCandidates(dealId).catch((error: Error) => {
@@ -555,7 +572,9 @@ async sourceCandidates(
       // saving everything found, same as before this filter existed, rather
       // than blocking the whole command on a missing deal record.
       const relevant = deal
-        ? deduped.filter((candidate) => isCandidateRelevantToDeal(candidate, deal))
+        ? deduped.filter((candidate) =>
+            isCandidateRelevantToDeal(candidate, deal),
+          )
         : deduped;
       const filteredCount = deduped.length - relevant.length;
 
@@ -583,7 +602,11 @@ async sourceCandidates(
             company: candidate.job_company_name ?? null,
           });
         } catch (error) {
-          console.error("continueSourcingForDeal: failed to save candidate", candidate.id, error);
+          console.error(
+            "continueSourcingForDeal: failed to save candidate",
+            candidate.id,
+            error,
+          );
         }
       }
 
@@ -592,7 +615,10 @@ async sourceCandidates(
         filteredCount,
         savedCount,
         savedCandidates,
-        notes: [...(freePortalResult?.notes ?? []), ...(exaResult?.notes ?? [])],
+        notes: [
+          ...(freePortalResult?.notes ?? []),
+          ...(exaResult?.notes ?? []),
+        ],
       };
     },
 
@@ -605,7 +631,12 @@ async sourceCandidates(
     // unlike the public submit-candidate-application path.
     async uploadCandidateResume(
       dealId: Identifier,
-      details: { fullName: string; email?: string; phone?: string; resumeFile: File },
+      details: {
+        fullName: string;
+        email?: string;
+        phone?: string;
+        resumeFile: File;
+      },
     ) {
       const form = new FormData();
       form.set("deal_id", String(dealId));
@@ -628,9 +659,7 @@ async sourceCandidates(
             return {};
           }
         })();
-        throw new Error(
-          errorDetails?.error || "Failed to upload this resume",
-        );
+        throw new Error(errorDetails?.error || "Failed to upload this resume");
       }
 
       return data;
@@ -924,9 +953,9 @@ async sourceCandidates(
     // in the schema yet to lean on instead. Used by the role brief's
     // Candidates tab (DealShow.tsx) so a recruiter can trace "who did we
     // source for this JD" without leaving the role brief.
-    async getCandidatesForDeal(dealId: Identifier): Promise<
-      Array<{ dealCandidate: DealCandidate; candidate: Candidate }>
-    > {
+    async getCandidatesForDeal(
+      dealId: Identifier,
+    ): Promise<Array<{ dealCandidate: DealCandidate; candidate: Candidate }>> {
       const { data: links } = await baseDataProvider.getList<DealCandidate>(
         "deal_candidates",
         {
@@ -948,11 +977,16 @@ async sourceCandidates(
 
       return links
         .map((dealCandidate) => {
-          const candidate = candidatesById.get(String(dealCandidate.candidate_id));
+          const candidate = candidatesById.get(
+            String(dealCandidate.candidate_id),
+          );
           return candidate ? { dealCandidate, candidate } : null;
         })
-        .filter((row): row is { dealCandidate: DealCandidate; candidate: Candidate } =>
-          row !== null,
+        .filter(
+          (
+            row,
+          ): row is { dealCandidate: DealCandidate; candidate: Candidate } =>
+            row !== null,
         );
     },
     // Agent H Stage 3, task #27: manual, on-demand contact-enrichment
@@ -1077,16 +1111,14 @@ async sourceCandidates(
         full_profile_source: string | null;
         full_profile_raw: Record<string, unknown> | null;
         full_profile_updated_at: string | null;
-        work_history:
-          | Array<{
-              title: string | null;
-              company: string | null;
-              date_from: string | null;
-              date_to: string | null;
-              duration_months: number | null;
-              description: string | null;
-            }>
-          | null;
+        work_history: Array<{
+          title: string | null;
+          company: string | null;
+          date_from: string | null;
+          date_to: string | null;
+          duration_months: number | null;
+          description: string | null;
+        }> | null;
       };
     },
     // Agent H Stage 4, task #75 (Screening): manual, on-demand scoring of
@@ -1114,7 +1146,9 @@ async sourceCandidates(
           }
         })();
         throw new Error(
-          errorDetails?.message || errorDetails?.error || "Failed to score candidate",
+          errorDetails?.message ||
+            errorDetails?.error ||
+            "Failed to score candidate",
         );
       }
 
@@ -1171,12 +1205,18 @@ async sourceCandidates(
     // from public.candidate_fit_assessments (no model call, no cost) --
     // same "read what's stored, only re-run on explicit request" pattern
     // as getCandidateScore/getCandidateFullProfile.
-    async getCandidateFitAssessment(candidateId: Identifier, dealId: Identifier) {
-      const { data } = await baseDataProvider.getList("candidate_fit_assessments", {
-        pagination: { page: 1, perPage: 1 },
-        sort: { field: "created_at", order: "DESC" },
-        filter: { candidate_id: candidateId, deal_id: dealId },
-      });
+    async getCandidateFitAssessment(
+      candidateId: Identifier,
+      dealId: Identifier,
+    ) {
+      const { data } = await baseDataProvider.getList(
+        "candidate_fit_assessments",
+        {
+          pagination: { page: 1, perPage: 1 },
+          sort: { field: "created_at", order: "DESC" },
+          filter: { candidate_id: candidateId, deal_id: dealId },
+        },
+      );
       return (data as any[])?.[0] ?? null;
     },
     // Agent H Stage 5: Scheduling -- generate (or fetch, if one already
@@ -1347,7 +1387,9 @@ async sourceCandidates(
           }
         })();
         throw new Error(
-          errorDetails?.message || errorDetails?.error || "Failed to send offer",
+          errorDetails?.message ||
+            errorDetails?.error ||
+            "Failed to send offer",
         );
       }
 

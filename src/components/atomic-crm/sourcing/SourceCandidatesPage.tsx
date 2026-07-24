@@ -1196,7 +1196,7 @@ function CalibrationFeedbackWidget({
 // equivalent full-profile fetch for a GitHub/Stack Exchange/Hugging
 // Face/Kaggle/Exa candidate to enrich from).
 function CandidateActionsPanel({
-  candidate,
+  candidate: _candidate,
   showFullProfile = true,
   contactState,
   contactResult,

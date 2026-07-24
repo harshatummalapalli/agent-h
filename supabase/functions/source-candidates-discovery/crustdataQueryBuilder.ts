@@ -298,7 +298,7 @@ export function buildCrustdataFilters(
       conditions.push(condition);
       if (criteria.titles.length > 1) {
         notes.push(
-          `Searching ${criteria.titles.length} equivalent titles: ${criteria.titles.join(", ")} (decomposed into shorter literal phrases -- Crustdata's "(.)" operator only matches exact phrases, not word-split text, so long compound titles are broken into shorter fragments more likely to appear verbatim; see decomposeSearchPhrase).`,
+          `Searching ${criteria.titles.length} equivalent titles: ${criteria.titles.join(", ")} (decomposed into shorter literal phrases -- contains-match only matches exact phrases, not word-split text, so long compound titles are broken into shorter fragments more likely to appear verbatim; see decomposeSearchPhrase).`,
         );
       } else {
         notes.push(`Requiring title match: "${criteria.titles[0]}".`);
@@ -306,7 +306,7 @@ export function buildCrustdataFilters(
     }
   } else {
     notes.push(
-      "No role title on this role brief -- title not used in the Crustdata query.",
+      "No role title on this role brief -- title not used in the search query.",
     );
   }
 
@@ -320,7 +320,7 @@ export function buildCrustdataFilters(
     if (condition) {
       conditions.push(condition);
       notes.push(
-        `Requiring location "${city}" (Crustdata's basic_profile.location.city field).`,
+        `Requiring location "${city}" (matched against the city field).`,
       );
     }
   } else if (criteria.location) {
@@ -358,19 +358,19 @@ export function buildCrustdataFilters(
       if (remainingConditions.length > 0) {
         conditions.push({ op: "or", conditions: remainingConditions });
         notes.push(
-          `Requiring at least one of ${remainingConditions.length} additional skill(s): ${remaining.join(", ")} (Crustdata's filter language has no ranking-only "should" -- unlike Coresignal, this is a real OR-group filter, not just a score boost).`,
+          `Requiring at least one of ${remainingConditions.length} additional skill(s): ${remaining.join(", ")} (applied as a real OR-group filter, not a ranking-only boost).`,
         );
       }
       const dropped = rest.slice(CRUSTDATA_REMAINING_SKILLS_COUNT);
       if (dropped.length > 0) {
         notes.push(
-          `${dropped.length} lower-priority skill(s) not used as a Crustdata filter at all (${dropped.join(", ")}) -- Crustdata has no soft ranking signal to fold them into.`,
+          `${dropped.length} lower-priority skill(s) not used as a search filter at all (${dropped.join(", ")}) -- no soft ranking signal to fold them into.`,
         );
       }
     }
   } else {
     notes.push(
-      "No required skills on this role brief -- skills not used in the Crustdata query.",
+      "No required skills on this role brief -- skills not used in the search query.",
     );
   }
 
@@ -387,19 +387,19 @@ export function buildCrustdataFilters(
       if (condition) {
         conditions.push(condition);
         notes.push(
-          `Requiring seniority level "${criteria.seniority}" (matched against Crustdata's seniority_level field via fuzzy contains-match, since -- unlike PDL's/Coresignal's docs-confirmed enums -- this field's exact value vocabulary wasn't confirmed live).`,
+          `Requiring seniority level "${criteria.seniority}" (matched via fuzzy contains-match on the seniority field).`,
         );
       }
     } else {
       notes.push(
-        `Seniority "${criteria.seniority}" doesn't have a clean equivalent in Crustdata's taxonomy -- not used as a filter.`,
+        `Seniority "${criteria.seniority}" doesn't have a clean equivalent in the search taxonomy -- not used as a filter.`,
       );
     }
   } else if (criteria.seniority) {
     notes.push("Seniority not applied for this broader search pass.");
   } else {
     notes.push(
-      "No seniority on this role brief -- seniority not used in the Crustdata query.",
+      "No seniority on this role brief -- seniority not used in the search query.",
     );
   }
 
@@ -495,7 +495,7 @@ export function buildCrustdataFilters(
     if (pastTitleConditions.length > 0) {
       conditions.push({ op: "or", conditions: pastTitleConditions });
       notes.push(
-        `Requiring at least one past title matching: ${criteria.pastTitles.join(", ")} (Crustdata has no boost-only signal -- this is a real filter, not just a ranking preference).`,
+        `Requiring at least one past title matching: ${criteria.pastTitles.join(", ")} (applied as a real filter, not just a ranking preference).`,
       );
     }
   }
@@ -508,7 +508,7 @@ export function buildCrustdataFilters(
     }));
     conditions.push({ op: "or", conditions: pastCompanyConditions });
     notes.push(
-      `Requiring at least one past employer matching: ${criteria.pastCompanies.join(", ")} (Crustdata has no boost-only signal -- this is a real filter, not just a ranking preference).`,
+      `Requiring at least one past employer matching: ${criteria.pastCompanies.join(", ")} (applied as a real filter, not just a ranking preference).`,
     );
   }
 

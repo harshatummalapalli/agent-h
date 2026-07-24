@@ -271,6 +271,17 @@ const jsonResponse = (data: unknown, status = 200) =>
     headers: { "Content-Type": "application/json", ...CORS_HEADERS },
   });
 
+// Drops vendor-identifying fields before candidates leave this edge function.
+// Normalizers still attach `_source_vendor` so in-function work (and any
+// server-side save path that receives the full record) can attribute
+// sourced_via correctly -- the browser/DevTools payload must not carry it.
+function stripVendorFieldsForClient(
+  candidate: Record<string, unknown>,
+): Record<string, unknown> {
+  const { _source_vendor: _omit, ...clientCandidate } = candidate;
+  return clientCandidate;
+}
+
 async function requireAuth(req: Request): Promise<Response | null> {
   const authHeader = req.headers.get("authorization");
   if (!authHeader) {
@@ -1285,7 +1296,7 @@ async function executeQuery(
   };
 }
 
-const pdlProvider: DiscoveryProvider = {
+const _pdlProvider: DiscoveryProvider = {
   name: "pdl",
   isConfigured: () => Boolean(PDL_API_KEY),
   async search(criteria, options) {
@@ -1336,9 +1347,9 @@ const pdlProvider: DiscoveryProvider = {
 // location_name, skills, linkedin_url) -- so annotateAlreadySaved,
 // buildCandidateEmbeddingText, the calibration snapshot, and the frontend
 // card UI all keep working unmodified regardless of which vendor served a
-// given search. `_source_vendor` is added purely for the side-by-side
-// comparison test (task: "test the results on the same jobs") -- not used
-// by any existing logic.
+// given search. `_source_vendor` tags each hit for save-sourced-candidate's
+// sourced_via attribution; discoverCandidates strips it at jsonResponse time
+// (see stripVendorFieldsForClient) so vendor names never reach the browser.
 function normalizeApolloCandidate(
   raw: Record<string, unknown>,
 ): Record<string, unknown> {
@@ -1447,7 +1458,7 @@ function normalizeCoresignalCandidate(
 // seniority fallback yet -- that refinement is worth adding once we can
 // see real result counts to tune against, same "start simple, refine from
 // real results" approach already used for PDL.
-const apolloProvider: DiscoveryProvider = {
+const _apolloProvider: DiscoveryProvider = {
   name: "apollo",
   isConfigured: () => Boolean(APOLLO_API_KEY),
   async search(criteria, options) {
@@ -1932,7 +1943,7 @@ const coresignalProvider: DiscoveryProvider = {
     // exclude candidates over, only to rank them. ---
     if (criteria.industry) {
       const industryTerms = criteria.industry
-        .split(/[\/,]/)
+        .split(/[/,]/)
         .map((t) => t.trim())
         .filter((t) => t.length > 0);
       for (const term of industryTerms) {
@@ -2444,7 +2455,7 @@ const crustdataProvider: DiscoveryProvider = {
 
     if (!filters) {
       throw new DiscoveryConfigError(
-        "This role brief doesn't have enough information (title or location) to search Crustdata yet.",
+        "This role brief doesn't have enough information (title or location) to search yet.",
       );
     }
 
@@ -2495,7 +2506,7 @@ const crustdataProvider: DiscoveryProvider = {
 
     if (totalCount !== null) {
       notes.push(
-        `${totalCount} total candidate(s) match this query across Crustdata's full index.`,
+        `${totalCount} total candidate(s) match this query across the full index.`,
       );
     }
 
@@ -3194,7 +3205,7 @@ async function handleCriteriaImpact(
 // parsed body object and authHeader directly, same as the two new
 // calibration handlers above it.
 const discoverCandidates = async (body: any, authHeader: string) => {
-  let roleBriefId: number | undefined;
+  const roleBriefId = body?.role_brief_id;
   let size = DEFAULT_SIZE;
   let scrollToken: string | undefined;
   let isPreview = false;
@@ -3204,7 +3215,6 @@ const discoverCandidates = async (body: any, authHeader: string) => {
   // frontend flow, which just gets whichever configured provider comes
   // first in priority order.
   let preferredProvider: string | undefined;
-  roleBriefId = body?.role_brief_id;
   if (typeof body?.size === "number") {
     size = Math.max(1, Math.min(MAX_SIZE, Math.floor(body.size)));
   }
@@ -3327,7 +3337,7 @@ const discoverCandidates = async (body: any, authHeader: string) => {
   const notes = [...result.notes];
   if (providerName !== DISCOVERY_PROVIDERS[0]?.name) {
     notes.push(
-      `Primary discovery vendor was unavailable -- results came from "${providerName}" instead.`,
+      "Primary search source was unavailable -- results came from a backup source instead.",
     );
   }
 
@@ -3403,15 +3413,11 @@ const discoverCandidates = async (body: any, authHeader: string) => {
       // real total). Distinct from `total`, which is just "how many
       // candidates are in this response".
       total_matches_all: result.totalMatches ?? null,
-      candidates,
+      candidates: candidates.map(stripVendorFieldsForClient),
       // Null/absent once the provider has nothing further to page into --
       // the frontend uses this to know whether "Search wider" should still
       // be offered.
       scroll_token: result.scrollToken,
-      // New: which vendor actually served this search. Not used by the
-      // frontend today, but cheap to expose now for when a second provider
-      // exists and this becomes worth showing or debugging.
-      discovery_provider: providerName,
     });
   } catch (error) {
     console.error("source-candidates-discovery failed", error);

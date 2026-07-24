@@ -26,7 +26,6 @@ import {
   useDataProvider,
   useGetList,
   useRecordContext,
-  useTranslate,
 } from "ra-core";
 import { useParams } from "react-router";
 import { Badge } from "@/components/ui/badge";
@@ -125,7 +124,6 @@ const RoleWorkspaceHeader = ({
   sourcingOpen: boolean;
   onToggleSourcing: () => void;
 }) => {
-  const translate = useTranslate();
   const { dealStages } = useConfigurationContext();
   const record = useRecordContext<Deal>();
   const [linkCopied, setLinkCopied] = useState(false);
@@ -160,7 +158,8 @@ const RoleWorkspaceHeader = ({
           {record.expected_closing_date &&
             isValid(new Date(record.expected_closing_date)) && (
               <span>
-                Target close: {formatISODateString(record.expected_closing_date)}
+                Target close:{" "}
+                {formatISODateString(record.expected_closing_date)}
               </span>
             )}
         </div>
@@ -175,7 +174,11 @@ const RoleWorkspaceHeader = ({
           ✨ Sourcing
         </Button>
         {record.public_application_token && (
-          <Button variant="outline" size="sm" onClick={handleCopyApplicationLink}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleCopyApplicationLink}
+          >
             {linkCopied ? "Link copied!" : "Copy application link"}
           </Button>
         )}
@@ -225,7 +228,9 @@ const ManualResumeUploadPanel = ({ dealId }: { dealId: string }) => {
       setPhone("");
       setResumeFile(null);
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Failed to upload this resume");
+      setErrorMessage(
+        error instanceof Error ? error.message : "Failed to upload this resume",
+      );
       setState("error");
     }
   };
@@ -250,11 +255,20 @@ const ManualResumeUploadPanel = ({ dealId }: { dealId: string }) => {
           </div>
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="manual-email">Email (optional)</Label>
-            <Input id="manual-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+            <Input
+              id="manual-email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+            />
           </div>
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="manual-phone">Phone (optional)</Label>
-            <Input id="manual-phone" value={phone} onChange={(e) => setPhone(e.target.value)} />
+            <Input
+              id="manual-phone"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+            />
           </div>
         </div>
         <div className="flex flex-col gap-1.5">
@@ -266,9 +280,13 @@ const ManualResumeUploadPanel = ({ dealId }: { dealId: string }) => {
             onChange={(e) => setResumeFile(e.target.files?.[0] ?? null)}
           />
         </div>
-        {errorMessage && <p className="text-sm text-destructive">{errorMessage}</p>}
+        {errorMessage && (
+          <p className="text-sm text-destructive">{errorMessage}</p>
+        )}
         {state === "done" && (
-          <p className="text-sm text-muted-foreground">Candidate added to this role's pipeline.</p>
+          <p className="text-sm text-muted-foreground">
+            Candidate added to this role's pipeline.
+          </p>
         )}
         <div>
           <Button type="submit" size="sm" disabled={state === "uploading"}>
@@ -318,12 +336,19 @@ const BulkResumeUploadPanel = ({ dealId }: { dealId: string }) => {
     setErrorMessage(null);
     setResults(null);
     try {
-      const response = await dataProvider.bulkUploadCandidateResumes(dealId, files);
+      const response = await dataProvider.bulkUploadCandidateResumes(
+        dealId,
+        files,
+      );
       setResults(response.results);
       setState("done");
       setFiles([]);
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Failed to upload these resumes");
+      setErrorMessage(
+        error instanceof Error
+          ? error.message
+          : "Failed to upload these resumes",
+      );
       setState("error");
     }
   };
@@ -338,7 +363,9 @@ const BulkResumeUploadPanel = ({ dealId }: { dealId: string }) => {
       </p>
       <form onSubmit={handleSubmit} className="flex flex-col gap-3">
         <div className="flex flex-col gap-1.5">
-          <Label htmlFor="bulk-resumes">Resume files (PDF, Word, or RTF -- up to 25 at once)</Label>
+          <Label htmlFor="bulk-resumes">
+            Resume files (PDF, Word, or RTF -- up to 25 at once)
+          </Label>
           <Input
             id="bulk-resumes"
             type="file"
@@ -347,10 +374,14 @@ const BulkResumeUploadPanel = ({ dealId }: { dealId: string }) => {
             onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
           />
           {files.length > 0 && (
-            <p className="text-xs text-muted-foreground">{files.length} file(s) selected</p>
+            <p className="text-xs text-muted-foreground">
+              {files.length} file(s) selected
+            </p>
           )}
         </div>
-        {errorMessage && <p className="text-sm text-destructive">{errorMessage}</p>}
+        {errorMessage && (
+          <p className="text-sm text-destructive">{errorMessage}</p>
+        )}
         <div>
           <Button type="submit" size="sm" disabled={state === "uploading"}>
             {state === "uploading"
@@ -363,7 +394,8 @@ const BulkResumeUploadPanel = ({ dealId }: { dealId: string }) => {
       {results && (
         <div className="flex flex-col gap-2 pt-2 border-t">
           <p className="text-xs text-muted-foreground">
-            {results.filter((r) => r.status !== "failed").length} of {results.length} added to this role's pipeline
+            {results.filter((r) => r.status !== "failed").length} of{" "}
+            {results.length} added to this role's pipeline
           </p>
           <ul className="flex flex-col gap-1.5">
             {results.map((r, i) => (
@@ -375,11 +407,23 @@ const BulkResumeUploadPanel = ({ dealId }: { dealId: string }) => {
                       : "text-muted-foreground"
                   }
                 >
-                  {r.status === "failed" ? "Failed" : r.status === "created" ? "Added" : "Already known"}
+                  {r.status === "failed"
+                    ? "Failed"
+                    : r.status === "created"
+                      ? "Added"
+                      : "Already known"}
                 </span>
-                <span className="font-medium">{r.parsed_name ?? r.filename}</span>
-                {r.parsed_email && <span className="text-muted-foreground">{r.parsed_email}</span>}
-                {r.error && <span className="text-destructive">-- {r.error}</span>}
+                <span className="font-medium">
+                  {r.parsed_name ?? r.filename}
+                </span>
+                {r.parsed_email && (
+                  <span className="text-muted-foreground">
+                    {r.parsed_email}
+                  </span>
+                )}
+                {r.error && (
+                  <span className="text-destructive">-- {r.error}</span>
+                )}
               </li>
             ))}
           </ul>

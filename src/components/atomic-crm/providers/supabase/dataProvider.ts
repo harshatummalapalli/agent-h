@@ -1154,6 +1154,49 @@ const getDataProviderWithCustomMethods = () => {
 
       return data;
     },
+    // On-demand must-haves evidence for a not-yet-saved discovery hit.
+    // Calls score-candidate in evidence_only mode (same must_haves_check
+    // prompt, no candidate_scores row written).
+    async scoreDiscoveryEvidence(
+      dealId: Identifier,
+      discoveryCandidate: Record<string, unknown>,
+    ) {
+      const { data, error } = await getSupabaseClient().functions.invoke(
+        "score-candidate",
+        {
+          method: "POST",
+          body: {
+            deal_id: Number(dealId),
+            evidence_only: true,
+            discovery_candidate: discoveryCandidate,
+          },
+        },
+      );
+
+      if (!data || error) {
+        console.error("scoreDiscoveryEvidence.error", error);
+        const errorDetails = await (async () => {
+          try {
+            return (await error?.context?.json()) ?? {};
+          } catch {
+            return {};
+          }
+        })();
+        throw new Error(
+          errorDetails?.message ||
+            errorDetails?.error ||
+            "Failed to load match evidence",
+        );
+      }
+
+      return data as {
+        must_haves_check: Array<{
+          requirement: string;
+          status: "found" | "inferred" | "absent";
+          confidence: "high" | "medium" | "low";
+        }>;
+      };
+    },
     // Companion read: pulls an already-computed score straight from
     // public.candidate_scores (no vendor/model call, no cost) -- same
     // "read what's stored, only re-run on explicit request" pattern as

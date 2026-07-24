@@ -1810,17 +1810,17 @@ export const SourceCandidatesPage = ({
     {},
   );
   // Card redesign (2026-07-24): collapsed-by-default "Why this could be a
-  // fit" evidence section, keyed by candidate id. Reuses the existing
-  // score-candidate machinery (scoreStates/scoreResults/handleScoreCandidate)
-  // rather than adding a new fetch path -- expanding this for the first
-  // time on a given candidate triggers the same call "Score candidate"
-  // already made, it's just surfaced earlier/differently. Only rendered
-  // for candidates with a real candidateId (i.e. already added to
-  // pipeline) since scoring has always required a saved candidate row --
-  // a not-yet-saved search hit has no evidence data to show, so no
-  // evidence trigger is rendered for it rather than showing a broken one.
+  // fit" evidence section, keyed by candidate id. Saved candidates reuse
+  // handleScoreCandidate; not-yet-saved hits call scoreDiscoveryEvidence
+  // on expand only (no DB row, same must_haves_check prompt as scoring).
   const [evidenceExpanded, setEvidenceExpanded] = useState<
     Record<string, boolean>
+  >({});
+  const [evidenceStates, setEvidenceStates] = useState<
+    Record<string, EnrichState>
+  >({});
+  const [evidenceResults, setEvidenceResults] = useState<
+    Record<string, MustHaveCheck[]>
   >({});
   const [scoreResults, setScoreResults] = useState<Record<string, ScoreResult>>(
     {},
@@ -2578,6 +2578,27 @@ export const SourceCandidatesPage = ({
     } catch (error: any) {
       setScoreStates((prev) => ({ ...prev, [candidate.id]: "idle" }));
       notify(error?.message || "Failed to score candidate", {
+        type: "error",
+      });
+    }
+  };
+
+  const handleDiscoveryEvidence = async (candidate: PdlCandidate) => {
+    if (!selectedId) return;
+    setEvidenceStates((prev) => ({ ...prev, [candidate.id]: "loading" }));
+    try {
+      const result = await dataProvider.scoreDiscoveryEvidence(
+        Number(selectedId),
+        candidate as Record<string, unknown>,
+      );
+      setEvidenceResults((prev) => ({
+        ...prev,
+        [candidate.id]: result.must_haves_check ?? [],
+      }));
+      setEvidenceStates((prev) => ({ ...prev, [candidate.id]: "done" }));
+    } catch (error: any) {
+      setEvidenceStates((prev) => ({ ...prev, [candidate.id]: "idle" }));
+      notify(error?.message || "Failed to load match evidence", {
         type: "error",
       });
     }
@@ -4168,6 +4189,8 @@ export const SourceCandidatesPage = ({
             );
             const scoreState = scoreStates[candidate.id] ?? "idle";
             const scoreResult = scoreResults[candidate.id];
+            const evidenceState = evidenceStates[candidate.id] ?? "idle";
+            const evidenceResult = evidenceResults[candidate.id];
             const fitState = fitStates[candidate.id] ?? "idle";
             const fitResult = fitResults[candidate.id];
             const interviewState = interviewStates[candidate.id] ?? "idle";
@@ -4246,14 +4269,11 @@ export const SourceCandidatesPage = ({
                   </Button>
                 </div>
 
-                {/* Collapsed-by-default evidence panel -- see
-                    evidenceExpanded's declaration above for why this only
-                    appears once a candidate has a real candidateId, and why
-                    it reuses handleScoreCandidate rather than a new fetch.
-                    Deliberately does NOT render scoreResult.overall_score or
-                    .verdict -- only the plain-language must_haves_check
-                    evidence, per the no-composite-score design decision. */}
-                {candidateId && (
+                {/* Collapsed-by-default evidence panel — on-demand only when
+                    expanded. Saved candidates reuse score-candidate; unsaved
+                    discovery hits use evidence_only (must_haves_check only,
+                    no candidate_scores row). Never shows overall_score. */}
+                {selectedId && (
                   <div className="border-t pt-2">
                     <button
                       type="button"
@@ -4263,8 +4283,17 @@ export const SourceCandidatesPage = ({
                           ...prev,
                           [candidate.id]: !isOpen,
                         }));
-                        if (!isOpen && !scoreResult && scoreState === "idle") {
-                          handleScoreCandidate(candidate);
+                        if (!isOpen) {
+                          if (candidateId) {
+                            if (!scoreResult && scoreState === "idle") {
+                              handleScoreCandidate(candidate);
+                            }
+                          } else if (
+                            !evidenceResult &&
+                            evidenceState === "idle"
+                          ) {
+                            handleDiscoveryEvidence(candidate);
+                          }
                         }
                       }}
                       className="text-xs text-blue-600 flex items-center gap-1"
@@ -4276,48 +4305,57 @@ export const SourceCandidatesPage = ({
                     </button>
                     {evidenceExpanded[candidate.id] && (
                       <div className="mt-2 flex flex-col gap-1">
-                        {scoreState === "loading" && (
+                        {(candidateId
+                          ? scoreState === "loading"
+                          : evidenceState === "loading") && (
                           <p className="text-xs text-muted-foreground">
                             Gathering evidence...
                           </p>
                         )}
-                        {/* No result and not loading: either the first
-                            render right after clicking (about to start
-                            loading) or the request failed and reset to
-                            idle -- either way, the existing toast from
-                            handleScoreCandidate's catch block already
-                            communicates a failure, so nothing extra is
-                            shown here to avoid a misleading flash. */}
-                        {scoreResult &&
-                          scoreResult.must_haves_check.length === 0 && (
-                            <p className="text-xs text-muted-foreground">
-                              No specific evidence available for this candidate.
-                            </p>
-                          )}
-                        {scoreResult?.must_haves_check.map((m, i) => (
-                          <div
-                            key={i}
-                            className="text-xs flex items-center gap-1.5"
-                          >
-                            <span
-                              className={
-                                m.status === "found"
-                                  ? "text-green-700"
-                                  : m.status === "inferred"
-                                    ? "text-amber-700"
-                                    : "text-red-700"
-                              }
-                              aria-hidden="true"
+                        {(() => {
+                          const checks = candidateId
+                            ? scoreResult?.must_haves_check
+                            : evidenceResult;
+                          if (
+                            (candidateId ? scoreState : evidenceState) ===
+                              "loading" ||
+                            !checks
+                          ) {
+                            return null;
+                          }
+                          if (checks.length === 0) {
+                            return (
+                              <p className="text-xs text-muted-foreground">
+                                No specific evidence available for this
+                                candidate.
+                              </p>
+                            );
+                          }
+                          return checks.map((m, i) => (
+                            <div
+                              key={i}
+                              className="text-xs flex items-center gap-1.5"
                             >
-                              {m.status === "found"
-                                ? "✓"
-                                : m.status === "inferred"
-                                  ? "~"
-                                  : "✗"}
-                            </span>
-                            <span>{m.requirement}</span>
-                          </div>
-                        ))}
+                              <span
+                                className={
+                                  m.status === "found"
+                                    ? "text-green-700"
+                                    : m.status === "inferred"
+                                      ? "text-amber-700"
+                                      : "text-red-700"
+                                }
+                                aria-hidden="true"
+                              >
+                                {m.status === "found"
+                                  ? "✓"
+                                  : m.status === "inferred"
+                                    ? "~"
+                                    : "✗"}
+                              </span>
+                              <span>{m.requirement}</span>
+                            </div>
+                          ));
+                        })()}
                       </div>
                     )}
                   </div>

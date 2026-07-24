@@ -102,6 +102,7 @@
 // row) -- it does not affect overall_score/verdict/recommended_action.
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import * as jose from "jsr:@panva/jose@6";
+import { buildScoringTextFromDiscovery } from "./discoveryEvidence.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY");
@@ -132,7 +133,8 @@ const jsonResponse = (data: unknown, status = 200) =>
 
 async function requireAuth(req: Request): Promise<Response | null> {
   const authHeader = req.headers.get("authorization");
-  if (!authHeader) return jsonResponse({ error: "Missing authorization header" }, 401);
+  if (!authHeader)
+    return jsonResponse({ error: "Missing authorization header" }, 401);
   const [bearer, token] = authHeader.split(" ");
   if (bearer !== "Bearer" || !token) {
     return jsonResponse({ error: "Invalid authorization header" }, 401);
@@ -143,14 +145,20 @@ async function requireAuth(req: Request): Promise<Response | null> {
     return null;
   }
   try {
-    await jose.jwtVerify(token, SUPABASE_JWT_KEYS, { issuer: SUPABASE_JWT_ISSUER });
+    await jose.jwtVerify(token, SUPABASE_JWT_KEYS, {
+      issuer: SUPABASE_JWT_ISSUER,
+    });
     return null;
   } catch {
     return jsonResponse({ error: "Unauthorized" }, 401);
   }
 }
 
-async function restFetch(path: string, authHeader: string, init: RequestInit = {}) {
+async function restFetch(
+  path: string,
+  authHeader: string,
+  init: RequestInit = {},
+) {
   return fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
     ...init,
     headers: {
@@ -164,7 +172,13 @@ async function restFetch(path: string, authHeader: string, init: RequestInit = {
 
 // --- Ported verbatim from Kharta's recompute-from-snapshot.ts ---
 type DimensionKey = "skills" | "trajectory" | "domain" | "seniority" | "tenure";
-const DIMENSION_KEYS: DimensionKey[] = ["skills", "trajectory", "domain", "seniority", "tenure"];
+const DIMENSION_KEYS: DimensionKey[] = [
+  "skills",
+  "trajectory",
+  "domain",
+  "seniority",
+  "tenure",
+];
 
 type RoleBriefWeights = {
   weight_skills: number;
@@ -178,7 +192,10 @@ function clampWeight(n: number): number {
   return Math.max(1, Math.min(10, Math.round(n)));
 }
 
-function readDimensionScore(dims: Record<string, { score: number }>, key: DimensionKey): number {
+function readDimensionScore(
+  dims: Record<string, { score: number }>,
+  key: DimensionKey,
+): number {
   const raw = dims[key]?.score;
   if (typeof raw !== "number" || Number.isNaN(raw)) return 0;
   return Math.max(0, Math.min(100, Math.round(raw)));
@@ -197,12 +214,20 @@ function recomputeOverallFromSnapshot(
   };
   const total = DIMENSION_KEYS.reduce((s, k) => s + w[k], 0);
   if (total <= 0) return 0;
-  const weightedSum = DIMENSION_KEYS.reduce((s, k) => s + readDimensionScore(dims, k) * w[k], 0);
+  const weightedSum = DIMENSION_KEYS.reduce(
+    (s, k) => s + readDimensionScore(dims, k) * w[k],
+    0,
+  );
   return Math.max(0, Math.min(100, Math.round(weightedSum / total)));
 }
 
 // --- Ported verbatim from Kharta's recruiter-card.ts ---
-type FitVerdict = "EXCEPTIONAL MATCH" | "STRONG MATCH" | "POTENTIAL MATCH" | "WEAK MATCH" | "NOT A MATCH";
+type FitVerdict =
+  | "EXCEPTIONAL MATCH"
+  | "STRONG MATCH"
+  | "POTENTIAL MATCH"
+  | "WEAK MATCH"
+  | "NOT A MATCH";
 
 function scoreToVerdict(score: number): FitVerdict {
   if (score >= 85) return "EXCEPTIONAL MATCH";
@@ -216,17 +241,27 @@ function scoreToVerdict(score: number): FitVerdict {
 const PENALTY_PER_MISSING = 15;
 const MIN_SCORE_FLOOR = 20;
 
-type MustHaveCheck = { requirement: string; status: "found" | "inferred" | "absent"; confidence: "high" | "medium" | "low" };
+type MustHaveCheck = {
+  requirement: string;
+  status: "found" | "inferred" | "absent";
+  confidence: "high" | "medium" | "low";
+};
 
 function applyDealBreakerCap(overallScore: number, mustHaves: MustHaveCheck[]) {
-  const missing = mustHaves.filter((m) => m.status === "absent").map((m) => m.requirement);
+  const missing = mustHaves
+    .filter((m) => m.status === "absent")
+    .map((m) => m.requirement);
   if (missing.length === 0) {
     return { score: overallScore, warning: null as string | null, missing };
   }
   const pointsDeducted = missing.length * PENALTY_PER_MISSING;
   const adjusted = Math.max(MIN_SCORE_FLOOR, overallScore - pointsDeducted);
   const label = missing.length === 1 ? "must-have" : "must-haves";
-  return { score: adjusted, warning: `${missing.length} ${label} not found -- score adjusted`, missing };
+  return {
+    score: adjusted,
+    warning: `${missing.length} ${label} not found -- score adjusted`,
+    missing,
+  };
 }
 
 // --- Ported and adapted from Kharta's recommended-action.ts (AttributedFlag
@@ -243,36 +278,74 @@ function deriveRecommendedAction(params: {
   mustHaves: MustHaveCheck[];
   dealBreakerWarning: string | null;
 }): { action: RecommendedAction; reasons: string[]; risks: string[] } {
-  const { score, verdict, confidence, whatStandsOut, worthExploring, mustHaves, dealBreakerWarning } = params;
-  const absent = mustHaves.filter((m) => m.status === "absent" && (m.confidence === "high" || m.confidence === "medium"));
+  const {
+    score,
+    verdict,
+    confidence,
+    whatStandsOut,
+    worthExploring,
+    mustHaves,
+    dealBreakerWarning,
+  } = params;
+  const absent = mustHaves.filter(
+    (m) =>
+      m.status === "absent" &&
+      (m.confidence === "high" || m.confidence === "medium"),
+  );
   const inferred = mustHaves.filter((m) => m.status === "inferred");
 
   const reasons = whatStandsOut.slice(0, 3);
   const risks: string[] = [...worthExploring];
   for (const a of absent) risks.push(`Missing must-have: ${a.requirement}`);
-  for (const i of inferred.slice(0, 2)) risks.push(`Must-have inferred only: ${i.requirement}`);
+  for (const i of inferred.slice(0, 2))
+    risks.push(`Must-have inferred only: ${i.requirement}`);
   if (dealBreakerWarning) risks.push(dealBreakerWarning);
 
-  const isWeak = verdict === "WEAK MATCH" || verdict === "NOT A MATCH" || score < 55;
-  const hasCriticalGaps = absent.length >= 2 || (absent.length >= 1 && score < 70);
+  const isWeak =
+    verdict === "WEAK MATCH" || verdict === "NOT A MATCH" || score < 55;
+  const hasCriticalGaps =
+    absent.length >= 2 || (absent.length >= 1 && score < 70);
   if (isWeak || hasCriticalGaps) {
-    return { action: "reject", reasons: reasons.slice(0, 3), risks: risks.slice(0, 4) };
+    return {
+      action: "reject",
+      reasons: reasons.slice(0, 3),
+      risks: risks.slice(0, 4),
+    };
   }
 
-  const isStrong = verdict === "EXCEPTIONAL MATCH" || verdict === "STRONG MATCH" || score >= 75;
+  const isStrong =
+    verdict === "EXCEPTIONAL MATCH" ||
+    verdict === "STRONG MATCH" ||
+    score >= 75;
   const lowConfidence = confidence === "low";
   const hasGaps = absent.length > 0 || inferred.length > 0 || risks.length > 0;
 
   if (isStrong && !lowConfidence && absent.length === 0) {
-    return { action: "interview", reasons: reasons.slice(0, 3), risks: risks.slice(0, 3) };
+    return {
+      action: "interview",
+      reasons: reasons.slice(0, 3),
+      risks: risks.slice(0, 3),
+    };
   }
   if (isStrong && hasGaps) {
-    return { action: "hold", reasons: reasons.slice(0, 3), risks: risks.slice(0, 4) };
+    return {
+      action: "hold",
+      reasons: reasons.slice(0, 3),
+      risks: risks.slice(0, 4),
+    };
   }
   if (verdict === "POTENTIAL MATCH" || (score >= 55 && score < 75)) {
-    return { action: "hold", reasons: reasons.slice(0, 3), risks: risks.slice(0, 4) };
+    return {
+      action: "hold",
+      reasons: reasons.slice(0, 3),
+      risks: risks.slice(0, 4),
+    };
   }
-  return { action: "reject", reasons: reasons.slice(0, 3), risks: risks.slice(0, 4) };
+  return {
+    action: "reject",
+    reasons: reasons.slice(0, 3),
+    risks: risks.slice(0, 4),
+  };
 }
 
 // --- Role brief mapping: Agent H's deals row -> Kharta-style role brief ---
@@ -298,7 +371,10 @@ function buildRoleBriefLite(deal: Record<string, any>) {
   return {
     title: deal.name ?? "Role",
     deal_breakers: (deal.must_have_keywords ?? []) as string[],
-    core_signals: ((deal.required_skills ?? []) as string[]).map((skill) => ({ skill, equivalents: [] as string[] })),
+    core_signals: ((deal.required_skills ?? []) as string[]).map((skill) => ({
+      skill,
+      equivalents: [] as string[],
+    })),
     preferred_signals: (deal.nice_to_have_keywords ?? []) as string[],
     preference_tiers: (deal.preference_tiers ?? []) as PreferenceTier[],
     seniority: deal.seniority ?? null,
@@ -307,7 +383,8 @@ function buildRoleBriefLite(deal: Record<string, any>) {
     employment_type: deal.employment_type ?? null,
     years_experience_min: deal.years_experience_min ?? null,
     years_experience_max: deal.years_experience_max ?? null,
-    jd_text: typeof deal.jd_text === "string" ? deal.jd_text.slice(0, 4000) : null,
+    jd_text:
+      typeof deal.jd_text === "string" ? deal.jd_text.slice(0, 4000) : null,
     weight_skills: 5,
     weight_trajectory: 5,
     weight_domain: 5,
@@ -323,21 +400,33 @@ function buildRoleBriefLite(deal: Record<string, any>) {
 // path in this app.
 const RESUME_MAX_CHARS = 12000; // generous but bounded, same spirit as buildScoringTextFromProfile's per-field caps below
 
-async function fetchResumeBytes(storagePath: string): Promise<ArrayBuffer | null> {
+async function fetchResumeBytes(
+  storagePath: string,
+): Promise<ArrayBuffer | null> {
   try {
-    const fileRes = await fetch(`${SUPABASE_URL}/storage/v1/object/resumes/${storagePath}`, {
-      headers: {
-        apikey: SUPABASE_SERVICE_ROLE_KEY ?? "",
-        Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+    const fileRes = await fetch(
+      `${SUPABASE_URL}/storage/v1/object/resumes/${storagePath}`,
+      {
+        headers: {
+          apikey: SUPABASE_SERVICE_ROLE_KEY ?? "",
+          Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+        },
       },
-    });
+    );
     if (!fileRes.ok) {
-      console.error("score-candidate: failed to download resume", fileRes.status, await fileRes.text());
+      console.error(
+        "score-candidate: failed to download resume",
+        fileRes.status,
+        await fileRes.text(),
+      );
       return null;
     }
     return await fileRes.arrayBuffer();
   } catch (error) {
-    console.error("score-candidate: resume download threw", error instanceof Error ? error.message : error);
+    console.error(
+      "score-candidate: resume download threw",
+      error instanceof Error ? error.message : error,
+    );
     return null;
   }
 }
@@ -362,7 +451,10 @@ function extractRtfText(buffer: ArrayBuffer): string | null {
   return text || null;
 }
 
-async function extractResumeText(storagePath: string, filename: string | null): Promise<string | null> {
+async function extractResumeText(
+  storagePath: string,
+  filename: string | null,
+): Promise<string | null> {
   const buffer = await fetchResumeBytes(storagePath);
   if (!buffer) return null;
 
@@ -384,7 +476,10 @@ async function extractResumeText(storagePath: string, filename: string | null): 
       // Legacy pre-2007 binary .doc has no lightweight Deno-compatible text
       // extractor (mammoth is docx-only, unpdf is PDF-only) -- honestly
       // unsupported rather than guessed at with the wrong parser.
-      console.error("score-candidate: legacy .doc resume text extraction not supported", { storagePath });
+      console.error(
+        "score-candidate: legacy .doc resume text extraction not supported",
+        { storagePath },
+      );
       return null;
     }
     // Default to PDF -- the only other format the upload paths accept
@@ -395,7 +490,11 @@ async function extractResumeText(storagePath: string, filename: string | null): 
     const joined = Array.isArray(text) ? text.join("\n") : text;
     return joined?.trim() || null;
   } catch (error) {
-    console.error("score-candidate: resume text extraction threw", error instanceof Error ? error.message : error, { storagePath });
+    console.error(
+      "score-candidate: resume text extraction threw",
+      error instanceof Error ? error.message : error,
+      { storagePath },
+    );
     return null;
   }
 }
@@ -411,13 +510,20 @@ type ScoringTextResult = {
 // profile (long paragraph per role) was the direct cause of the output
 // truncation found during live testing, since more detail in gives the
 // model more to write rationale about on the way out.
-function buildScoringTextFromProfile(candidate: Record<string, any>): { text: string; source: "full_profile" | "plain_fields" } {
+function buildScoringTextFromProfile(candidate: Record<string, any>): {
+  text: string;
+  source: "full_profile" | "plain_fields";
+} {
   const raw = candidate.full_profile_raw as Record<string, any> | null;
-  const workHistory = candidate.work_history as Array<Record<string, any>> | null;
+  const workHistory = candidate.work_history as Array<
+    Record<string, any>
+  > | null;
 
   if (candidate.full_profile_status === "enriched" && (raw || workHistory)) {
     const lines: string[] = [];
-    const name = [candidate.first_name, candidate.last_name].filter(Boolean).join(" ");
+    const name = [candidate.first_name, candidate.last_name]
+      .filter(Boolean)
+      .join(" ");
     if (name) lines.push(name);
     if (raw?.headline) lines.push(String(raw.headline));
     if (raw?.summary) lines.push(String(raw.summary).slice(0, 400));
@@ -426,8 +532,11 @@ function buildScoringTextFromProfile(candidate: Record<string, any>): { text: st
       lines.push("\nEXPERIENCE:");
       for (const job of workHistory.slice(0, 8)) {
         const range = [job.date_from, job.date_to].filter(Boolean).join(" - ");
-        lines.push(`- ${job.title ?? "(title not on file)"} at ${job.company ?? "?"} ${range ? `(${range})` : ""}`);
-        if (job.description) lines.push(`  ${String(job.description).slice(0, 350)}`);
+        lines.push(
+          `- ${job.title ?? "(title not on file)"} at ${job.company ?? "?"} ${range ? `(${range})` : ""}`,
+        );
+        if (job.description)
+          lines.push(`  ${String(job.description).slice(0, 350)}`);
       }
     }
 
@@ -435,16 +544,27 @@ function buildScoringTextFromProfile(candidate: Record<string, any>): { text: st
     if (education.length > 0) {
       lines.push("\nEDUCATION:");
       for (const edu of education.slice(0, 5)) {
-        lines.push(`- ${edu.institution_name ?? "?"}${edu.degree ? ` -- ${edu.degree}` : ""}`);
+        lines.push(
+          `- ${edu.institution_name ?? "?"}${edu.degree ? ` -- ${edu.degree}` : ""}`,
+        );
       }
     }
 
-    const skills = Array.isArray(raw?.inferred_skills) ? raw!.inferred_skills : [];
-    if (skills.length > 0) lines.push(`\nSKILLS: ${skills.slice(0, 40).join(", ")}`);
+    const skills = Array.isArray(raw?.inferred_skills)
+      ? raw!.inferred_skills
+      : [];
+    if (skills.length > 0)
+      lines.push(`\nSKILLS: ${skills.slice(0, 40).join(", ")}`);
 
     const certs = Array.isArray(raw?.certifications) ? raw!.certifications : [];
     if (certs.length > 0) {
-      lines.push(`\nCERTIFICATIONS: ${certs.slice(0, 8).map((c: any) => c.title).filter(Boolean).join(", ")}`);
+      lines.push(
+        `\nCERTIFICATIONS: ${certs
+          .slice(0, 8)
+          .map((c: any) => c.title)
+          .filter(Boolean)
+          .join(", ")}`,
+      );
     }
 
     return { text: lines.join("\n"), source: "full_profile" };
@@ -452,7 +572,9 @@ function buildScoringTextFromProfile(candidate: Record<string, any>): { text: st
 
   // Thin fallback -- whatever plain fields discovery ever captured. Much
   // lower-confidence input; scored_text_source on the saved row flags this.
-  const name = [candidate.first_name, candidate.last_name].filter(Boolean).join(" ");
+  const name = [candidate.first_name, candidate.last_name]
+    .filter(Boolean)
+    .join(" ");
   const parts = [name, candidate.current_title].filter(Boolean);
   return { text: parts.join(" -- "), source: "plain_fields" };
 }
@@ -463,9 +585,14 @@ function buildScoringTextFromProfile(candidate: Record<string, any>): { text: st
 // text layer, or a legacy .doc) falls through to those same fallbacks --
 // resumeExtractionFailed marks that this happened, so it's visible
 // downstream instead of looking identical to "never had a resume".
-async function buildScoringText(candidate: Record<string, any>): Promise<ScoringTextResult> {
+async function buildScoringText(
+  candidate: Record<string, any>,
+): Promise<ScoringTextResult> {
   if (candidate.resume_status === "received" && candidate.resume_storage_path) {
-    const resumeText = await extractResumeText(candidate.resume_storage_path, candidate.resume_original_filename ?? null);
+    const resumeText = await extractResumeText(
+      candidate.resume_storage_path,
+      candidate.resume_original_filename ?? null,
+    );
     // A short threshold, not zero -- guards against a technically-non-empty
     // but useless extraction (e.g. a handful of stray characters from a
     // mostly-image PDF) being trusted as real resume content.
@@ -485,25 +612,68 @@ async function buildScoringText(candidate: Record<string, any>): Promise<Scoring
 // rationale under N words"), this reliably keeps total output within budget.
 const SCORING_TOOL = {
   name: "submit_candidate_score",
-  description: "Score a candidate's fit for a role across 5 dimensions, based only on the profile text and role brief provided. Every free-text field must be concise -- short phrases, not paragraphs.",
+  description:
+    "Score a candidate's fit for a role across 5 dimensions, based only on the profile text and role brief provided. Every free-text field must be concise -- short phrases, not paragraphs.",
   input_schema: {
     type: "object",
     properties: {
       dimension_scores: {
         type: "object",
-        description: "Score 0-100 for each dimension. For scores above 60, rationale must reference a specific concrete detail from the profile as evidence -- but keep rationale to ONE short sentence (under 25 words) and quote to under 15 words or null. Do not inflate scores on keyword presence alone.",
+        description:
+          "Score 0-100 for each dimension. For scores above 60, rationale must reference a specific concrete detail from the profile as evidence -- but keep rationale to ONE short sentence (under 25 words) and quote to under 15 words or null. Do not inflate scores on keyword presence alone.",
         properties: {
-          skills: { type: "object", properties: { score: { type: "integer" }, rationale: { type: "string", maxLength: 160 }, quote: { type: ["string", "null"], maxLength: 100 } }, required: ["score", "rationale"] },
-          trajectory: { type: "object", properties: { score: { type: "integer" }, rationale: { type: "string", maxLength: 160 }, quote: { type: ["string", "null"], maxLength: 100 } }, required: ["score", "rationale"] },
-          domain: { type: "object", properties: { score: { type: "integer" }, rationale: { type: "string", maxLength: 160 }, quote: { type: ["string", "null"], maxLength: 100 } }, required: ["score", "rationale"] },
-          seniority: { type: "object", properties: { score: { type: "integer" }, rationale: { type: "string", maxLength: 160 }, quote: { type: ["string", "null"], maxLength: 100 } }, required: ["score", "rationale"] },
-          tenure: { type: "object", properties: { score: { type: "integer" }, rationale: { type: "string", maxLength: 160 }, quote: { type: ["string", "null"], maxLength: 100 } }, required: ["score", "rationale"] },
+          skills: {
+            type: "object",
+            properties: {
+              score: { type: "integer" },
+              rationale: { type: "string", maxLength: 160 },
+              quote: { type: ["string", "null"], maxLength: 100 },
+            },
+            required: ["score", "rationale"],
+          },
+          trajectory: {
+            type: "object",
+            properties: {
+              score: { type: "integer" },
+              rationale: { type: "string", maxLength: 160 },
+              quote: { type: ["string", "null"], maxLength: 100 },
+            },
+            required: ["score", "rationale"],
+          },
+          domain: {
+            type: "object",
+            properties: {
+              score: { type: "integer" },
+              rationale: { type: "string", maxLength: 160 },
+              quote: { type: ["string", "null"], maxLength: 100 },
+            },
+            required: ["score", "rationale"],
+          },
+          seniority: {
+            type: "object",
+            properties: {
+              score: { type: "integer" },
+              rationale: { type: "string", maxLength: 160 },
+              quote: { type: ["string", "null"], maxLength: 100 },
+            },
+            required: ["score", "rationale"],
+          },
+          tenure: {
+            type: "object",
+            properties: {
+              score: { type: "integer" },
+              rationale: { type: "string", maxLength: 160 },
+              quote: { type: ["string", "null"], maxLength: 100 },
+            },
+            required: ["score", "rationale"],
+          },
         },
         required: ["skills", "trajectory", "domain", "seniority", "tenure"],
       },
       must_haves_check: {
         type: "array",
-        description: "One entry per must-have requirement given in the role brief. No rationale field -- just the verdict.",
+        description:
+          "One entry per must-have requirement given in the role brief. No rationale field -- just the verdict.",
         items: {
           type: "object",
           properties: {
@@ -517,7 +687,10 @@ const SCORING_TOOL = {
       confidence_level: { type: "string", enum: ["high", "medium", "low"] },
       profile_classification: {
         type: "object",
-        properties: { primary_type: { type: "string", maxLength: 60 }, lean_summary: { type: "string", maxLength: 160 } },
+        properties: {
+          primary_type: { type: "string", maxLength: 60 },
+          lean_summary: { type: "string", maxLength: 160 },
+        },
         required: ["primary_type", "lean_summary"],
       },
       recruiter_card: {
@@ -526,15 +699,47 @@ const SCORING_TOOL = {
           most_recent_title: { type: "string", maxLength: 80 },
           total_years_experience: { type: "string", maxLength: 30 },
           career_pattern: { type: "string", maxLength: 120 },
-          what_stands_out: { type: "array", items: { type: "string", maxLength: 100 }, description: "At most 3 short bullets." },
-          worth_exploring: { type: "array", items: { type: "string", maxLength: 100 }, description: "At most 3 short bullets." },
-          interview_questions: { type: "array", items: { type: "string", maxLength: 150 }, description: "At most 3 questions." },
+          what_stands_out: {
+            type: "array",
+            items: { type: "string", maxLength: 100 },
+            description: "At most 3 short bullets.",
+          },
+          worth_exploring: {
+            type: "array",
+            items: { type: "string", maxLength: 100 },
+            description: "At most 3 short bullets.",
+          },
+          interview_questions: {
+            type: "array",
+            items: { type: "string", maxLength: 150 },
+            description: "At most 3 questions.",
+          },
         },
-        required: ["most_recent_title", "total_years_experience", "career_pattern", "what_stands_out", "worth_exploring", "interview_questions"],
+        required: [
+          "most_recent_title",
+          "total_years_experience",
+          "career_pattern",
+          "what_stands_out",
+          "worth_exploring",
+          "interview_questions",
+        ],
       },
-      green_flags: { type: "array", items: { type: "string", maxLength: 100 }, description: "At most 4 short bullets, one short phrase each." },
-      watch_signals: { type: "array", items: { type: "string", maxLength: 100 }, description: "At most 4 short bullets." },
-      review_flags: { type: "array", items: { type: "string", maxLength: 100 }, description: "Contradictions or implausible claims, if any. At most 4 short bullets." },
+      green_flags: {
+        type: "array",
+        items: { type: "string", maxLength: 100 },
+        description: "At most 4 short bullets, one short phrase each.",
+      },
+      watch_signals: {
+        type: "array",
+        items: { type: "string", maxLength: 100 },
+        description: "At most 4 short bullets.",
+      },
+      review_flags: {
+        type: "array",
+        items: { type: "string", maxLength: 100 },
+        description:
+          "Contradictions or implausible claims, if any. At most 4 short bullets.",
+      },
       // Task #41 (2026-07-22): only meaningful when the role brief has
       // preference_tiers. Purely informational for the recruiter -- does
       // NOT feed the ported deterministic pipeline below (see header
@@ -542,7 +747,8 @@ const SCORING_TOOL = {
       // genuinely can't tell which tier fits best.
       preference_tier_match: {
         type: ["object", "null"],
-        description: "Which preference tier (by rank) this candidate best matches, if the role brief listed any. Null if the role brief has no tiers, or no tier clearly fits.",
+        description:
+          "Which preference tier (by rank) this candidate best matches, if the role brief listed any. Null if the role brief has no tiers, or no tier clearly fits.",
         properties: {
           rank: { type: "integer" },
           label: { type: "string", maxLength: 60 },
@@ -551,15 +757,31 @@ const SCORING_TOOL = {
         required: ["rank", "label", "rationale"],
       },
     },
-    required: ["dimension_scores", "must_haves_check", "confidence_level", "profile_classification", "recruiter_card", "green_flags", "watch_signals", "review_flags"],
+    required: [
+      "dimension_scores",
+      "must_haves_check",
+      "confidence_level",
+      "profile_classification",
+      "recruiter_card",
+      "green_flags",
+      "watch_signals",
+      "review_flags",
+    ],
   },
 };
 
-function buildPrompt(roleBrief: ReturnType<typeof buildRoleBriefLite>, profileText: string, textSource: string): string {
+function buildPrompt(
+  roleBrief: ReturnType<typeof buildRoleBriefLite>,
+  profileText: string,
+  textSource: string,
+): string {
   const tierText =
     roleBrief.preference_tiers.length > 0
       ? `\nRanked preference tiers (this role has a primary-vs-fallback profile -- judge which tier this candidate best fits, in addition to the 5 dimensions above; this does not change the dimension scores themselves):\n${roleBrief.preference_tiers
-          .map((t) => `${t.rank}. ${t.label}: ${t.keywords.join(", ")}${t.condition ? ` (${t.condition})` : ""}`)
+          .map(
+            (t) =>
+              `${t.rank}. ${t.label}: ${t.keywords.join(", ")}${t.condition ? ` (${t.condition})` : ""}`,
+          )
           .join("\n")}`
       : "";
 
@@ -591,49 +813,98 @@ Score the 5 dimensions (skills, trajectory, domain, seniority, tenure) 0-100 eac
 }
 
 const scoreCandidateHandler = async (req: Request) => {
-  if (req.method !== "POST") return jsonResponse({ error: "Method Not Allowed" }, 405);
+  if (req.method !== "POST")
+    return jsonResponse({ error: "Method Not Allowed" }, 405);
 
   if (!ANTHROPIC_API_KEY) {
-    return jsonResponse({ error: "ANTHROPIC_API_KEY is not set for this project." }, 500);
+    return jsonResponse(
+      { error: "ANTHROPIC_API_KEY is not set for this project." },
+      500,
+    );
   }
 
   let candidateId: number | undefined;
   let dealId: number | undefined;
+  let evidenceOnly = false;
+  let discoveryCandidate: Record<string, unknown> | undefined;
   try {
     const body = await req.json();
     candidateId = body?.candidate_id;
     dealId = body?.deal_id;
+    evidenceOnly = body?.evidence_only === true;
+    discoveryCandidate = body?.discovery_candidate;
   } catch {
     return jsonResponse({ error: "Invalid JSON body" }, 400);
   }
 
-  if (!candidateId || !dealId) {
-    return jsonResponse({ error: "candidate_id and deal_id are required" }, 400);
+  if (!dealId) {
+    return jsonResponse({ error: "deal_id is required" }, 400);
+  }
+  if (evidenceOnly) {
+    if (!discoveryCandidate || typeof discoveryCandidate !== "object") {
+      return jsonResponse(
+        { error: "discovery_candidate is required for evidence_only scoring" },
+        400,
+      );
+    }
+  } else if (!candidateId) {
+    return jsonResponse(
+      { error: "candidate_id and deal_id are required" },
+      400,
+    );
   }
 
   const authHeader = req.headers.get("authorization")!;
 
-  const [candidateRes, dealRes] = await Promise.all([
-    restFetch(
+  let candidate: Record<string, any>;
+  let profileText: string;
+  let textSource: "full_profile" | "plain_fields" | "resume";
+  let resumeExtractionFailed: boolean | undefined;
+
+  if (evidenceOnly) {
+    const built = buildScoringTextFromDiscovery(discoveryCandidate!);
+    profileText = built.text;
+    textSource = built.source;
+    candidate = {};
+    resumeExtractionFailed = undefined;
+  } else {
+    const candidateRes = await restFetch(
       `candidates?id=eq.${candidateId}&select=id,first_name,last_name,current_title,linkedin_url,full_profile_status,full_profile_raw,work_history,resume_status,resume_storage_path,resume_original_filename`,
       authHeader,
-    ),
-    restFetch(`deals?id=eq.${dealId}&select=*`, authHeader),
-  ]);
+    );
+    if (!candidateRes.ok)
+      return jsonResponse({ error: "Failed to load candidate" }, 502);
+    candidate = (await candidateRes.json())?.[0];
+    if (!candidate) {
+      return jsonResponse(
+        { error: "Candidate not found (or you don't have access to it)" },
+        404,
+      );
+    }
+    const built = await buildScoringText(candidate);
+    profileText = built.text;
+    textSource = built.source;
+    resumeExtractionFailed = built.resumeExtractionFailed;
+  }
 
-  if (!candidateRes.ok) return jsonResponse({ error: "Failed to load candidate" }, 502);
-  if (!dealRes.ok) return jsonResponse({ error: "Failed to load role brief" }, 502);
-
-  const candidate = (await candidateRes.json())?.[0];
+  const dealRes = await restFetch(`deals?id=eq.${dealId}&select=*`, authHeader);
+  if (!dealRes.ok)
+    return jsonResponse({ error: "Failed to load role brief" }, 502);
   const deal = (await dealRes.json())?.[0];
+  if (!deal) {
+    return jsonResponse(
+      { error: "Role brief not found (or you don't have access to it)" },
+      404,
+    );
+  }
 
-  if (!candidate) return jsonResponse({ error: "Candidate not found (or you don't have access to it)" }, 404);
-  if (!deal) return jsonResponse({ error: "Role brief not found (or you don't have access to it)" }, 404);
-
-  const { text: profileText, source: textSource, resumeExtractionFailed } = await buildScoringText(candidate);
   if (!profileText.trim()) {
     return jsonResponse(
-      { error: "This candidate has no profile text to score against yet -- try 'View full profile' first, or check current_title is set." },
+      {
+        error: evidenceOnly
+          ? "This search result has no profile text to evaluate yet."
+          : "This candidate has no profile text to score against yet -- try 'View full profile' first, or check current_title is set.",
+      },
       400,
     );
   }
@@ -659,19 +930,34 @@ const scoreCandidateHandler = async (req: Request) => {
 
   if (!anthropicResponse.ok) {
     const errorBody = await anthropicResponse.text();
-    console.error("score-candidate: Anthropic API error", anthropicResponse.status, errorBody);
-    return jsonResponse({ error: `Scoring model error (${anthropicResponse.status})` }, 502);
+    console.error(
+      "score-candidate: Anthropic API error",
+      anthropicResponse.status,
+      errorBody,
+    );
+    return jsonResponse(
+      { error: `Scoring model error (${anthropicResponse.status})` },
+      502,
+    );
   }
 
   const anthropicResult = await anthropicResponse.json();
-  const toolUseBlock = anthropicResult?.content?.find((b: any) => b.type === "tool_use");
+  const toolUseBlock = anthropicResult?.content?.find(
+    (b: any) => b.type === "tool_use",
+  );
   if (!toolUseBlock) {
     console.error("score-candidate: no tool_use block", anthropicResult);
-    return jsonResponse({ error: "Scoring model did not return structured output" }, 502);
+    return jsonResponse(
+      { error: "Scoring model did not return structured output" },
+      502,
+    );
   }
 
   const modelOutput = toolUseBlock.input as {
-    dimension_scores: Record<DimensionKey, { score: number; rationale: string; quote: string | null }>;
+    dimension_scores: Record<
+      DimensionKey,
+      { score: number; rationale: string; quote: string | null }
+    >;
     must_haves_check: MustHaveCheck[];
     confidence_level: "high" | "medium" | "low";
     green_flags: string[];
@@ -686,7 +972,11 @@ const scoreCandidateHandler = async (req: Request) => {
       worth_exploring: string[];
       interview_questions: string[];
     };
-    preference_tier_match?: { rank: number; label: string; rationale: string } | null;
+    preference_tier_match?: {
+      rank: number;
+      label: string;
+      rationale: string;
+    } | null;
   };
 
   // If the model still ran out of room despite the caps above, surface a
@@ -695,7 +985,11 @@ const scoreCandidateHandler = async (req: Request) => {
   // rare now, but nulling out silently was exactly the bug found in
   // testing -- better to fail loudly than save something quietly wrong.
   const truncated = anthropicResult?.stop_reason === "max_tokens";
-  if (truncated || !modelOutput?.recruiter_card || !modelOutput?.must_haves_check) {
+  if (
+    truncated ||
+    !modelOutput?.recruiter_card ||
+    !modelOutput?.must_haves_check
+  ) {
     console.error("score-candidate: incomplete model output", {
       candidateId,
       dealId,
@@ -712,8 +1006,14 @@ const scoreCandidateHandler = async (req: Request) => {
   }
 
   // --- Ported deterministic pipeline from here down ---
-  const rawOverall = recomputeOverallFromSnapshot(modelOutput.dimension_scores, roleBrief);
-  const cap = applyDealBreakerCap(rawOverall, modelOutput.must_haves_check ?? []);
+  const rawOverall = recomputeOverallFromSnapshot(
+    modelOutput.dimension_scores,
+    roleBrief,
+  );
+  const cap = applyDealBreakerCap(
+    rawOverall,
+    modelOutput.must_haves_check ?? [],
+  );
   const finalScore = cap.score;
   const verdict = scoreToVerdict(finalScore);
   const recommended = deriveRecommendedAction({
@@ -729,7 +1029,16 @@ const scoreCandidateHandler = async (req: Request) => {
   // Only persist a tier match when the role brief actually has tiers --
   // otherwise ignore anything the model may have returned there anyway.
   const preferenceTierMatch =
-    roleBrief.preference_tiers.length > 0 ? (modelOutput.preference_tier_match ?? null) : null;
+    roleBrief.preference_tiers.length > 0
+      ? (modelOutput.preference_tier_match ?? null)
+      : null;
+
+  if (evidenceOnly) {
+    return jsonResponse({
+      must_haves_check: modelOutput.must_haves_check ?? [],
+      scored_text_source: textSource,
+    });
+  }
 
   const row = {
     candidate_id: candidateId,
@@ -756,16 +1065,27 @@ const scoreCandidateHandler = async (req: Request) => {
 
   const targetAuthHeader = token_for_service_role_bypass(authHeader);
 
-  const upsertRes = await restFetch(`candidate_scores?on_conflict=candidate_id,deal_id`, targetAuthHeader, {
-    method: "POST",
-    headers: { Prefer: "resolution=merge-duplicates,return=representation" },
-    body: JSON.stringify(row),
-  });
+  const upsertRes = await restFetch(
+    `candidate_scores?on_conflict=candidate_id,deal_id`,
+    targetAuthHeader,
+    {
+      method: "POST",
+      headers: { Prefer: "resolution=merge-duplicates,return=representation" },
+      body: JSON.stringify(row),
+    },
+  );
 
   if (!upsertRes.ok) {
     const errorBody = await upsertRes.text();
-    console.error("score-candidate: upsert failed", upsertRes.status, errorBody);
-    return jsonResponse({ error: "Scored, but failed to save the result" }, 502);
+    console.error(
+      "score-candidate: upsert failed",
+      upsertRes.status,
+      errorBody,
+    );
+    return jsonResponse(
+      { error: "Scored, but failed to save the result" },
+      502,
+    );
   }
 
   const saved = (await upsertRes.json())?.[0];

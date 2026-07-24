@@ -150,6 +150,8 @@ type PdlCandidate = {
   // see that function's buildQueryLadder for the full rung list. Null/absent
   // for an exact ("narrow") match, since that doesn't need explaining.
   _match_evidence?: string | null;
+  years_experience?: number | null;
+  company_size?: number | null;
   // Cross-provider merge (2026-07-19, see mergeCandidates.ts): present only
   // when this card represents more than one raw search hit merged by name
   // match across the free portals + Exa. Every source's own portal URL is
@@ -329,14 +331,30 @@ function sortCandidatesForDisplay(
   candidates: PdlCandidate[],
   sortField: CandidateSortField,
   sortByMatchEvidence: boolean,
+  sortByYearsExperience: boolean,
+  sortByCompanySize: boolean,
 ): PdlCandidate[] {
-  if (sortByMatchEvidence) {
+  if (sortByMatchEvidence || sortByYearsExperience || sortByCompanySize) {
     return [...candidates].sort((a, b) => {
-      const scoreA =
-        typeof a._match_score === "number" ? a._match_score : -Infinity;
-      const scoreB =
-        typeof b._match_score === "number" ? b._match_score : -Infinity;
-      return scoreB - scoreA;
+      if (sortByMatchEvidence) {
+        const scoreA =
+          typeof a._match_score === "number" ? a._match_score : -Infinity;
+        const scoreB =
+          typeof b._match_score === "number" ? b._match_score : -Infinity;
+        const scoreDelta = scoreB - scoreA;
+        if (scoreDelta !== 0) return scoreDelta;
+      }
+      if (sortByYearsExperience) {
+        const yearsDelta =
+          (b.years_experience ?? -Infinity) - (a.years_experience ?? -Infinity);
+        if (yearsDelta !== 0) return yearsDelta;
+      }
+      if (sortByCompanySize) {
+        const sizeDelta =
+          (b.company_size ?? -Infinity) - (a.company_size ?? -Infinity);
+        if (sizeDelta !== 0) return sizeDelta;
+      }
+      return 0;
     });
   }
   switch (sortField) {
@@ -1775,6 +1793,8 @@ export const SourceCandidatesPage = ({
   // actively choose it rather than land on it by default.
   const [sortField, setSortField] = useState<CandidateSortField>("default");
   const [sortByMatchEvidence, setSortByMatchEvidence] = useState(false);
+  const [sortByYearsExperience, setSortByYearsExperience] = useState(false);
+  const [sortByCompanySize, setSortByCompanySize] = useState(false);
   const [scrollToken, setScrollToken] = useState<string | null>(null);
   const [saveStates, setSaveStates] = useState<Record<string, SaveState>>({});
   // Real public.candidates row id for each PDL/vendor candidate id shown on
@@ -2075,10 +2095,21 @@ export const SourceCandidatesPage = ({
   useEffect(() => {
     setCandidates((prev) =>
       prev.length > 0
-        ? sortCandidatesForDisplay(prev, sortField, sortByMatchEvidence)
+        ? sortCandidatesForDisplay(
+            prev,
+            sortField,
+            sortByMatchEvidence,
+            sortByYearsExperience,
+            sortByCompanySize,
+          )
         : prev,
     );
-  }, [sortField, sortByMatchEvidence]);
+  }, [
+    sortField,
+    sortByMatchEvidence,
+    sortByYearsExperience,
+    sortByCompanySize,
+  ]);
 
   // Role Workspace embedding (2026-07-19): when a role brief id arrives via
   // props instead of the dropdown, select it exactly once on mount by
@@ -2197,6 +2228,8 @@ export const SourceCandidatesPage = ({
           data.candidates,
           sortField,
           sortByMatchEvidence,
+          sortByYearsExperience,
+          sortByCompanySize,
         ),
       );
       setScrollToken(data.scroll_token);
@@ -2242,6 +2275,8 @@ export const SourceCandidatesPage = ({
           [...prev, ...data.candidates],
           sortField,
           sortByMatchEvidence,
+          sortByYearsExperience,
+          sortByCompanySize,
         ),
       );
       setScrollToken(data.scroll_token);
@@ -2860,7 +2895,13 @@ export const SourceCandidatesPage = ({
       // feedback) -- not the main results funnel this ticket changed the
       // default ordering for. Score order is still the right default here.
       setCalibrationCandidates(
-        sortCandidatesForDisplay(data.candidates, "default", true),
+        sortCandidatesForDisplay(
+          data.candidates,
+          "default",
+          true,
+          false,
+          false,
+        ),
       );
       setCalibrationStarted(true);
       setNotes(data.notes);
@@ -4163,6 +4204,22 @@ export const SourceCandidatesPage = ({
                     onChange={(e) => setSortByMatchEvidence(e.target.checked)}
                   />
                   Sort by match evidence
+                </label>
+                <label className="flex items-center gap-2 text-xs bg-accent/40 rounded-md px-2 py-1.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={sortByYearsExperience}
+                    onChange={(e) => setSortByYearsExperience(e.target.checked)}
+                  />
+                  Sort by years of experience
+                </label>
+                <label className="flex items-center gap-2 text-xs bg-accent/40 rounded-md px-2 py-1.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={sortByCompanySize}
+                    onChange={(e) => setSortByCompanySize(e.target.checked)}
+                  />
+                  Sort by company size
                 </label>
               </div>
             </div>

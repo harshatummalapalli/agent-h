@@ -78,6 +78,14 @@ import * as jose from "jsr:@panva/jose@6";
 import { buildCrustdataFilters } from "./crustdataQueryBuilder.ts";
 import type { CrustdataSearchCriteria } from "./crustdataQueryBuilder.ts";
 import {
+  apolloCompanySize,
+  apolloYearsExperience,
+  coresignalCompanySize,
+  coresignalYearsExperience,
+  crustdataCompanySize,
+  crustdataYearsExperience,
+} from "./candidateDisplayFields.ts";
+import {
   buildDiscoveryAttributionRows,
   isDiscoverySearchContinuation,
   stripVendorFieldsForClient,
@@ -1441,8 +1449,11 @@ function normalizeApolloCandidate(
     // skills field, so this is always empty for Apollo candidates -- the
     // recruiter sees an honest blank rather than a fabricated skills list.
     skills: [],
-    linkedin_url:
-      typeof raw.linkedin_url === "string" ? raw.linkedin_url : null,
+    linkedin_url: rawLinkedinUrl
+      ? rawLinkedinUrl.replace(/^https?:\/\//i, "")
+      : null,
+    years_experience: apolloYearsExperience(raw),
+    company_size: apolloCompanySize(raw),
     _source_vendor: "apollo",
   };
 }
@@ -1505,6 +1516,8 @@ function normalizeCoresignalCandidate(
     linkedin_url: rawLinkedinUrl
       ? rawLinkedinUrl.replace(/^https?:\/\//i, "")
       : null,
+    years_experience: coresignalYearsExperience(raw),
+    company_size: coresignalCompanySize(raw),
     _source_vendor: "coresignal",
   };
 }
@@ -2479,6 +2492,8 @@ function normalizeCrustdataCandidate(
     linkedin_url: rawLinkedinUrl
       ? rawLinkedinUrl.replace(/^https?:\/\//i, "")
       : null,
+    years_experience: crustdataYearsExperience(raw),
+    company_size: crustdataCompanySize(raw),
     _source_vendor: "crustdata",
   };
 }

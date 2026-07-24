@@ -64,7 +64,7 @@ import {
   buildDiscoveryAttributionLookupPath,
   parseAttributionVendorFromRows,
   resolveSourcedViaFromAttributionVendor,
-} from "../source-candidates-discovery/discoverySourceAttribution.ts";
+} from "../_shared/discoverySourceAttribution.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY");

@@ -7,7 +7,7 @@ import {
   resolveSourcedViaFromAttributionVendor,
   stripVendorFieldsForClient,
   vendorToSourcedVia,
-} from "./discoverySourceAttribution";
+} from "../_shared/discoverySourceAttribution";
 
 describe("isDiscoverySearchContinuation", () => {
   it("returns false for preview calls", () => {

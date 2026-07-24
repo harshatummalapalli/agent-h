@@ -89,7 +89,7 @@ import {
   buildDiscoveryAttributionRows,
   isDiscoverySearchContinuation,
   stripVendorFieldsForClient,
-} from "./discoverySourceAttribution.ts";
+} from "../_shared/discoverySourceAttribution.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
 // SUPABASE_URL and SUPABASE_ANON_KEY are auto-injected into every Supabase

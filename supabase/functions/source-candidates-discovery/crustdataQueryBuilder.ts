@@ -208,19 +208,41 @@ export function decomposeSearchPhrase(
   return Array.from(terms).slice(0, maxTerms);
 }
 
-// Builds a single "(.)" condition from a list of phrases, decomposing each
-// one first (see decomposeSearchPhrase) and joining the results with "|" --
-// "(.)" supports "|" for OR WITHIN one condition's value, confirmed live
-// this session, so multiple equivalent phrases (e.g. expanded title
-// synonyms) collapse into one condition rather than needing a nested "or"
-// group. Returns null when there's nothing to filter on, so callers can
-// skip adding an empty/no-op condition.
+// Builds one or more "(.)" conditions from phrases, decomposing each phrase
+// first (see decomposeSearchPhrase). Returns a single condition when there is
+// only one term; otherwise an explicit OR-group -- never a pipe-joined value
+// inside one condition (live bisection 2026-07-24: pipe-joining multiple title
+// alternatives collapsed ANDed searches to zero even when each term alone
+// matches millions of profiles).
+export function buildContainsOrGroupFromPhrases(
+  field: string,
+  phrases: string[],
+): CrustdataFilterCondition | CrustdataFilterGroup | null {
+  const allTerms = phrases.flatMap((p) => decomposeSearchPhrase(p));
+  const deduped = Array.from(new Set(allTerms)).filter((t) => t.length > 0);
+  if (deduped.length === 0) return null;
+
+  const conditions: CrustdataFilterCondition[] = deduped.map((value) => ({
+    field,
+    type: "(.)",
+    value,
+  }));
+
+  if (conditions.length === 1) return conditions[0];
+  return { op: "or", conditions };
+}
+
+// Builds a single "(.)" condition for one source phrase. When decomposeSearchPhrase
+// yields multiple shingles for that phrase, they are OR-joined with "|" inside the
+// value (safe for a single logical phrase). For multiple alternative phrases
+// (expanded title synonyms, seniority aliases), use buildContainsOrGroupFromPhrases.
 export function buildContainsCondition(
   field: string,
   phrases: string[],
 ): CrustdataFilterCondition | null {
-  const allTerms = phrases.flatMap((p) => decomposeSearchPhrase(p));
-  const deduped = Array.from(new Set(allTerms)).filter((t) => t.length > 0);
+  if (phrases.length !== 1) return null;
+  const terms = decomposeSearchPhrase(phrases[0]);
+  const deduped = Array.from(new Set(terms)).filter((t) => t.length > 0);
   if (deduped.length === 0) return null;
   return {
     field,
@@ -287,18 +309,18 @@ export function buildCrustdataFilters(
   const conditions: Array<CrustdataFilterCondition | CrustdataFilterGroup> = [];
   const notes: string[] = [];
 
-  // --- Title: decomposed contains-match, one condition covering every
-  // expanded title synonym (see buildContainsCondition's header note). ---
+  // --- Title: explicit OR-group of decomposed contains conditions (one term
+  // per condition -- never pipe-joined alternatives in a single value). ---
   if (criteria.titles && criteria.titles.length > 0) {
-    const condition = buildContainsCondition(
+    const titleFilter = buildContainsOrGroupFromPhrases(
       CRUSTDATA_FIELDS.currentTitle,
       criteria.titles,
     );
-    if (condition) {
-      conditions.push(condition);
+    if (titleFilter) {
+      conditions.push(titleFilter);
       if (criteria.titles.length > 1) {
         notes.push(
-          `Searching ${criteria.titles.length} equivalent titles: ${criteria.titles.join(", ")} (decomposed into shorter literal phrases -- contains-match only matches exact phrases, not word-split text, so long compound titles are broken into shorter fragments more likely to appear verbatim; see decomposeSearchPhrase).`,
+          `Searching ${criteria.titles.length} equivalent titles: ${criteria.titles.join(", ")} (each decomposed into shorter literal phrases and combined as an OR-group -- contains-match only matches exact phrases, not word-split text; see decomposeSearchPhrase).`,
         );
       } else {
         notes.push(`Requiring title match: "${criteria.titles[0]}".`);
@@ -380,12 +402,12 @@ export function buildCrustdataFilters(
   if (options.useSeniority && criteria.seniority) {
     const mapped = SENIORITY_TO_CRUSTDATA_TERMS[criteria.seniority];
     if (mapped && mapped.length > 0) {
-      const condition = buildContainsCondition(
+      const seniorityFilter = buildContainsOrGroupFromPhrases(
         CRUSTDATA_FIELDS.currentSeniorityLevel,
         mapped,
       );
-      if (condition) {
-        conditions.push(condition);
+      if (seniorityFilter) {
+        conditions.push(seniorityFilter);
         notes.push(
           `Requiring seniority level "${criteria.seniority}" (matched via fuzzy contains-match on the seniority field).`,
         );
@@ -487,13 +509,12 @@ export function buildCrustdataFilters(
   // see this function's header note for why this is a real filter here
   // (not a "should"/boost the way it is for coresignalProvider). ---
   if (criteria.pastTitles && criteria.pastTitles.length > 0) {
-    const pastTitleConditions = criteria.pastTitles
-      .map((title) =>
-        buildContainsCondition(CRUSTDATA_FIELDS.pastTitle, [title]),
-      )
-      .filter((c): c is CrustdataFilterCondition => c !== null);
-    if (pastTitleConditions.length > 0) {
-      conditions.push({ op: "or", conditions: pastTitleConditions });
+    const pastTitleFilter = buildContainsOrGroupFromPhrases(
+      CRUSTDATA_FIELDS.pastTitle,
+      criteria.pastTitles,
+    );
+    if (pastTitleFilter) {
+      conditions.push(pastTitleFilter);
       notes.push(
         `Requiring at least one past title matching: ${criteria.pastTitles.join(", ")} (applied as a real filter, not just a ranking preference).`,
       );

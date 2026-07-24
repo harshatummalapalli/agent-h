@@ -2,10 +2,12 @@ import { describe, it, expect } from "vitest";
 import {
   decomposeSearchPhrase,
   buildContainsCondition,
+  buildContainsOrGroupFromPhrases,
   buildCrustdataFilters,
   CRUSTDATA_FIELDS,
   type CrustdataSearchCriteria,
   type CrustdataFilterGroup,
+  type CrustdataFilterCondition,
 } from "./crustdataQueryBuilder";
 
 // Base criteria with every field null/empty -- individual tests override
@@ -150,7 +152,7 @@ describe("buildContainsCondition", () => {
     });
   });
 
-  it("joins multiple expanded title synonyms into one pipe-delimited value", () => {
+  it("returns null when given multiple phrases (use buildContainsOrGroupFromPhrases)", () => {
     // Arrange & Act
     const result = buildContainsCondition(CRUSTDATA_FIELDS.currentTitle, [
       "Backend Engineer",
@@ -158,12 +160,48 @@ describe("buildContainsCondition", () => {
     ]);
 
     // Assert
-    expect(result?.type).toBe("(.)");
-    expect(result?.value).toContain("Backend Engineer");
-    expect(result?.value).toContain("Backend Developer");
-    expect((result?.value as string).includes("|")).toBe(true);
+    expect(result).toBeNull();
   });
 });
+
+describe("buildContainsOrGroupFromPhrases", () => {
+  it("OR-groups multiple expanded title synonyms as separate (.) conditions", () => {
+    // Arrange & Act
+    const result = buildContainsOrGroupFromPhrases(
+      CRUSTDATA_FIELDS.currentTitle,
+      ["Backend Engineer", "Backend Developer"],
+    );
+
+    // Assert
+    expect(result).toEqual({
+      op: "or",
+      conditions: [
+        {
+          field: CRUSTDATA_FIELDS.currentTitle,
+          type: "(.)",
+          value: "Backend Engineer",
+        },
+        {
+          field: CRUSTDATA_FIELDS.currentTitle,
+          type: "(.)",
+          value: "Backend Developer",
+        },
+      ],
+    });
+  });
+});
+
+function collectDotContainsConditions(
+  node: CrustdataFilterGroup | CrustdataFilterCondition | null,
+): CrustdataFilterCondition[] {
+  if (!node) return [];
+  if ("op" in node) {
+    return node.conditions.flatMap((c) =>
+      "op" in c ? collectDotContainsConditions(c) : c.type === "(.)" ? [c] : [],
+    );
+  }
+  return node.type === "(.)" ? [node] : [];
+}
 
 describe("buildCrustdataFilters", () => {
   it("returns null filters and a note when no criteria are provided at all", () => {
@@ -413,13 +451,14 @@ describe("buildCrustdataFilters", () => {
 
     // Assert
     const group = filters as CrustdataFilterGroup;
-    const pastTitleGroup = group.conditions.find(
-      (c): c is CrustdataFilterGroup =>
-        "op" in c &&
-        c.op === "or" &&
-        c.conditions.some(
-          (cc) => "field" in cc && cc.field === CRUSTDATA_FIELDS.pastTitle,
-        ),
+    const pastTitleFilter = group.conditions.find(
+      (c) =>
+        ("field" in c && c.field === CRUSTDATA_FIELDS.pastTitle) ||
+        ("op" in c &&
+          c.op === "or" &&
+          c.conditions.some(
+            (cc) => "field" in cc && cc.field === CRUSTDATA_FIELDS.pastTitle,
+          )),
     );
     const pastCompanyGroup = group.conditions.find(
       (c): c is CrustdataFilterGroup =>
@@ -430,7 +469,7 @@ describe("buildCrustdataFilters", () => {
             "field" in cc && cc.field === CRUSTDATA_FIELDS.pastCompanyName,
         ),
     );
-    expect(pastTitleGroup).toBeDefined();
+    expect(pastTitleFilter).toBeDefined();
     expect(pastCompanyGroup).toBeDefined();
     expect(pastCompanyGroup?.conditions.length).toBe(2);
     expect(
@@ -494,6 +533,64 @@ describe("buildCrustdataFilters", () => {
       type: "(!)",
       value: "contractor",
     });
+  });
+
+  it("does not pipe-join multiple title alternatives into one (.) value (deal 1 regression)", () => {
+    // Arrange: live deal-1 bisection case -- pipe-joined title variants zeroed
+    // out an otherwise valid AND query even though each variant alone matches.
+    const criteria = buildEmptyCriteria({
+      titles: [
+        "Senior AI",
+        "AI Software",
+        "Software Engineer",
+        "AI Engineer",
+        "Senior .NET",
+        ".NET Engineer",
+      ],
+      location: "Hyderabad, Telangana, India",
+      requiredSkills: [
+        "C#",
+        ".NET",
+        "ASP.NET Core",
+        "Python",
+        "REST APIs",
+        "Microservices",
+        "SQL Server",
+        "Git",
+        "Azure DevOps",
+        "CI/CD",
+        "Docker",
+        "LLMs",
+        "RAG (Retrieval-Augmented Generation)",
+        "Prompt Engineering",
+        "Vector Databases",
+        "AI API Integration",
+        "OpenAI",
+        "Azure OpenAI",
+      ],
+      seniority: "senior",
+      yearsExperienceMin: 5,
+      yearsExperienceMax: 9,
+    });
+
+    // Act
+    const { filters } = buildCrustdataFilters(criteria);
+
+    // Assert
+    const group = filters as CrustdataFilterGroup;
+    const titleOrGroup = group.conditions.find(
+      (c): c is CrustdataFilterGroup =>
+        "op" in c &&
+        c.op === "or" &&
+        c.conditions.length > 1 &&
+        c.conditions.every(
+          (cc) => "field" in cc && cc.field === CRUSTDATA_FIELDS.currentTitle,
+        ),
+    );
+    expect(titleOrGroup).toBeDefined();
+    for (const condition of collectDotContainsConditions(filters)) {
+      expect(condition.value).not.toContain("|");
+    }
   });
 
   it("combines title, location, skills, seniority, and years into one AND group", () => {

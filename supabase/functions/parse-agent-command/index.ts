@@ -26,18 +26,21 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import * as jose from "jsr:@panva/jose@6";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
-const SUPABASE_JWT_ISSUER = Deno.env.get("SB_JWT_ISSUER") ?? `${SUPABASE_URL}/auth/v1`;
+const SUPABASE_JWT_ISSUER =
+  Deno.env.get("SB_JWT_ISSUER") ?? `${SUPABASE_URL}/auth/v1`;
 const SUPABASE_JWT_KEYS = jose.createRemoteJWKSet(
   new URL(`${SUPABASE_URL}/auth/v1/.well-known/jwks.json`),
 );
 
 const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
-const ANTHROPIC_MODEL = Deno.env.get("ANTHROPIC_SCORING_MODEL") || "claude-haiku-4-5-20251001";
+const ANTHROPIC_MODEL =
+  Deno.env.get("ANTHROPIC_SCORING_MODEL") || "claude-haiku-4-5-20251001";
 const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST",
 };
 
@@ -49,13 +52,16 @@ const jsonResponse = (data: unknown, status = 200) =>
 
 async function requireAuth(req: Request): Promise<Response | null> {
   const authHeader = req.headers.get("authorization");
-  if (!authHeader) return jsonResponse({ error: "Missing authorization header" }, 401);
+  if (!authHeader)
+    return jsonResponse({ error: "Missing authorization header" }, 401);
   const [bearer, token] = authHeader.split(" ");
   if (bearer !== "Bearer" || !token) {
     return jsonResponse({ error: "Invalid authorization header" }, 401);
   }
   try {
-    await jose.jwtVerify(token, SUPABASE_JWT_KEYS, { issuer: SUPABASE_JWT_ISSUER });
+    await jose.jwtVerify(token, SUPABASE_JWT_KEYS, {
+      issuer: SUPABASE_JWT_ISSUER,
+    });
     return null;
   } catch {
     return jsonResponse({ error: "Unauthorized" }, 401);
@@ -72,6 +78,7 @@ const PARSE_COMMAND_TOOL = {
       action: {
         type: "string",
         enum: [
+          "create_role",
           "continue_sourcing",
           "relax_criterion",
           "request_resume",
@@ -81,23 +88,27 @@ const PARSE_COMMAND_TOOL = {
           "unknown",
         ],
         description:
-          "continue_sourcing: run another sourcing pass for a role. relax_criterion: turn off one active must-have/exclude criterion for a role. request_resume: ask selected candidate(s) to send a resume. reject_candidates: remove selected candidate(s) from a role's pipeline. show_candidates: the recruiter wants to SEE/browse/list the candidates or resumes sourced for one specific role (navigates there, resolve deal_id from open_deals or current_deal_id). show_roles: the recruiter wants to see/browse/list all roles/jobs, not scoped to one role. unknown: none of the above apply.",
+          "create_role: the recruiter wants to START A NEW ROLE/JOB/REQ -- phrases like 'create a new role', 'I need to hire a...', 'let's open a req for...', 'start sourcing for a new position'. Navigates to the role-intake page; does not need deal_id (there's no existing role yet). continue_sourcing: run another sourcing pass for a role. relax_criterion: turn off one active must-have/exclude criterion for a role. request_resume: ask selected candidate(s) to send a resume. reject_candidates: remove selected candidate(s) from a role's pipeline. show_candidates: the recruiter wants to SEE/browse/list the candidates or resumes sourced for one specific role (navigates there, resolve deal_id from open_deals or current_deal_id). show_roles: the recruiter wants to see/browse/list all roles/jobs, not scoped to one role. unknown: none of the above apply.",
       },
       deal_id: {
         type: ["number", "null"],
-        description: "The id of the role brief (deal) this command refers to, resolved from the open_deals list in context. Null if it can't be determined or isn't needed.",
+        description:
+          "The id of the role brief (deal) this command refers to, resolved from the open_deals list in context. Null if it can't be determined or isn't needed.",
       },
       criterion_id: {
         type: ["number", "null"],
-        description: "For relax_criterion only: the id of the matching criterion from the active_criteria list in context, matched by meaning not exact wording. Null otherwise or if no confident match exists.",
+        description:
+          "For relax_criterion only: the id of the matching criterion from the active_criteria list in context, matched by meaning not exact wording. Null otherwise or if no confident match exists.",
       },
       use_selected_candidates: {
         type: "boolean",
-        description: "For request_resume/reject_candidates: true if the command refers to 'selected'/'these' candidates (use the selected_candidate_ids from context) rather than naming someone specific.",
+        description:
+          "For request_resume/reject_candidates: true if the command refers to 'selected'/'these' candidates (use the selected_candidate_ids from context) rather than naming someone specific.",
       },
       explanation: {
         type: "string",
-        description: "One short plain-language sentence describing what this command will do, to show the recruiter before/while it runs. If action is 'unknown', explain briefly why nothing matched.",
+        description:
+          "One short plain-language sentence describing what this command will do, to show the recruiter before/while it runs. If action is 'unknown', explain briefly why nothing matched.",
       },
     },
     required: ["action", "explanation"],
@@ -112,7 +123,8 @@ type CommandContext = {
   selected_candidate_count?: number;
 };
 
-const buildPrompt = (commandText: string, context: CommandContext) => `
+const buildPrompt = (commandText: string, context: CommandContext) =>
+  `
 A recruiter typed this into Agent H's command bar: "${commandText}"
 
 Context:
@@ -126,9 +138,13 @@ Classify this into exactly one supported action using submit_parsed_command. Res
 `.trim();
 
 const parseCommandHandler = async (req: Request) => {
-  if (req.method !== "POST") return jsonResponse({ error: "Method Not Allowed" }, 405);
+  if (req.method !== "POST")
+    return jsonResponse({ error: "Method Not Allowed" }, 405);
   if (!ANTHROPIC_API_KEY) {
-    return jsonResponse({ error: "ANTHROPIC_API_KEY is not set for this project." }, 500);
+    return jsonResponse(
+      { error: "ANTHROPIC_API_KEY is not set for this project." },
+      500,
+    );
   }
 
   let commandText: string | undefined;
@@ -142,7 +158,10 @@ const parseCommandHandler = async (req: Request) => {
   }
 
   if (!commandText || typeof commandText !== "string" || !context) {
-    return jsonResponse({ error: "command_text and context are required" }, 400);
+    return jsonResponse(
+      { error: "command_text and context are required" },
+      400,
+    );
   }
 
   const anthropicResponse = await fetch(ANTHROPIC_API_URL, {
@@ -163,22 +182,35 @@ const parseCommandHandler = async (req: Request) => {
 
   if (!anthropicResponse.ok) {
     const errorBody = await anthropicResponse.text();
-    console.error("parse-agent-command: Anthropic API error", anthropicResponse.status, errorBody);
-    return jsonResponse({ error: `Command parsing model error (${anthropicResponse.status})` }, 502);
+    console.error(
+      "parse-agent-command: Anthropic API error",
+      anthropicResponse.status,
+      errorBody,
+    );
+    return jsonResponse(
+      { error: `Command parsing model error (${anthropicResponse.status})` },
+      502,
+    );
   }
 
   const anthropicResult = await anthropicResponse.json();
-  const toolUseBlock = anthropicResult?.content?.find((b: any) => b.type === "tool_use");
+  const toolUseBlock = anthropicResult?.content?.find(
+    (b: any) => b.type === "tool_use",
+  );
   if (!toolUseBlock) {
     console.error("parse-agent-command: no tool_use block", anthropicResult);
-    return jsonResponse({ error: "Command parsing model did not return structured output" }, 502);
+    return jsonResponse(
+      { error: "Command parsing model did not return structured output" },
+      502,
+    );
   }
 
   return jsonResponse(toolUseBlock.input);
 };
 
 Deno.serve(async (req: Request) => {
-  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS_HEADERS });
+  if (req.method === "OPTIONS")
+    return new Response(null, { status: 204, headers: CORS_HEADERS });
   const authError = await requireAuth(req);
   if (authError) return authError;
   return parseCommandHandler(req);

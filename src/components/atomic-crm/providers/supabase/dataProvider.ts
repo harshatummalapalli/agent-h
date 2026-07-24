@@ -1439,6 +1439,7 @@ const getDataProviderWithCustomMethods = () => {
     ) {
       const { data, error } = await getSupabaseClient().functions.invoke<{
         action:
+          | "create_role"
           | "continue_sourcing"
           | "relax_criterion"
           | "request_resume"

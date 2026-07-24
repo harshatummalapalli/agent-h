@@ -18,12 +18,10 @@ import { OAuthConsentPage } from "@/components/supabase/oauth-consent-page";
 import candidates from "../candidates";
 import companies from "../companies";
 import contacts from "../contacts";
-import { MobileDashboard } from "../dashboard/MobileDashboard";
 import { InboxPage } from "../inbox/InboxPage";
 import { CanvasPage } from "../canvas/CanvasPage";
 import deals from "../deals";
 import { Layout } from "../layout/Layout";
-import { MobileLayout } from "../layout/MobileLayout";
 import { SignupPage } from "../login/SignupPage";
 import { ConfirmationRequired } from "../login/ConfirmationRequired";
 import { ImportPage } from "../misc/ImportPage";
@@ -279,10 +277,7 @@ const DesktopAdmin = (
           path={SourceCandidatesPage.path}
           element={<SourceCandidatesPage />}
         />
-        <Route
-          path={RoleWorkspacePage.path}
-          element={<RoleWorkspacePage />}
-        />
+        <Route path={RoleWorkspacePage.path} element={<RoleWorkspacePage />} />
         <Route path={CanvasPage.path} element={<CanvasPage />} />
       </CustomRoutes>
       <Resource name="deals" {...deals} />
@@ -324,10 +319,29 @@ const MobileAdmin = (
       client={queryClient}
       persistOptions={{ persister: asyncStoragePersister }}
     >
+      {/* Narrow-viewport fix (2026-07-24): this used to render MobileLayout
+          + MobileDashboard here -- a completely separate, pre-rebrand shell
+          (old "TalentCursor" branding, bottom-tab nav) with its own much
+          smaller route/resource tree that never got the Agent H Inbox/
+          command-bar redesign. A recruiter narrowing their browser window
+          below 768px (see useIsMobile/MOBILE_BREAKPOINT), not just an
+          actual phone, landed in a different, wrong product. Fix: render
+          the SAME Layout/InboxPage and the SAME core routes/resources
+          DesktopAdmin uses, still wrapped in this offline-first
+          PersistQueryClientProvider (genuinely useful for real mobile
+          connectivity, kept as-is) -- narrowing the window no longer
+          swaps the app out from under a recruiter, it just reflows.
+          Full native-mobile-optimized redesign of the Inbox/canvas/
+          sourcing screens themselves is separate, deferred work -- this
+          only stops showing the WRONG app, it doesn't yet make the right
+          one touch-tuned. contacts/companies/tasks keep their existing
+          mobile-optimized list/show components below since those were
+          never the wrong-product problem -- just deals/candidates and
+          the Agent H route set were missing entirely. */}
       <Admin
         queryClient={queryClient}
-        layout={props.layout ?? MobileLayout}
-        dashboard={props.dashboard ?? MobileDashboard}
+        layout={props.layout ?? Layout}
+        dashboard={props.dashboard ?? InboxPage}
         {...props}
       >
         <CustomRoutes noLayout>
@@ -353,7 +367,20 @@ const MobileAdmin = (
             element={<SettingsPageMobile />}
           />
           <Route path={ChangelogPage.path} element={<ChangelogPage />} />
+          <Route path={ImportPage.path} element={<ImportPage />} />
+          <Route path={JdIntakePage.path} element={<JdIntakePage />} />
+          <Route
+            path={SourceCandidatesPage.path}
+            element={<SourceCandidatesPage />}
+          />
+          <Route
+            path={RoleWorkspacePage.path}
+            element={<RoleWorkspacePage />}
+          />
+          <Route path={CanvasPage.path} element={<CanvasPage />} />
         </CustomRoutes>
+        <Resource name="deals" {...deals} />
+        <Resource name="candidates" {...candidates} />
         <Resource
           name="contacts"
           list={ContactListMobile}

@@ -10,10 +10,12 @@
 // hardcoded PDL-specific values were actively wrong -- every saved
 // candidate was being mislabeled regardless of which vendor actually found
 // them. Fixed here: the dedup column is renamed to source_id (migration
-// agent_h_stage3_contact_and_devsignal_enrichment), and both source and
-// sourced_via are now derived from the candidate's own _source_vendor field
-// (attached by every DiscoveryProvider's normalize function), falling back
-// to "manual" only if a candidate somehow arrives without one.
+// agent_h_stage3_contact_and_devsignal_enrichment).
+//
+// Server-side attribution (2026-07-24): _source_vendor is stripped from
+// discovery API responses before they reach the browser, so source and
+// sourced_via are resolved here from discovery_source_attribution (written
+// by source-candidates-discovery per search batch), not from client fields.
 //
 // Scope: this function only runs when a recruiter explicitly clicks "Add to
 // pipeline" on a specific PDL result in the Source Candidates screen (see
@@ -58,6 +60,11 @@
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import * as jose from "jsr:@panva/jose@6";
+import {
+  buildDiscoveryAttributionLookupPath,
+  parseAttributionVendorFromRows,
+  resolveSourcedViaFromAttributionVendor,
+} from "../source-candidates-discovery/discoverySourceAttribution.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY");
@@ -111,12 +118,6 @@ type PdlCandidate = {
   emails?: unknown;
   phone_numbers?: unknown;
   skills?: unknown;
-  // Attached by every DiscoveryProvider's normalize function (see
-  // source-candidates-discovery/index.ts) -- which vendor actually served
-  // this candidate ("coresignal", "pdl", "apollo"). Used below to tag
-  // candidates.source / deal_candidates.sourced_via correctly instead of
-  // assuming PDL.
-  _source_vendor?: string;
   // The Voyage cosine-similarity score computed at search time (see
   // SourceCandidatesPage.tsx's sortByMatchScore) -- 0..1, or absent when
   // scoring wasn't available for this result. Previously thrown away the
@@ -135,11 +136,29 @@ function matchScore(candidate: PdlCandidate): number | null {
   return typeof raw === "number" && Number.isFinite(raw) ? raw : null;
 }
 
-// Falls back to "manual" (not "pdl_search") for candidates that somehow
-// arrive without a _source_vendor tag -- a wrong-but-plausible-looking
-// vendor guess is worse than an honest "we don't know."
-function sourceLabel(candidate: PdlCandidate): string {
-  return candidate._source_vendor ? `${candidate._source_vendor}_search` : "manual";
+// Looks up the vendor that returned this source_id for the role brief's
+// current search window. Non-fatal on failure -- falls back to "manual".
+async function resolveSourcedVia(
+  dealId: number,
+  candidate: PdlCandidate,
+  authHeader: string,
+): Promise<string> {
+  if (!candidate.id) return "manual";
+
+  try {
+    const nowIso = new Date().toISOString();
+    const response = await restFetch(
+      buildDiscoveryAttributionLookupPath(dealId, candidate.id, nowIso),
+      authHeader,
+    );
+    if (!response.ok) return "manual";
+    const rows = await response.json();
+    return resolveSourcedViaFromAttributionVendor(
+      parseAttributionVendorFromRows(rows),
+    );
+  } catch {
+    return "manual";
+  }
 }
 
 async function restFetch(
@@ -233,7 +252,10 @@ async function findOrCreateCompany(
     const created = await restFetch(`companies`, authHeader, {
       method: "POST",
       headers: { Prefer: "return=representation" },
-      body: JSON.stringify({ name: companyName, relationship_type: "past_employer" }),
+      body: JSON.stringify({
+        name: companyName,
+        relationship_type: "past_employer",
+      }),
     });
     if (created.ok) {
       const rows = await created.json();
@@ -245,9 +267,15 @@ async function findOrCreateCompany(
   }
 }
 
-function splitName(candidate: PdlCandidate): { first: string | null; last: string | null } {
+function splitName(candidate: PdlCandidate): {
+  first: string | null;
+  last: string | null;
+} {
   if (candidate.first_name || candidate.last_name) {
-    return { first: candidate.first_name ?? null, last: candidate.last_name ?? null };
+    return {
+      first: candidate.first_name ?? null,
+      last: candidate.last_name ?? null,
+    };
   }
   if (!candidate.full_name) return { first: null, last: null };
   const parts = candidate.full_name.trim().split(/\s+/);
@@ -290,12 +318,20 @@ const saveSourcedCandidate = async (req: Request) => {
   }
 
   try {
+    const sourcedVia = await resolveSourcedVia(
+      roleBriefId,
+      candidate,
+      authHeader,
+    );
     let candidateId = await findExistingCandidate(candidate, authHeader);
     let created = false;
 
     if (!candidateId) {
       const { first, last } = splitName(candidate);
-      const companyId = await findOrCreateCompany(candidate.job_company_name, authHeader);
+      const companyId = await findOrCreateCompany(
+        candidate.job_company_name,
+        authHeader,
+      );
 
       const insertResponse = await restFetch(`candidates`, authHeader, {
         method: "POST",
@@ -309,7 +345,7 @@ const saveSourcedCandidate = async (req: Request) => {
           email_jsonb: candidate.emails ?? null,
           phone_jsonb: candidate.phone_numbers ?? null,
           source_id: candidate.id ?? null,
-          source: sourceLabel(candidate),
+          source: sourcedVia,
           status: "sourced",
           source_raw: candidate,
         }),
@@ -327,9 +363,14 @@ const saveSourcedCandidate = async (req: Request) => {
         // with a conflict. Treat that as "already exists" and re-look it up,
         // instead of surfacing a 500 for what is actually a harmless race.
         const errorBody = await insertResponse.text();
-        const isConflict = insertResponse.status === 409 || errorBody.includes("23505");
+        const isConflict =
+          insertResponse.status === 409 || errorBody.includes("23505");
         if (!isConflict) {
-          console.error("candidate insert failed", insertResponse.status, errorBody);
+          console.error(
+            "candidate insert failed",
+            insertResponse.status,
+            errorBody,
+          );
           return jsonResponse({ error: "Failed to save candidate" }, 502);
         }
         candidateId = await findExistingCandidate(candidate, authHeader);
@@ -348,15 +389,22 @@ const saveSourcedCandidate = async (req: Request) => {
       body: JSON.stringify({
         deal_id: roleBriefId,
         candidate_id: candidateId,
-        sourced_via: sourceLabel(candidate),
+        sourced_via: sourcedVia,
         match_score: matchScore(candidate),
       }),
     });
 
     if (!linkResponse.ok) {
       const errorBody = await linkResponse.text();
-      console.error("deal_candidates link failed", linkResponse.status, errorBody);
-      return jsonResponse({ error: "Saved candidate but failed to link to role brief" }, 502);
+      console.error(
+        "deal_candidates link failed",
+        linkResponse.status,
+        errorBody,
+      );
+      return jsonResponse(
+        { error: "Saved candidate but failed to link to role brief" },
+        502,
+      );
     }
 
     return jsonResponse({

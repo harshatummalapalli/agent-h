@@ -77,6 +77,11 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import * as jose from "jsr:@panva/jose@6";
 import { buildCrustdataFilters } from "./crustdataQueryBuilder.ts";
 import type { CrustdataSearchCriteria } from "./crustdataQueryBuilder.ts";
+import {
+  buildDiscoveryAttributionRows,
+  isDiscoverySearchContinuation,
+  stripVendorFieldsForClient,
+} from "./discoverySourceAttribution.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
 // SUPABASE_URL and SUPABASE_ANON_KEY are auto-injected into every Supabase
@@ -272,15 +277,7 @@ const jsonResponse = (data: unknown, status = 200) =>
   });
 
 // Drops vendor-identifying fields before candidates leave this edge function.
-// Normalizers still attach `_source_vendor` so in-function work (and any
-// server-side save path that receives the full record) can attribute
-// sourced_via correctly -- the browser/DevTools payload must not carry it.
-function stripVendorFieldsForClient(
-  candidate: Record<string, unknown>,
-): Record<string, unknown> {
-  const { _source_vendor: _omit, ...clientCandidate } = candidate;
-  return clientCandidate;
-}
+// Implemented in discoverySourceAttribution.ts (Vitest-covered).
 
 async function requireAuth(req: Request): Promise<Response | null> {
   const authHeader = req.headers.get("authorization");
@@ -453,6 +450,70 @@ async function annotateAlreadySaved(
     }
   } catch (error) {
     console.error("annotateAlreadySaved failed (non-fatal)", error);
+  }
+}
+
+// Server-side vendor attribution (2026-07-24): persist source_id -> vendor
+// before stripVendorFieldsForClient removes _source_vendor from the client
+// payload. Cleared on a fresh search; merged on scroll continuation. Skipped
+// for preview calls. Best-effort -- save-sourced-candidate falls back to
+// "manual" if a row is missing.
+async function persistDiscoverySourceAttribution(
+  dealId: number,
+  vendor: string,
+  candidates: Array<Record<string, unknown>>,
+  authHeader: string,
+  isContinuation: boolean,
+): Promise<void> {
+  const rows = buildDiscoveryAttributionRows(dealId, vendor, candidates);
+  if (rows.length === 0) return;
+
+  const headers = {
+    apikey: SUPABASE_ANON_KEY ?? "",
+    Authorization: authHeader,
+    "Content-Type": "application/json",
+  };
+
+  try {
+    if (!isContinuation) {
+      const deleteResponse = await fetch(
+        `${SUPABASE_URL}/rest/v1/discovery_source_attribution?deal_id=eq.${dealId}`,
+        { method: "DELETE", headers },
+      );
+      if (!deleteResponse.ok) {
+        console.error(
+          "discovery source attribution clear failed (non-fatal)",
+          deleteResponse.status,
+          await deleteResponse.text(),
+        );
+        return;
+      }
+    }
+
+    const upsertResponse = await fetch(
+      `${SUPABASE_URL}/rest/v1/discovery_source_attribution?on_conflict=tenant_id,deal_id,source_id`,
+      {
+        method: "POST",
+        headers: {
+          ...headers,
+          Prefer: "resolution=merge-duplicates",
+        },
+        body: JSON.stringify(rows),
+      },
+    );
+
+    if (!upsertResponse.ok) {
+      console.error(
+        "discovery source attribution upsert failed (non-fatal)",
+        upsertResponse.status,
+        await upsertResponse.text(),
+      );
+    }
+  } catch (error) {
+    console.error(
+      "persistDiscoverySourceAttribution failed (non-fatal)",
+      error,
+    );
   }
 }
 
@@ -3396,6 +3457,23 @@ const discoverCandidates = async (body: any, authHeader: string) => {
       } catch (error) {
         console.error("scroll position cache write failed (non-fatal)", error);
       }
+    }
+
+    if (!isPreview) {
+      const isContinuation = isDiscoverySearchContinuation({
+        scrollToken,
+        isPreview,
+        cachedScrollQuery: roleBrief.role_brief_last_scroll_query,
+        cachedScrollToken: roleBrief.role_brief_last_scroll_token,
+        queryText: result.queryText,
+      });
+      await persistDiscoverySourceAttribution(
+        roleBrief.id,
+        providerName,
+        candidates,
+        authHeader,
+        isContinuation,
+      );
     }
 
     return jsonResponse({

@@ -75,6 +75,8 @@
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import * as jose from "jsr:@panva/jose@6";
+import { buildCrustdataFilters } from "./crustdataQueryBuilder.ts";
+import type { CrustdataSearchCriteria } from "./crustdataQueryBuilder.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
 // SUPABASE_URL and SUPABASE_ANON_KEY are auto-injected into every Supabase
@@ -161,7 +163,8 @@ const PDL_SEARCH_URL = "https://api.peopledatalabs.com/v5/person/search";
 //   the way PDL's `total` does. Notes below disclose this rather than
 //   silently showing a wrong or fabricated total.
 const APOLLO_API_KEY = Deno.env.get("APOLLO_API_KEY");
-const APOLLO_SEARCH_URL = "https://api.apollo.io/api/v1/mixed_people/api_search";
+const APOLLO_SEARCH_URL =
+  "https://api.apollo.io/api/v1/mixed_people/api_search";
 const APOLLO_BULK_MATCH_URL = "https://api.apollo.io/api/v1/people/bulk_match";
 
 const CORESIGNAL_API_KEY = Deno.env.get("CORESIGNAL_API_KEY");
@@ -180,6 +183,41 @@ const CORESIGNAL_SEARCH_PREVIEW_URL =
 // results the recruiter already sees.
 const CORESIGNAL_SEARCH_URL =
   "https://api.coresignal.com/cdapi/v2/employee_multi_source/search/es_dsl";
+
+// Crustdata (2026-07-23): a second, pluggable candidate-discovery provider
+// added alongside Coresignal -- NOT a decision that Crustdata has won any
+// vendor comparison, this is deliberately built for optionality: switch
+// vendors under a pricing crunch, fall back automatically if Coresignal
+// degrades or runs out of credits, or hedge against either vendor's future
+// plan/pricing changes. See the DISCOVERY_PROVIDERS header comment below for
+// exactly how it's wired in (same "config-driven priority list, one line to
+// enable/disable" mechanism already used for pdlProvider/apolloProvider).
+//
+// API shape confirmed directly against Crustdata's live OpenAPI spec
+// (docs.crustdata.com/api-reference/person-apis/search-people-using-filters-
+// and-sorting) AND live API testing this session, not docs-only -- see
+// crustdataQueryBuilder.ts's header comment for the full confirmation trail,
+// including a disclosed operator-set discrepancy between what live testing
+// observed and what the current spec documents.
+//   POST https://api.crustdata.com/person/search
+//   Header: Authorization: Bearer <CRUSTDATA_API_KEY>, x-api-version: 2025-11-01
+//   Body: { filters: <condition | condition group>, limit, cursor? }
+//   Response: { profiles: [...], next_cursor, total_count }
+// No hard result-count cap observed (a broad query returned total_count:
+// 1,105,055 during live testing) -- unlike Unipile's LinkedIn-session-based
+// 1,000 cap.
+//
+// Enrichment note (out of scope for this discovery function, flagged for
+// whoever builds Crustdata enrichment next): /person/enrich (base profile)
+// worked in live testing, but /person/contact/enrich (personal email/phone)
+// returned a hard 403 permission_error on the trial key tested -- personal
+// contact enrichment appears plan-gated, not something to assume is
+// available. Any future Crustdata enrichment integration (mirroring
+// enrich-candidate-contact/enrich-candidate-devsignals) should degrade to
+// base-profile-only enrichment rather than assume contact data will unlock.
+const CRUSTDATA_API_KEY = Deno.env.get("CRUSTDATA_API_KEY");
+const CRUSTDATA_SEARCH_URL = "https://api.crustdata.com/person/search";
+const CRUSTDATA_API_VERSION = "2025-11-01";
 
 // Checkpoint 3c: Voyage AI embeddings, used to semantically rank the batch
 // of PDL hits against the role brief. Confirmed directly against Voyage's
@@ -345,7 +383,11 @@ async function fetchRoleBrief(
   });
 
   if (!response.ok) {
-    console.error("fetchRoleBrief failed", response.status, await response.text());
+    console.error(
+      "fetchRoleBrief failed",
+      response.status,
+      await response.text(),
+    );
     return null;
   }
 
@@ -387,11 +429,13 @@ async function annotateAlreadySaved(
     });
     if (!response.ok) return;
 
-    const rows: Array<{ id: number; source_id: string }> = await response.json();
+    const rows: Array<{ id: number; source_id: string }> =
+      await response.json();
     const savedBySourceId = new Map(rows.map((r) => [r.source_id, r.id]));
 
     for (const candidate of candidates) {
-      const sourceId = typeof candidate.id === "string" ? candidate.id : undefined;
+      const sourceId =
+        typeof candidate.id === "string" ? candidate.id : undefined;
       const savedId = sourceId ? savedBySourceId.get(sourceId) : undefined;
       candidate._already_saved = savedId !== undefined;
       candidate._candidate_id = savedId ?? null;
@@ -498,7 +542,8 @@ function buildRoleBriefEmbeddingText(brief: RoleBrief): string {
   if (brief.jd_text) parts.push(brief.jd_text);
   if (brief.industry) parts.push(`Industry: ${brief.industry}`);
   if (brief.seniority) parts.push(`Seniority: ${brief.seniority}`);
-  if (brief.employment_type) parts.push(`Employment type: ${brief.employment_type}`);
+  if (brief.employment_type)
+    parts.push(`Employment type: ${brief.employment_type}`);
   if (brief.required_skills?.length) {
     parts.push(`Required skills: ${brief.required_skills.join(", ")}`);
   }
@@ -516,7 +561,9 @@ function buildRoleBriefEmbeddingText(brief: RoleBrief): string {
 // contact fields (full_name, emails, linkedin_url) -- those identify the
 // person but don't carry match-relevant signal, and there's no reason to
 // send more personal data to a third-party API than the scoring needs.
-function buildCandidateEmbeddingText(candidate: Record<string, unknown>): string {
+function buildCandidateEmbeddingText(
+  candidate: Record<string, unknown>,
+): string {
   const parts: string[] = [];
   if (typeof candidate.job_title === "string") parts.push(candidate.job_title);
   if (typeof candidate.job_company_name === "string") {
@@ -557,11 +604,14 @@ async function embedTexts(
 
   if (!response.ok) {
     const errorBody = await response.text();
-    throw new Error(`Voyage embeddings call failed (${response.status}): ${errorBody}`);
+    throw new Error(
+      `Voyage embeddings call failed (${response.status}): ${errorBody}`,
+    );
   }
 
   const result = await response.json();
-  const data: Array<{ embedding: number[]; index: number }> = result?.data ?? [];
+  const data: Array<{ embedding: number[]; index: number }> =
+    result?.data ?? [];
   return data
     .slice()
     .sort((a, b) => a.index - b.index)
@@ -691,7 +741,9 @@ async function expandTitle(title: string): Promise<string[]> {
   );
   const titles = toolUseBlock?.input?.titles;
   if (!Array.isArray(titles) || titles.length === 0) return [title];
-  return titles.filter((t): t is string => typeof t === "string" && t.length > 0);
+  return titles.filter(
+    (t): t is string => typeof t === "string" && t.length > 0,
+  );
 }
 
 // Cache-or-expand, same pattern as getOrRefreshRoleBriefEmbedding: reuses
@@ -751,12 +803,16 @@ async function scoreAndSortCandidates(
   const candidateVectors = await embedTexts(candidateTexts, "document");
 
   candidates.forEach((candidate, i) => {
-    candidate._match_score = Math.round(dotProduct(roleBriefVector, candidateVectors[i]) * 1000) / 1000;
+    candidate._match_score =
+      Math.round(dotProduct(roleBriefVector, candidateVectors[i]) * 1000) /
+      1000;
   });
 
   candidates.sort((a, b) => {
-    const scoreA = typeof a._match_score === "number" ? a._match_score : -Infinity;
-    const scoreB = typeof b._match_score === "number" ? b._match_score : -Infinity;
+    const scoreA =
+      typeof a._match_score === "number" ? a._match_score : -Infinity;
+    const scoreB =
+      typeof b._match_score === "number" ? b._match_score : -Infinity;
     return scoreB - scoreA;
   });
 }
@@ -931,7 +987,9 @@ function buildPdlQuery(
     // parameter is off the table). This is what lets a candidate match on
     // ANY of the expanded title synonyms, not just the literal title text.
     if (criteria.titles.length === 1) {
-      must.push({ match_phrase: { job_title: criteria.titles[0].toLowerCase() } });
+      must.push({
+        match_phrase: { job_title: criteria.titles[0].toLowerCase() },
+      });
     } else {
       must.push({
         bool: {
@@ -945,7 +1003,9 @@ function buildPdlQuery(
       );
     }
   } else {
-    notes.push("No role title on this role brief -- title not used in the query.");
+    notes.push(
+      "No role title on this role brief -- title not used in the query.",
+    );
   }
 
   if (criteria.location && !REMOTE_PATTERN.test(criteria.location)) {
@@ -957,7 +1017,9 @@ function buildPdlQuery(
     const locality = criteria.location.split(",")[0].trim().toLowerCase();
     must.push({ term: { location_locality: locality } });
   } else if (criteria.location) {
-    notes.push("Role marked remote/location-flexible -- no location constraint applied.");
+    notes.push(
+      "Role marked remote/location-flexible -- no location constraint applied.",
+    );
   }
 
   if (criteria.requiredSkills && criteria.requiredSkills.length > 0) {
@@ -993,7 +1055,9 @@ function buildPdlQuery(
       notes.push(`Requiring skill: "${topSkill}".`);
     }
   } else {
-    notes.push("No required skills on this role brief -- skills not used in the query.");
+    notes.push(
+      "No required skills on this role brief -- skills not used in the query.",
+    );
   }
 
   if (options.useSeniority && criteria.seniority) {
@@ -1012,7 +1076,9 @@ function buildPdlQuery(
   } else if (criteria.seniority) {
     notes.push("Seniority not applied for this broader search pass.");
   } else {
-    notes.push("No seniority on this role brief -- seniority not used in the query.");
+    notes.push(
+      "No seniority on this role brief -- seniority not used in the query.",
+    );
   }
 
   const bool: Record<string, unknown> = { must };
@@ -1168,10 +1234,7 @@ async function executeQuery(
   // valid for repeated use with its original query).
   let effectiveScrollToken = options.scrollToken;
   if (!effectiveScrollToken && !options.isPreview) {
-    if (
-      options.cachedScrollToken &&
-      options.cachedScrollQuery === queryText
-    ) {
+    if (options.cachedScrollToken && options.cachedScrollQuery === queryText) {
       effectiveScrollToken = options.cachedScrollToken;
       notes.push(
         "Continuing from where this role brief's search left off last time -- not starting over from the top.",
@@ -1207,9 +1270,9 @@ async function executeQuery(
 
   if (!isZeroResults && (!pdlResponse.ok || pdlResult?.status >= 400)) {
     throw new Error(
-      `PDL API error (${pdlResult?.status ?? pdlResponse.status}): ${
-        JSON.stringify(pdlResult?.error ?? pdlResult)
-      }`,
+      `PDL API error (${pdlResult?.status ?? pdlResponse.status}): ${JSON.stringify(
+        pdlResult?.error ?? pdlResult,
+      )}`,
     );
   }
 
@@ -1276,7 +1339,9 @@ const pdlProvider: DiscoveryProvider = {
 // given search. `_source_vendor` is added purely for the side-by-side
 // comparison test (task: "test the results on the same jobs") -- not used
 // by any existing logic.
-function normalizeApolloCandidate(raw: Record<string, unknown>): Record<string, unknown> {
+function normalizeApolloCandidate(
+  raw: Record<string, unknown>,
+): Record<string, unknown> {
   const org = (raw.organization ?? {}) as Record<string, unknown>;
   const firstName = typeof raw.first_name === "string" ? raw.first_name : "";
   // Enriched (bulk_match) responses have a real last_name; un-enriched
@@ -1286,8 +1351,8 @@ function normalizeApolloCandidate(raw: Record<string, unknown>): Record<string, 
     typeof raw.last_name === "string"
       ? raw.last_name
       : typeof raw.last_name_obfuscated === "string"
-      ? raw.last_name_obfuscated
-      : "";
+        ? raw.last_name_obfuscated
+        : "";
   const cityLike = [raw.city, raw.state, raw.country]
     .filter((v): v is string => typeof v === "string" && v.length > 0)
     .join(", ");
@@ -1304,7 +1369,8 @@ function normalizeApolloCandidate(raw: Record<string, unknown>): Record<string, 
     // skills field, so this is always empty for Apollo candidates -- the
     // recruiter sees an honest blank rather than a fabricated skills list.
     skills: [],
-    linkedin_url: typeof raw.linkedin_url === "string" ? raw.linkedin_url : null,
+    linkedin_url:
+      typeof raw.linkedin_url === "string" ? raw.linkedin_url : null,
     _source_vendor: "apollo",
   };
 }
@@ -1337,7 +1403,9 @@ function normalizeApolloCandidate(raw: Record<string, unknown>): Record<string, 
 // href={`https://${candidate.linkedin_url}`} construction in
 // SourceCandidatesPage.tsx, which all assume no scheme is present) -- still
 // stripped below so it matches that bare-domain convention.
-function normalizeCoresignalCandidate(raw: Record<string, unknown>): Record<string, unknown> {
+function normalizeCoresignalCandidate(
+  raw: Record<string, unknown>,
+): Record<string, unknown> {
   const rawLinkedinUrl =
     typeof raw.linkedin_url === "string" ? raw.linkedin_url : null;
   return {
@@ -1347,15 +1415,16 @@ function normalizeCoresignalCandidate(raw: Record<string, unknown>): Record<stri
       typeof raw.active_experience_title === "string"
         ? raw.active_experience_title
         : typeof raw.headline === "string"
-        ? raw.headline
-        : null,
-    job_company_name: typeof raw.company_name === "string" ? raw.company_name : null,
+          ? raw.headline
+          : null,
+    job_company_name:
+      typeof raw.company_name === "string" ? raw.company_name : null,
     location_name:
       typeof raw.location_full === "string"
         ? raw.location_full
         : typeof raw.location_country === "string"
-        ? raw.location_country
-        : null,
+          ? raw.location_country
+          : null,
     // inferred_skills isn't part of the preview response's denormalized
     // field set (see header note) -- left empty rather than guessed here;
     // a later checkpoint could add a follow-up "collect" call per shown
@@ -1388,16 +1457,22 @@ const apolloProvider: DiscoveryProvider = {
     if (criteria.titles && criteria.titles.length > 0) {
       body.person_titles = criteria.titles;
       if (criteria.titles.length > 1) {
-        notes.push(`Searching ${criteria.titles.length} equivalent titles: ${criteria.titles.join(", ")}.`);
+        notes.push(
+          `Searching ${criteria.titles.length} equivalent titles: ${criteria.titles.join(", ")}.`,
+        );
       }
     } else {
-      notes.push("No role title on this role brief -- title not used in the query.");
+      notes.push(
+        "No role title on this role brief -- title not used in the query.",
+      );
     }
 
     if (criteria.location && !REMOTE_PATTERN.test(criteria.location)) {
       body.person_locations = [criteria.location];
     } else if (criteria.location) {
-      notes.push("Role marked remote/location-flexible -- no location constraint applied.");
+      notes.push(
+        "Role marked remote/location-flexible -- no location constraint applied.",
+      );
     }
 
     if (criteria.requiredSkills && criteria.requiredSkills.length > 0) {
@@ -1444,8 +1519,12 @@ const apolloProvider: DiscoveryProvider = {
       );
     }
 
-    const rawPeople: Array<Record<string, unknown>> = searchResult?.people ?? [];
-    const total = searchResult?.pagination?.total_entries ?? searchResult?.total_entries ?? 0;
+    const rawPeople: Array<Record<string, unknown>> =
+      searchResult?.people ?? [];
+    const total =
+      searchResult?.pagination?.total_entries ??
+      searchResult?.total_entries ??
+      0;
 
     if (rawPeople.length === 0) {
       return { candidates: [], total, scrollToken: null, queryText, notes };
@@ -1477,14 +1556,20 @@ const apolloProvider: DiscoveryProvider = {
         if (matches.length > 0) {
           enriched = matches;
         } else {
-          notes.push("Apollo enrichment returned no matches -- showing obfuscated search results instead.");
+          notes.push(
+            "Apollo enrichment returned no matches -- showing obfuscated search results instead.",
+          );
         }
       } else {
-        notes.push("Apollo enrichment call failed -- showing obfuscated search results instead (names/locations masked).");
+        notes.push(
+          "Apollo enrichment call failed -- showing obfuscated search results instead (names/locations masked).",
+        );
       }
     } catch (error) {
       console.error("Apollo bulk_match enrichment failed (non-fatal)", error);
-      notes.push("Apollo enrichment call failed -- showing obfuscated search results instead (names/locations masked).");
+      notes.push(
+        "Apollo enrichment call failed -- showing obfuscated search results instead (names/locations masked).",
+      );
     }
 
     return {
@@ -1663,7 +1748,12 @@ const coresignalProvider: DiscoveryProvider = {
     if (criteria.titles && criteria.titles.length > 0) {
       if (criteria.titles.length === 1) {
         must.push({
-          match: { active_experience_title: { query: criteria.titles[0], operator: "and" } },
+          match: {
+            active_experience_title: {
+              query: criteria.titles[0],
+              operator: "and",
+            },
+          },
         });
       } else {
         must.push({
@@ -1674,10 +1764,14 @@ const coresignalProvider: DiscoveryProvider = {
             minimum_should_match: 1,
           },
         });
-        notes.push(`Searching ${criteria.titles.length} equivalent titles: ${criteria.titles.join(", ")}.`);
+        notes.push(
+          `Searching ${criteria.titles.length} equivalent titles: ${criteria.titles.join(", ")}.`,
+        );
       }
     } else {
-      notes.push("No role title on this role brief -- title not used in the query.");
+      notes.push(
+        "No role title on this role brief -- title not used in the query.",
+      );
     }
 
     // --- Hard filter: location, fixed to use flat root-level fields ---
@@ -1696,7 +1790,9 @@ const coresignalProvider: DiscoveryProvider = {
         `Requiring location "${city}" (matched against Coresignal's flat location_city/location_full fields -- fixed from a bug where the query filtered on a nested "experience.is_current" field that doesn't exist in Coresignal's real schema, which silently zeroed out every search).`,
       );
     } else if (criteria.location) {
-      notes.push("Role marked remote/location-flexible -- no location constraint applied.");
+      notes.push(
+        "Role marked remote/location-flexible -- no location constraint applied.",
+      );
     }
     // --- Hard filter: majority of the top required skills, not all of
     // them and not just one -- see header comment for why. ---
@@ -1755,7 +1851,9 @@ const coresignalProvider: DiscoveryProvider = {
         );
       }
     } else {
-      notes.push("No required skills on this role brief -- skills not used in the query.");
+      notes.push(
+        "No required skills on this role brief -- skills not used in the query.",
+      );
     }
 
     // --- Hard filter (range, not a should): total years of experience.
@@ -1778,13 +1876,23 @@ const coresignalProvider: DiscoveryProvider = {
     let effectiveYearsMax = criteria.yearsExperienceMax ?? null;
     if (criteria.learnedCriteria) {
       for (const lc of criteria.learnedCriteria) {
-        if (lc.criterionType === "years_experience_min" && typeof lc.value.years === "number") {
+        if (
+          lc.criterionType === "years_experience_min" &&
+          typeof lc.value.years === "number"
+        ) {
           effectiveYearsMin =
-            effectiveYearsMin !== null ? Math.max(effectiveYearsMin, lc.value.years) : lc.value.years;
+            effectiveYearsMin !== null
+              ? Math.max(effectiveYearsMin, lc.value.years)
+              : lc.value.years;
         }
-        if (lc.criterionType === "years_experience_max" && typeof lc.value.years === "number") {
+        if (
+          lc.criterionType === "years_experience_max" &&
+          typeof lc.value.years === "number"
+        ) {
           effectiveYearsMax =
-            effectiveYearsMax !== null ? Math.min(effectiveYearsMax, lc.value.years) : lc.value.years;
+            effectiveYearsMax !== null
+              ? Math.min(effectiveYearsMax, lc.value.years)
+              : lc.value.years;
         }
       }
     }
@@ -1848,7 +1956,9 @@ const coresignalProvider: DiscoveryProvider = {
         );
       }
     } else {
-      notes.push("No industry on this role brief -- industry not used in the query.");
+      notes.push(
+        "No industry on this role brief -- industry not used in the query.",
+      );
     }
 
     // --- Soft signal: seniority. Moved from a hard "must" (v1) to a
@@ -1876,14 +1986,19 @@ const coresignalProvider: DiscoveryProvider = {
         );
       }
     } else {
-      notes.push("No seniority on this role brief -- seniority not used in the query.");
+      notes.push(
+        "No seniority on this role brief -- seniority not used in the query.",
+      );
     }
 
     // --- Soft signal: nice-to-have keywords, light score boosts only
     // (no operator:"and" -- these are meant to be loose, unlike the hard
     // required-skills filter above). ---
     if (criteria.niceToHaveKeywords && criteria.niceToHaveKeywords.length > 0) {
-      const boosted = criteria.niceToHaveKeywords.slice(0, CORESIGNAL_NICE_TO_HAVE_BOOST_COUNT);
+      const boosted = criteria.niceToHaveKeywords.slice(
+        0,
+        CORESIGNAL_NICE_TO_HAVE_BOOST_COUNT,
+      );
       for (const keyword of boosted) {
         should.push({ match: { inferred_skills: { query: keyword } } });
       }
@@ -1954,17 +2069,37 @@ const coresignalProvider: DiscoveryProvider = {
           must.push({
             bool: {
               should: [
-                { match: { inferred_skills: { query: lc.value.keyword, operator: "and" } } },
-                { match: { active_experience_title: { query: lc.value.keyword, operator: "and" } } },
+                {
+                  match: {
+                    inferred_skills: {
+                      query: lc.value.keyword,
+                      operator: "and",
+                    },
+                  },
+                },
+                {
+                  match: {
+                    active_experience_title: {
+                      query: lc.value.keyword,
+                      operator: "and",
+                    },
+                  },
+                },
               ],
               minimum_should_match: 1,
             },
           });
         } else if (lc.criterionType === "exclude_keyword" && lc.value.keyword) {
-          mustNot.push({ match: { inferred_skills: { query: lc.value.keyword } } });
-          mustNot.push({ match: { active_experience_title: { query: lc.value.keyword } } });
+          mustNot.push({
+            match: { inferred_skills: { query: lc.value.keyword } },
+          });
+          mustNot.push({
+            match: { active_experience_title: { query: lc.value.keyword } },
+          });
         }
-        notes.push(`Learned criterion applied (from calibration feedback): ${lc.label}`);
+        notes.push(
+          `Learned criterion applied (from calibration feedback): ${lc.label}`,
+        );
       }
     }
 
@@ -1991,7 +2126,11 @@ const coresignalProvider: DiscoveryProvider = {
             bool: {
               must: [
                 { term: { "experience.active_experience": 1 } },
-                { match: { "experience.company_industry": criteria.companyType } },
+                {
+                  match: {
+                    "experience.company_industry": criteria.companyType,
+                  },
+                },
               ],
             },
           },
@@ -2084,7 +2223,16 @@ const coresignalProvider: DiscoveryProvider = {
             path: "experience",
             query: {
               bool: {
-                must: [{ match: { "experience.position_title": { query: title, operator: "and" } } }],
+                must: [
+                  {
+                    match: {
+                      "experience.position_title": {
+                        query: title,
+                        operator: "and",
+                      },
+                    },
+                  },
+                ],
               },
             },
           },
@@ -2114,21 +2262,28 @@ const coresignalProvider: DiscoveryProvider = {
 
     const query = { query: { bool } };
     const queryText = JSON.stringify(query);
-    const page = options.scrollToken ? JSON.parse(options.scrollToken).page ?? 1 : 1;
+    const page = options.scrollToken
+      ? (JSON.parse(options.scrollToken).page ?? 1)
+      : 1;
 
-    const response = await fetch(`${CORESIGNAL_SEARCH_PREVIEW_URL}?page=${page}`, {
-      method: "POST",
-      headers: {
-        accept: "application/json",
-        apikey: CORESIGNAL_API_KEY!,
-        "Content-Type": "application/json",
+    const response = await fetch(
+      `${CORESIGNAL_SEARCH_PREVIEW_URL}?page=${page}`,
+      {
+        method: "POST",
+        headers: {
+          accept: "application/json",
+          apikey: CORESIGNAL_API_KEY!,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(query),
       },
-      body: JSON.stringify(query),
-    });
+    );
     const result = await response.json();
 
     if (!response.ok) {
-      throw new Error(`Coresignal API error (${response.status}): ${JSON.stringify(result)}`);
+      throw new Error(
+        `Coresignal API error (${response.status}): ${JSON.stringify(result)}`,
+      );
     }
 
     // Defensive parsing: Coresignal's docs show the preview endpoint
@@ -2136,9 +2291,11 @@ const coresignalProvider: DiscoveryProvider = {
     // confirmed against a real response yet -- also accept a { data: [...] }
     // or { hits: [...] } wrapper rather than assume and break on the first
     // real call.
-    const allRawCandidates: Array<Record<string, unknown>> = Array.isArray(result)
+    const allRawCandidates: Array<Record<string, unknown>> = Array.isArray(
+      result,
+    )
       ? result
-      : result?.data ?? result?.hits ?? [];
+      : (result?.data ?? result?.hits ?? []);
 
     // Preview-size fix: the preview endpoint's docs only confirm a `page`
     // param -- no documented `items_per_page` equivalent -- and it was
@@ -2175,7 +2332,178 @@ const coresignalProvider: DiscoveryProvider = {
       candidates: rawCandidates.map(normalizeCoresignalCandidate),
       total: rawCandidates.length,
       totalMatches,
-      scrollToken: allRawCandidates.length > 0 ? JSON.stringify({ page: page + 1 }) : null,
+      scrollToken:
+        allRawCandidates.length > 0 ? JSON.stringify({ page: page + 1 }) : null,
+      queryText,
+      notes,
+    };
+  },
+};
+
+// Normalizes a Crustdata /person/search profile into the same common
+// candidate shape every other provider normalizes into (see
+// normalizeCoresignalCandidate's header comment for why). Field names below
+// come from the live-fetched PersonSearch response schema, not guessed --
+// note the response's OWN field names sometimes differ from the FILTER dot-
+// paths used to query for them (e.g. the filter path is
+// "experience.employment_details.current.company_name" but the response
+// object's key for that same value is just "name" -- confirmed directly in
+// the fetched schema's PersonEmploymentDetails example: { name: "Retool",
+// title: "Founder, CEO", ... }).
+function normalizeCrustdataCandidate(
+  raw: Record<string, unknown>,
+): Record<string, unknown> {
+  const basicProfile = (raw.basic_profile ?? {}) as Record<string, unknown>;
+  const experience = (raw.experience ?? {}) as Record<string, unknown>;
+  const employmentDetails = (experience.employment_details ?? {}) as Record<
+    string,
+    unknown
+  >;
+  const currentPositions = Array.isArray(employmentDetails.current)
+    ? (employmentDetails.current as Array<Record<string, unknown>>)
+    : [];
+  const currentPosition = currentPositions[0] ?? {};
+
+  const location = (basicProfile.location ?? {}) as Record<string, unknown>;
+  const locationName =
+    typeof location.raw === "string" && location.raw.length > 0
+      ? location.raw
+      : [location.city, location.state, location.country]
+          .filter((v): v is string => typeof v === "string" && v.length > 0)
+          .join(", ") || null;
+
+  const socialHandles = (raw.social_handles ?? {}) as Record<string, unknown>;
+  const professionalNetworkIdentifier =
+    (socialHandles.professional_network_identifier ?? {}) as Record<
+      string,
+      unknown
+    >;
+  const rawLinkedinUrl =
+    typeof professionalNetworkIdentifier.profile_url === "string"
+      ? professionalNetworkIdentifier.profile_url
+      : null;
+
+  return {
+    id:
+      typeof raw.crustdata_person_id === "number" ||
+      typeof raw.crustdata_person_id === "string"
+        ? String(raw.crustdata_person_id)
+        : "",
+    full_name: typeof basicProfile.name === "string" ? basicProfile.name : null,
+    job_title:
+      typeof basicProfile.current_title === "string"
+        ? basicProfile.current_title
+        : typeof currentPosition.title === "string"
+          ? currentPosition.title
+          : null,
+    job_company_name:
+      typeof currentPosition.name === "string" ? currentPosition.name : null,
+    location_name: locationName,
+    // skills.professional_network_skills isn't part of the default response
+    // field set (the "fields" request param would need to explicitly ask
+    // for it) -- left empty rather than guessed, same disclosed-gap
+    // treatment as normalizeCoresignalCandidate's skills field above.
+    skills: [],
+    linkedin_url: rawLinkedinUrl
+      ? rawLinkedinUrl.replace(/^https?:\/\//i, "")
+      : null,
+    _source_vendor: "crustdata",
+  };
+}
+
+// Crustdata provider. Query construction (mapping DiscoveryCriteria onto
+// Crustdata's filter language) lives in crustdataQueryBuilder.ts, kept
+// separate from this HTTP-calling code so it can be unit-tested under
+// Vitest without needing Deno -- see that file's header comment for the
+// full rationale and the confirmed API-shape/gotcha details. This function
+// is the thin HTTP wrapper: build filters, call /person/search, normalize
+// the response -- same shape as pdlProvider.search/coresignalProvider.search.
+const crustdataProvider: DiscoveryProvider = {
+  name: "crustdata",
+  isConfigured: () => Boolean(CRUSTDATA_API_KEY),
+  async search(criteria, options) {
+    const searchCriteria: CrustdataSearchCriteria = {
+      titles: criteria.titles,
+      location: criteria.location,
+      requiredSkills: criteria.requiredSkills,
+      seniority: criteria.seniority,
+      yearsExperienceMin: criteria.yearsExperienceMin,
+      yearsExperienceMax: criteria.yearsExperienceMax,
+      excludedCompanies: criteria.excludedCompanies,
+      exclusionKeywords: criteria.exclusionKeywords,
+      pastTitles: criteria.pastTitles,
+      pastCompanies: criteria.pastCompanies,
+      companySizeMin: criteria.companySizeMin,
+      companySizeMax: criteria.companySizeMax,
+      learnedCriteria: criteria.learnedCriteria,
+    };
+
+    const { filters, notes } = buildCrustdataFilters(searchCriteria, {
+      useSeniority: true,
+    });
+
+    if (!filters) {
+      throw new DiscoveryConfigError(
+        "This role brief doesn't have enough information (title or location) to search Crustdata yet.",
+      );
+    }
+
+    const queryText = JSON.stringify(filters);
+
+    // "Resume search position" fix, same pattern as executeQuery (PDL) --
+    // reuse the cached cursor only when this role brief's last Crustdata
+    // query was byte-for-byte the same one that cursor was issued against.
+    let cursor: string | undefined = options.scrollToken;
+    if (!cursor && !options.isPreview) {
+      if (
+        options.cachedScrollToken &&
+        options.cachedScrollQuery === queryText
+      ) {
+        cursor = options.cachedScrollToken;
+        notes.push(
+          "Continuing from where this role brief's search left off last time -- not starting over from the top.",
+        );
+      }
+    }
+
+    const body: Record<string, unknown> = { filters, limit: options.size };
+    if (cursor) body.cursor = cursor;
+
+    const response = await fetch(CRUSTDATA_SEARCH_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${CRUSTDATA_API_KEY}`,
+        "x-api-version": CRUSTDATA_API_VERSION,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+
+    const result = await response.json();
+
+    if (!response.ok) {
+      throw new Error(
+        `Crustdata API error (${response.status}): ${JSON.stringify(
+          result?.error ?? result,
+        )}`,
+      );
+    }
+
+    const profiles: Array<Record<string, unknown>> = result?.profiles ?? [];
+    const totalCount: number | null =
+      typeof result?.total_count === "number" ? result.total_count : null;
+
+    if (totalCount !== null) {
+      notes.push(
+        `${totalCount} total candidate(s) match this query across Crustdata's full index.`,
+      );
+    }
+
+    return {
+      candidates: profiles.map(normalizeCrustdataCandidate),
+      total: profiles.length,
+      totalMatches: totalCount,
+      scrollToken: result?.next_cursor ?? null,
       queryText,
       notes,
     };
@@ -2186,14 +2514,13 @@ const coresignalProvider: DiscoveryProvider = {
 // priority: runDiscovery below tries each configured provider in this order
 // and falls through on a genuine vendor failure.
 //
-// Coresignal-only, as of the 2026-07-11 session (Harsha's explicit call,
+// Coresignal-first, as of the 2026-07-11 session (Harsha's explicit call,
 // made after a partial PDL-vs-Coresignal side-by-side test -- see
 // AGENT_H_HANDOFF_2026-07-11.md for the taxonomy research and test data
-// behind this): Coresignal is the sole active discovery provider. Both
-// pdlProvider and apolloProvider are DELIBERATELY left out of this list --
-// their code is untouched and still fully functional, so re-enabling
-// either later is a one-line change (add the provider back into this
-// array), not a rewrite.
+// behind this): Coresignal is the primary discovery provider. pdlProvider
+// and apolloProvider are DELIBERATELY left out of this list -- their code
+// is untouched and still fully functional, so re-enabling either later is a
+// one-line change (add the provider back into this array), not a rewrite.
 //   - pdlProvider: dormant per Harsha's original instruction (real
 //     calibration feedback that PDL profiles run stale). Kept as free
 //     optionality if a specific role brief's Coresignal coverage ever
@@ -2203,7 +2530,24 @@ const coresignalProvider: DiscoveryProvider = {
 //     comment above), plus its People Search call has an open, undiagnosed
 //     502 bug. Reserved instead for a later, separate contact-enrichment
 //     step on candidates already found via Coresignal (task #27).
-const DISCOVERY_PROVIDERS: DiscoveryProvider[] = [coresignalProvider];
+//   - crustdataProvider: added 2026-07-23 as a second ACTIVE provider
+//     (unlike PDL/Apollo, not dormant) -- explicitly for optionality, not
+//     because it's won a vendor comparison against Coresignal. Listed
+//     second, after coresignalProvider, so: (a) a normal search still tries
+//     Coresignal first and only falls through to Crustdata on a genuine
+//     Coresignal failure (network/auth/rate-limit/insufficient-credits --
+//     see runDiscovery's fallback logic below), and (b) an explicit
+//     `provider: "crustdata"` in the request body (see discoverCandidates'
+//     preferredProvider handling) can force it on demand, e.g. to compare
+//     results side by side or to switch entirely if Coresignal's pricing/
+//     plan ever changes. isConfigured() gates on CRUSTDATA_API_KEY being
+//     set, so until that secret is added in the Supabase dashboard,
+//     crustdataProvider is silently skipped -- zero behavior change for
+//     existing searches.
+const DISCOVERY_PROVIDERS: DiscoveryProvider[] = [
+  coresignalProvider,
+  crustdataProvider,
+];
 
 // Tries each configured provider in priority order. A provider that isn't
 // configured (no API key set) is skipped silently, not counted as a
@@ -2439,12 +2783,19 @@ async function handleCalibrationContextualize(
     "years_experience_min",
     "years_experience_max",
   ];
-  if (!criterionType || !validTypes.includes(criterionType) || !suggestion.label) {
+  if (
+    !criterionType ||
+    !validTypes.includes(criterionType) ||
+    !suggestion.label
+  ) {
     return jsonResponse({ applicable: false });
   }
 
   const value: LearnedCriterion["value"] = {};
-  if (criterionType === "require_keyword" || criterionType === "exclude_keyword") {
+  if (
+    criterionType === "require_keyword" ||
+    criterionType === "exclude_keyword"
+  ) {
     if (typeof suggestion.keyword !== "string" || !suggestion.keyword.trim()) {
       return jsonResponse({ applicable: false });
     }
@@ -2473,7 +2824,11 @@ async function handleCalibrationContextualize(
 
   let activeLearnedCriteria: LearnedCriterion[] = [];
   try {
-    activeLearnedCriteria = await fetchLearnedCriteria(dealId, authHeader, "active");
+    activeLearnedCriteria = await fetchLearnedCriteria(
+      dealId,
+      authHeader,
+      "active",
+    );
   } catch (error) {
     console.error(
       "fetchLearnedCriteria failed during calibration preview (non-fatal)",
@@ -2497,7 +2852,8 @@ async function handleCalibrationContextualize(
     companySizeMax: roleBrief.company_size_max,
     pastTitles: roleBrief.past_titles,
     pastCompanies: roleBrief.past_companies,
-    learnedCriteria: activeLearnedCriteria.length > 0 ? activeLearnedCriteria : null,
+    learnedCriteria:
+      activeLearnedCriteria.length > 0 ? activeLearnedCriteria : null,
   };
 
   const candidateCriterion: LearnedCriterion = {
@@ -2512,7 +2868,10 @@ async function handleCalibrationContextualize(
 
   const afterCriteria: DiscoveryCriteria = {
     ...baseCriteria,
-    learnedCriteria: [...(baseCriteria.learnedCriteria ?? []), candidateCriterion],
+    learnedCriteria: [
+      ...(baseCriteria.learnedCriteria ?? []),
+      candidateCriterion,
+    ],
   };
 
   let currentTotal: number | null = null;
@@ -2541,7 +2900,11 @@ async function handleCalibrationContextualize(
 
   return jsonResponse({
     applicable: true,
-    criterion: { criterion_type: criterionType, value, label: suggestion.label },
+    criterion: {
+      criterion_type: criterionType,
+      value,
+      label: suggestion.label,
+    },
     current_total: currentTotal,
     projected_total: projectedTotal,
     rejected_count: rejectedCount,
@@ -2664,7 +3027,9 @@ async function handleCriteriaImpact(
     allCriteria.slice(-CRITERIA_IMPACT_PRICING_CAP).map((c) => c.id),
   );
 
-  const baseCriteriaFor = (learned: LearnedCriterion[] | null): DiscoveryCriteria => ({
+  const baseCriteriaFor = (
+    learned: LearnedCriterion[] | null,
+  ): DiscoveryCriteria => ({
     titles: expandedTitles,
     location: roleBrief.location,
     requiredSkills: roleBrief.required_skills,
@@ -2718,7 +3083,8 @@ async function handleCriteriaImpact(
         ? Date.now() - new Date(criterion.lastRejectCountComputedAt).getTime()
         : Infinity;
       const hasFreshCache =
-        criterion.lastRejectCount !== null && cachedAgeMs < CRITERIA_IMPACT_CACHE_TTL_MS;
+        criterion.lastRejectCount !== null &&
+        cachedAgeMs < CRITERIA_IMPACT_CACHE_TTL_MS;
 
       if (hasFreshCache) {
         return {
@@ -2890,7 +3256,11 @@ const discoverCandidates = async (body: any, authHeader: string) => {
   // title expansion and scoring elsewhere in this file.
   let activeLearnedCriteria: LearnedCriterion[] = [];
   try {
-    activeLearnedCriteria = await fetchLearnedCriteria(roleBriefId, authHeader, "active");
+    activeLearnedCriteria = await fetchLearnedCriteria(
+      roleBriefId,
+      authHeader,
+      "active",
+    );
   } catch (error) {
     console.error("fetchLearnedCriteria failed (non-fatal)", error);
   }
@@ -2911,7 +3281,8 @@ const discoverCandidates = async (body: any, authHeader: string) => {
     companySizeMax: roleBrief.company_size_max,
     pastTitles: roleBrief.past_titles,
     pastCompanies: roleBrief.past_companies,
-    learnedCriteria: activeLearnedCriteria.length > 0 ? activeLearnedCriteria : null,
+    learnedCriteria:
+      activeLearnedCriteria.length > 0 ? activeLearnedCriteria : null,
   };
 
   let discovery: { result: DiscoverySearchResult; providerName: string };
@@ -2974,7 +3345,10 @@ const discoverCandidates = async (body: any, authHeader: string) => {
       );
     } else {
       try {
-        const roleBriefVector = await getOrRefreshRoleBriefEmbedding(roleBrief, authHeader);
+        const roleBriefVector = await getOrRefreshRoleBriefEmbedding(
+          roleBrief,
+          authHeader,
+        );
         await scoreAndSortCandidates(candidates, roleBriefVector);
       } catch (error) {
         console.error("checkpoint 3c scoring failed (non-fatal)", error);
@@ -3081,4 +3455,3 @@ Deno.serve(async (req: Request) => {
 
   return discoverCandidates(body, authHeader);
 });
-

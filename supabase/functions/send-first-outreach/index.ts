@@ -1,171 +1,383 @@
-// Agent H, Stage 1: Outreach -- the bridge between "candidate sourced" and
-// "actively being contacted" (see AGENT_H_HANDOFF_2026-07-21.md Section 7,
-// "Outreach -- findings, not yet built"). A genuine third email flow
-// alongside task 76's resume request and Stage 6's offer, with its own
-// reply_to prefix (outreach-<id>-deal-<id>@RESEND_RECEIVING_DOMAIN) so
-// resend-inbound-reply can tell all three apart with zero ambiguity.
+// Agent H Unipile Phase 4: send first outreach (LinkedIn or email).
 //
-// The one thing this flow does differently from its two siblings: the
-// handoff explicitly rejects a hand-written fill-in-the-blank template
-// ("the generic template Dover's own demo shows") in favor of a real
-// drafting call grounded in this candidate's actual fit evidence
-// (candidate_scores / candidate_fit_assessments). If neither exists yet
-// for this candidate+deal (sourcing doesn't guarantee scoring has run) or
-// ANTHROPIC_API_KEY isn't set, this falls back to a clearly-labeled
-// generic-but-role-personalized template rather than failing the whole
-// request -- see draftOutreachEmail below.
+// Phase 4 refactor: accepts a `channel` param to route between:
+//   email              — legacy Resend path (unchanged; default when channel absent)
+//   linkedin_connection — Unipile POST /users/invite with ≤300-char note
+//   linkedin_inmail     — Unipile POST /chats with inmail=true (open-profile)
 //
-// Required secrets: same three as request-candidate-resume/send-offer
-//   RESEND_API_KEY, RESEND_FROM_EMAIL, RESEND_RECEIVING_DOMAIN
-// Plus (optional -- see draftOutreachEmail):
-//   ANTHROPIC_API_KEY, ANTHROPIC_MODEL
+// Human-in-the-loop contract (Phase C): this function ONLY sends the
+// recruiter-approved message. The recruiter must call prepare-first-outreach,
+// review/edit the preview, then explicitly approve before this runs.
+//
+// LinkedIn path requires: UNIPILE_API_KEY, UNIPILE_DSN
+// Email path requires: RESEND_API_KEY, RESEND_FROM_EMAIL, RESEND_RECEIVING_DOMAIN
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import * as jose from "jsr:@panva/jose@6";
+import { getUserSaleFromRequest } from "../_shared/getUserSale.ts";
+import {
+  checkDailyCap,
+  isUnipileConfigured,
+  sendUnipileConnectionInvite,
+  sendUnipileInMail,
+} from "../_shared/unipileClient.ts";
+import {
+  jsonResponse,
+  restFetch,
+  sendResendEmail,
+  serveCandidateFacingFunction,
+} from "../_shared/candidateFacingEdge.ts";
 
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
-const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY");
-const SUPABASE_JWT_ISSUER = Deno.env.get("SB_JWT_ISSUER") ?? `${SUPABASE_URL}/auth/v1`;
-const SUPABASE_JWT_KEYS = jose.createRemoteJWKSet(new URL(`${SUPABASE_URL}/auth/v1/.well-known/jwks.json`));
-
-const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
-const RESEND_FROM_EMAIL = Deno.env.get("RESEND_FROM_EMAIL");
 const RESEND_RECEIVING_DOMAIN = Deno.env.get("RESEND_RECEIVING_DOMAIN");
 
-// Same Claude call shape as expandTitle in source-candidates-discovery/
-// index.ts -- forced tool-use, same env vars, same model default.
-const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
-const ANTHROPIC_MODEL = Deno.env.get("ANTHROPIC_MODEL") || "claude-haiku-4-5-20251001";
-const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
+type OutreachChannel = "email" | "linkedin_connection" | "linkedin_inmail";
 
-const CORS_HEADERS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Allow-Methods": "POST",
+const handler = async (req: Request) => {
+  if (req.method !== "POST")
+    return jsonResponse({ error: "Method Not Allowed" }, 405);
+
+  let candidateId: number | undefined;
+  let dealId: number | undefined;
+  let channel: OutreachChannel = "email";
+  let messagebody: string | undefined;
+  let linkedinProviderId: string | undefined;
+  let approvedSubject: string | undefined;
+  let approvedHtml: string | undefined;
+  try {
+    const body = await req.json();
+    candidateId = body?.candidate_id;
+    dealId = body?.deal_id;
+    channel = body?.channel ?? "email";
+    messagebody = body?.message_body;
+    linkedinProviderId = body?.linkedin_provider_id;
+    approvedSubject = body?.subject;
+    approvedHtml = body?.html;
+  } catch {
+    return jsonResponse({ error: "Invalid JSON body" }, 400);
+  }
+  if (!candidateId || !dealId)
+    return jsonResponse(
+      { error: "candidate_id and deal_id are required" },
+      400,
+    );
+
+  const authHeader = req.headers.get("authorization")!;
+
+  // --- LinkedIn channels ---
+  if (channel === "linkedin_connection" || channel === "linkedin_inmail") {
+    if (!isUnipileConfigured()) {
+      return jsonResponse(
+        {
+          error:
+            "LinkedIn outreach isn't configured — UNIPILE_API_KEY and UNIPILE_DSN must be set.",
+        },
+        500,
+      );
+    }
+    if (!messagebody)
+      return jsonResponse(
+        { error: "message_body is required for LinkedIn outreach" },
+        400,
+      );
+    if (!linkedinProviderId)
+      return jsonResponse(
+        { error: "linkedin_provider_id is required for LinkedIn outreach" },
+        400,
+      );
+    if (channel === "linkedin_connection" && messagebody.length > 300) {
+      return jsonResponse(
+        { error: "Connection note exceeds 300-character LinkedIn limit" },
+        400,
+      );
+    }
+
+    const sale = await getUserSaleFromRequest(req);
+    if (!sale) return jsonResponse({ error: "Sales profile not found" }, 404);
+    if (!sale.unipile_account_id) {
+      return jsonResponse(
+        {
+          error:
+            "No LinkedIn account connected — connect via your Profile page first.",
+        },
+        400,
+      );
+    }
+
+    const capInfo = checkDailyCap(
+      sale as {
+        linkedin_daily_send_cap?: number | null;
+        linkedin_sends_today?: number | null;
+        linkedin_sends_reset_date?: string | null;
+      },
+    );
+    if (!capInfo.can_send) {
+      return jsonResponse(
+        {
+          error: `Daily LinkedIn send cap reached (${capInfo.cap}/day). Resets tomorrow.`,
+        },
+        429,
+      );
+    }
+
+    try {
+      if (channel === "linkedin_connection") {
+        await sendUnipileConnectionInvite(
+          sale.unipile_account_id as string,
+          linkedinProviderId,
+          messagebody,
+        );
+      } else {
+        await sendUnipileInMail(
+          sale.unipile_account_id as string,
+          linkedinProviderId,
+          messagebody,
+        );
+      }
+    } catch (err) {
+      console.error("send-first-outreach: Unipile send failed", err);
+      return jsonResponse(
+        { error: err instanceof Error ? err.message : "LinkedIn send failed" },
+        502,
+      );
+    }
+
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const newSendsToday = capInfo.sends_today + 1;
+    await restFetch(`sales?id=eq.${(sale as { id: number }).id}`, authHeader, {
+      method: "PATCH",
+      body: JSON.stringify({
+        linkedin_sends_today: newSendsToday,
+        linkedin_sends_reset_date: todayStr,
+      }),
+    }).catch((err) =>
+      console.warn(
+        "send-first-outreach: failed to increment daily counter",
+        err,
+      ),
+    );
+
+    const now = new Date().toISOString();
+    const dcPatch = await restFetch(
+      `deal_candidates?deal_id=eq.${dealId}&candidate_id=eq.${candidateId}`,
+      authHeader,
+      {
+        method: "PATCH",
+        body: JSON.stringify({
+          response_status: "sent",
+          contacted_at: now,
+          outreach_channel: channel,
+          outreach_message_body: messagebody,
+          outreach_sent_at: now,
+          linkedin_provider_id: linkedinProviderId,
+        }),
+      },
+    );
+    if (!dcPatch.ok) {
+      console.error(
+        "send-first-outreach: failed to update deal_candidates",
+        dcPatch.status,
+        await dcPatch.text(),
+      );
+      return jsonResponse(
+        {
+          error: "LinkedIn message sent, but failed to update candidate status",
+        },
+        502,
+      );
+    }
+
+    // Queue a follow-up stub (7 days) — cron processing is Phase 4 deferred
+    const followUpType =
+      channel === "linkedin_connection"
+        ? "connection_reminder"
+        : "inmail_follow_up";
+    const scheduledFor = new Date(
+      Date.now() + 7 * 24 * 60 * 60 * 1000,
+    ).toISOString();
+    const dcRow = await restFetch(
+      `deal_candidates?deal_id=eq.${dealId}&candidate_id=eq.${candidateId}&select=id`,
+      authHeader,
+    )
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null);
+    const dealCandidateId = dcRow?.[0]?.id;
+    if (dealCandidateId) {
+      await restFetch("linkedin_outreach_follow_ups", authHeader, {
+        method: "POST",
+        body: JSON.stringify({
+          deal_candidate_id: dealCandidateId,
+          scheduled_for: scheduledFor,
+          follow_up_type: followUpType,
+          status: "pending",
+        }),
+      }).catch((err) =>
+        console.warn("send-first-outreach: failed to queue follow-up", err),
+      );
+    }
+
+    return jsonResponse({
+      sent: true,
+      channel,
+      linkedin_provider_id: linkedinProviderId,
+      response_status: "sent",
+      cap_remaining: Math.max(0, capInfo.cap_remaining - 1),
+    });
+  }
+
+  // --- Email path (unchanged legacy behaviour) ---
+  if (!RESEND_RECEIVING_DOMAIN) {
+    return jsonResponse(
+      {
+        error:
+          "Outreach isn't configured yet — RESEND_RECEIVING_DOMAIN must be set as an Edge Function secret first.",
+      },
+      500,
+    );
+  }
+
+  const candidateRes = await restFetch(
+    `candidates?id=eq.${candidateId}&select=id,first_name,last_name,email_jsonb`,
+    authHeader,
+  );
+  const dealRes = await restFetch(
+    `deals?id=eq.${dealId}&select=id,name`,
+    authHeader,
+  );
+  if (!candidateRes.ok)
+    return jsonResponse({ error: "Failed to load candidate" }, 502);
+  if (!dealRes.ok)
+    return jsonResponse({ error: "Failed to load role brief" }, 502);
+
+  const candidate = (await candidateRes.json())?.[0];
+  const deal = (await dealRes.json())?.[0];
+  if (!candidate) return jsonResponse({ error: "Candidate not found" }, 404);
+  if (!deal) return jsonResponse({ error: "Role brief not found" }, 404);
+
+  const candidateEmail: string | null =
+    candidate.email_jsonb?.[0]?.address ?? null;
+  if (!candidateEmail) {
+    return jsonResponse(
+      {
+        error:
+          "This candidate has no email on file — run contact enrichment first.",
+      },
+      400,
+    );
+  }
+
+  const candidateName =
+    [candidate.first_name, candidate.last_name].filter(Boolean).join(" ") ||
+    "there";
+  const dealName = deal.name ?? "this role";
+  const replyToAddress = `outreach-${candidateId}-deal-${dealId}@${RESEND_RECEIVING_DOMAIN}`;
+
+  // Use approved preview when provided (Phase C path); fall back to inline drafting for direct callers.
+  let subject = approvedSubject;
+  let html = approvedHtml;
+  let draftedBy: "approved" | "inline_fallback" = "approved";
+
+  if (!subject || !html) {
+    // Direct send without a prepare step — inline draft (legacy compatibility)
+    const { subject: s, html: h } = await draftEmailInline(
+      candidateName,
+      dealName,
+      candidateId,
+      dealId,
+      authHeader,
+    );
+    subject = s;
+    html = h;
+    draftedBy = "inline_fallback";
+  }
+
+  const emailSent = await sendResendEmail({
+    to: candidateEmail,
+    subject: subject!,
+    html: html!,
+    replyTo: replyToAddress,
+    logLabel: "send-first-outreach",
+  });
+  if (!emailSent)
+    return jsonResponse({ error: "Failed to send the outreach email" }, 502);
+
+  const now = new Date().toISOString();
+  const patchRes = await restFetch(
+    `deal_candidates?deal_id=eq.${dealId}&candidate_id=eq.${candidateId}`,
+    authHeader,
+    {
+      method: "PATCH",
+      body: JSON.stringify({
+        response_status: "sent",
+        contacted_at: now,
+        outreach_channel: "email",
+        outreach_sent_at: now,
+      }),
+    },
+  );
+  if (!patchRes.ok) {
+    console.error(
+      "send-first-outreach: failed to update response_status",
+      patchRes.status,
+      await patchRes.text(),
+    );
+    return jsonResponse(
+      { error: "Outreach email sent, but failed to update candidate status" },
+      502,
+    );
+  }
+
+  return jsonResponse({
+    email_sent: true,
+    channel: "email",
+    candidate_email: candidateEmail,
+    response_status: "sent",
+    subject,
+    drafted_by: draftedBy,
+  });
 };
 
-const jsonResponse = (data: unknown, status = 200) =>
-  new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
+// Inline email drafting for backward-compat direct callers (no prepare step).
+// Mirrors the original send-first-outreach Claude draft logic.
+const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
+const ANTHROPIC_MODEL =
+  Deno.env.get("ANTHROPIC_MODEL") || "claude-haiku-4-5-20251001";
+const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 
-async function requireAuth(req: Request): Promise<Response | null> {
-  const authHeader = req.headers.get("authorization");
-  if (!authHeader) return jsonResponse({ error: "Missing authorization header" }, 401);
-  const [bearer, token] = authHeader.split(" ");
-  if (bearer !== "Bearer" || !token) return jsonResponse({ error: "Invalid authorization header" }, 401);
-  try {
-    await jose.jwtVerify(token, SUPABASE_JWT_KEYS, { issuer: SUPABASE_JWT_ISSUER });
-    return null;
-  } catch {
-    return jsonResponse({ error: "Unauthorized" }, 401);
-  }
-}
-
-async function restFetch(path: string, authHeader: string, init: RequestInit = {}) {
-  return fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
-    ...init,
-    headers: {
-      apikey: SUPABASE_ANON_KEY ?? "",
-      Authorization: authHeader,
-      "Content-Type": "application/json",
-      ...(init.headers ?? {}),
-    },
+async function draftEmailInline(
+  candidateName: string,
+  dealName: string,
+  candidateId: number,
+  dealId: number,
+  authHeader: string,
+): Promise<{ subject: string; html: string }> {
+  const fallback = () => ({
+    subject: `Interested in the ${dealName} role?`,
+    html: `<p>Hi ${candidateName},</p><p>Your background caught our eye for the <strong>${dealName}</strong> role. Would you be open to a quick chat?</p><p>Thanks!</p>`,
   });
-}
 
-async function sendResendEmail(to: string, replyTo: string, subject: string, html: string): Promise<boolean> {
-  if (!RESEND_API_KEY || !RESEND_FROM_EMAIL) return false;
-  try {
-    const res = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ from: RESEND_FROM_EMAIL, to: [to], reply_to: [replyTo], subject, html }),
-    });
-    if (!res.ok) {
-      console.error("send-first-outreach: Resend send failed", res.status, await res.text());
-      return false;
-    }
-    return true;
-  } catch (error) {
-    console.error("send-first-outreach: Resend send threw", error);
-    return false;
-  }
-}
-
-// Best-effort evidence lookup -- either or both of these may not exist yet
-// for a given candidate+deal (sourcing doesn't guarantee scoring has run).
-// Never throws; a failed fetch is treated the same as "no evidence yet".
-async function fetchFitEvidence(candidateId: number, dealId: number, authHeader: string) {
   const [scoreRes, assessmentRes] = await Promise.all([
     restFetch(
-      `candidate_scores?candidate_id=eq.${candidateId}&deal_id=eq.${dealId}&order=created_at.desc&limit=1&select=overall_score,verdict,dimension_scores,green_flags,watch_signals,recruiter_card,recommended_action,recommended_action_reasons`,
+      `candidate_scores?candidate_id=eq.${candidateId}&deal_id=eq.${dealId}&order=created_at.desc&limit=1&select=verdict,green_flags,recommended_action`,
       authHeader,
     ).catch(() => null),
     restFetch(
-      `candidate_fit_assessments?candidate_id=eq.${candidateId}&deal_id=eq.${dealId}&order=created_at.desc&limit=1&select=fit_bucket,summary,matches,worth_verifying,clear_gaps`,
+      `candidate_fit_assessments?candidate_id=eq.${candidateId}&deal_id=eq.${dealId}&order=created_at.desc&limit=1&select=fit_bucket,summary,matches`,
       authHeader,
     ).catch(() => null),
   ]);
+  const score = scoreRes?.ok ? ((await scoreRes.json())?.[0] ?? null) : null;
+  const assessment = assessmentRes?.ok
+    ? ((await assessmentRes.json())?.[0] ?? null)
+    : null;
 
-  const score = scoreRes?.ok ? (await scoreRes.json())?.[0] ?? null : null;
-  const assessment = assessmentRes?.ok ? (await assessmentRes.json())?.[0] ?? null : null;
-  return { score, assessment };
-}
+  const lines: string[] = [];
+  if (score?.green_flags?.length)
+    lines.push(`Green flags: ${JSON.stringify(score.green_flags)}`);
+  if (score?.verdict) lines.push(`Verdict: ${score.verdict}`);
+  if (assessment?.summary) lines.push(`Fit summary: ${assessment.summary}`);
+  if (assessment?.matches?.length)
+    lines.push(`Matches: ${JSON.stringify(assessment.matches)}`);
 
-// Drafts the actual outreach email body. Grounds the message in 1-2
-// SPECIFIC concrete details pulled from the candidate's fit evidence (a
-// green_flag, a matches entry, a piece of the summary) -- deliberately
-// NOT vague flattery ("your impressive background"), per the handoff's
-// explicit rejection of a generic template. Falls back to a simple,
-// clearly-labeled generic-but-role-personalized template when
-// ANTHROPIC_API_KEY isn't set or the call fails, so a missing key never
-// hard-fails the whole request.
-async function draftOutreachEmail(
-  candidateName: string,
-  dealName: string,
-  evidence: { score: any; assessment: any },
-): Promise<{ subject: string; html: string; drafted_by: "claude" | "fallback_template" }> {
-  const fallback = () => ({
-    subject: `Interested in the ${dealName} role?`,
-    html: `<p>Hi ${candidateName},</p><p>Your background caught our eye for the <strong>${dealName}</strong> role we're hiring for right now. Would you be open to a quick chat?</p><p>Thanks!</p>`,
-    drafted_by: "fallback_template" as const,
-  });
-
-  if (!ANTHROPIC_API_KEY) return fallback();
-
-  const evidenceLines: string[] = [];
-  if (evidence.score) {
-    if (Array.isArray(evidence.score.green_flags) && evidence.score.green_flags.length > 0) {
-      evidenceLines.push(`Green flags: ${JSON.stringify(evidence.score.green_flags)}`);
-    }
-    if (evidence.score.verdict) evidenceLines.push(`Verdict: ${evidence.score.verdict}`);
-    if (evidence.score.recommended_action) evidenceLines.push(`Recommended action: ${evidence.score.recommended_action}`);
-  }
-  if (evidence.assessment) {
-    if (evidence.assessment.summary) evidenceLines.push(`Fit summary: ${evidence.assessment.summary}`);
-    if (Array.isArray(evidence.assessment.matches) && evidence.assessment.matches.length > 0) {
-      evidenceLines.push(`Matches: ${JSON.stringify(evidence.assessment.matches)}`);
-    }
-    if (evidence.assessment.fit_bucket) evidenceLines.push(`Fit bucket: ${evidence.assessment.fit_bucket}`);
-  }
-
-  if (evidenceLines.length === 0) return fallback();
-
-  const DRAFT_TOOL = {
-    name: "draft_outreach_email",
-    description: "Draft a short, professional first-outreach recruiting email personalized with specific evidence about the candidate's fit for the role.",
-    input_schema: {
-      type: "object",
-      properties: {
-        subject: { type: "string", description: "A short, specific email subject line (no generic 'Exciting opportunity!' filler)." },
-        body_html: {
-          type: "string",
-          description:
-            "The email body as simple HTML (a few <p> tags, no inline styles). Professional, concise (4-6 sentences max), and grounded in 1-2 SPECIFIC concrete details from the provided evidence -- e.g. name an actual green flag or matched skill, not vague flattery like 'your impressive background'. Signs off inviting a reply.",
-        },
-      },
-      required: ["subject", "body_html"],
-    },
-  };
+  if (!ANTHROPIC_API_KEY || lines.length === 0) return fallback();
 
   try {
     const response = await fetch(ANTHROPIC_API_URL, {
@@ -178,118 +390,42 @@ async function draftOutreachEmail(
       body: JSON.stringify({
         model: ANTHROPIC_MODEL,
         max_tokens: 512,
-        tools: [DRAFT_TOOL],
+        tools: [
+          {
+            name: "draft_outreach_email",
+            description: "Draft a short outreach email.",
+            input_schema: {
+              type: "object",
+              properties: {
+                subject: { type: "string" },
+                body_html: { type: "string" },
+              },
+              required: ["subject", "body_html"],
+            },
+          },
+        ],
         tool_choice: { type: "tool", name: "draft_outreach_email" },
         messages: [
           {
             role: "user",
-            content: `Draft a first-outreach recruiting email to a candidate named "${candidateName}" for the "${dealName}" role.
-
-Fit evidence gathered on this candidate for this role:
-${evidenceLines.join("\n")}
-
-Ground the email in 1-2 of the SPECIFIC details above -- do not invent details not present here, and do not use vague flattery.`,
+            content: `Draft a first-outreach recruiting email to "${candidateName}" for the "${dealName}" role.\n\nFit evidence:\n${lines.join("\n")}\n\nGround in 1-2 specific details. 4-6 sentences max. No generic flattery.`,
           },
         ],
       }),
     });
-
-    if (!response.ok) {
-      console.error("send-first-outreach: Anthropic API error", response.status, await response.text());
-      return fallback();
-    }
-
+    if (!response.ok) return fallback();
     const result = await response.json();
-    const toolUseBlock = result?.content?.find((block: any) => block.type === "tool_use");
-    const subject = toolUseBlock?.input?.subject;
-    const bodyHtml = toolUseBlock?.input?.body_html;
-    if (typeof subject !== "string" || typeof bodyHtml !== "string" || !subject || !bodyHtml) {
-      return fallback();
-    }
-    return { subject, html: bodyHtml, drafted_by: "claude" };
-  } catch (error) {
-    console.error("send-first-outreach: Anthropic call threw", error);
+    const block = result?.content?.find(
+      (b: Record<string, unknown>) => b.type === "tool_use",
+    );
+    const s = block?.input?.subject;
+    const h = block?.input?.body_html;
+    return typeof s === "string" && typeof h === "string" && s && h
+      ? { subject: s, html: h }
+      : fallback();
+  } catch {
     return fallback();
   }
 }
 
-const sendFirstOutreachHandler = async (req: Request) => {
-  if (req.method !== "POST") return jsonResponse({ error: "Method Not Allowed" }, 405);
-
-  if (!RESEND_RECEIVING_DOMAIN) {
-    return jsonResponse(
-      { error: "Outreach isn't configured yet -- RESEND_RECEIVING_DOMAIN must be set as an Edge Function secret first." },
-      500,
-    );
-  }
-
-  let candidateId: number | undefined;
-  let dealId: number | undefined;
-  try {
-    const body = await req.json();
-    candidateId = body?.candidate_id;
-    dealId = body?.deal_id;
-  } catch {
-    return jsonResponse({ error: "Invalid JSON body" }, 400);
-  }
-  if (!candidateId || !dealId) return jsonResponse({ error: "candidate_id and deal_id are required" }, 400);
-
-  const authHeader = req.headers.get("authorization")!;
-
-  const [candidateRes, dealRes] = await Promise.all([
-    restFetch(`candidates?id=eq.${candidateId}&select=id,first_name,last_name,email_jsonb`, authHeader),
-    restFetch(`deals?id=eq.${dealId}&select=id,name`, authHeader),
-  ]);
-  if (!candidateRes.ok) return jsonResponse({ error: "Failed to load candidate" }, 502);
-  if (!dealRes.ok) return jsonResponse({ error: "Failed to load role brief" }, 502);
-
-  const candidate = (await candidateRes.json())?.[0];
-  const deal = (await dealRes.json())?.[0];
-  if (!candidate) return jsonResponse({ error: "Candidate not found (or you don't have access to it)" }, 404);
-  if (!deal) return jsonResponse({ error: "Role brief not found (or you don't have access to it)" }, 404);
-
-  const candidateEmail: string | null = candidate.email_jsonb?.[0]?.address ?? null;
-  if (!candidateEmail) {
-    return jsonResponse(
-      { error: "This candidate has no email on file yet -- run contact enrichment first." },
-      400,
-    );
-  }
-
-  const candidateName = [candidate.first_name, candidate.last_name].filter(Boolean).join(" ") || "there";
-  const dealName = deal.name ?? "this role";
-  const replyToAddress = `outreach-${candidateId}-deal-${dealId}@${RESEND_RECEIVING_DOMAIN}`;
-
-  const evidence = await fetchFitEvidence(candidateId, dealId, authHeader);
-  const draft = await draftOutreachEmail(candidateName, dealName, evidence);
-
-  const emailSent = await sendResendEmail(candidateEmail, replyToAddress, draft.subject, draft.html);
-  if (!emailSent) {
-    return jsonResponse({ error: "Failed to send the outreach email" }, 502);
-  }
-
-  const patchRes = await restFetch(`deal_candidates?deal_id=eq.${dealId}&candidate_id=eq.${candidateId}`, authHeader, {
-    method: "PATCH",
-    body: JSON.stringify({ response_status: "sent", contacted_at: new Date().toISOString() }),
-  });
-  if (!patchRes.ok) {
-    console.error("send-first-outreach: failed to update response_status", patchRes.status, await patchRes.text());
-    return jsonResponse({ error: "Outreach email sent, but failed to update this candidate's status" }, 502);
-  }
-
-  return jsonResponse({
-    email_sent: true,
-    candidate_email: candidateEmail,
-    response_status: "sent",
-    subject: draft.subject,
-    body_html: draft.html,
-    drafted_by: draft.drafted_by,
-  });
-};
-
-Deno.serve(async (req: Request) => {
-  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS_HEADERS });
-  const authError = await requireAuth(req);
-  if (authError) return authError;
-  return sendFirstOutreachHandler(req);
-});
+serveCandidateFacingFunction(handler);

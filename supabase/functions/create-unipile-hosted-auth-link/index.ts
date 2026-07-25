@@ -2,6 +2,7 @@
 // See docs/adr/ADR-unipile-linkedin-outreach.md and Unipile hosted auth docs.
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { getUserSaleFromRequest } from "../_shared/getUserSale.ts";
 import {
   isUnipileConfigured,
   UNIPILE_DSN,
@@ -9,7 +10,6 @@ import {
 } from "../_shared/unipileClient.ts";
 import {
   jsonResponse,
-  restFetch,
   serveCandidateFacingFunction,
 } from "../_shared/candidateFacingEdge.ts";
 
@@ -19,16 +19,6 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
 
 function hostedAuthExpiresOn(): string {
   return new Date(Date.now() + 30 * 60 * 1000).toISOString();
-}
-
-async function getSalesIdForUser(authHeader: string): Promise<number | null> {
-  const res = await restFetch(
-    "sales?select=id,unipile_account_id&limit=1",
-    authHeader,
-  );
-  if (!res.ok) return null;
-  const rows = await res.json();
-  return rows?.[0]?.id ?? null;
 }
 
 const handler = async (req: Request) => {
@@ -53,29 +43,22 @@ const handler = async (req: Request) => {
     reconnect = false;
   }
 
-  const authHeader = req.headers.get("authorization")!;
-  const salesId = await getSalesIdForUser(authHeader);
-  if (!salesId) {
+  const sale = await getUserSaleFromRequest(req);
+  if (!sale) {
     return jsonResponse(
       { error: "Sales profile not found for this user" },
       404,
     );
   }
 
-  let reconnectAccountId: string | undefined;
-  if (reconnect) {
-    const salesRes = await restFetch(
-      `sales?id=eq.${salesId}&select=unipile_account_id`,
-      authHeader,
+  const reconnectAccountId = reconnect
+    ? (sale.unipile_account_id as string | null | undefined)
+    : undefined;
+  if (reconnect && !reconnectAccountId) {
+    return jsonResponse(
+      { error: "No LinkedIn account on file to reconnect — connect first." },
+      400,
     );
-    const salesRows = await salesRes.json();
-    reconnectAccountId = salesRows?.[0]?.unipile_account_id ?? undefined;
-    if (!reconnectAccountId) {
-      return jsonResponse(
-        { error: "No LinkedIn account on file to reconnect — connect first." },
-        400,
-      );
-    }
   }
 
   const notifyUrl =
@@ -88,7 +71,7 @@ const handler = async (req: Request) => {
     providers: ["LINKEDIN"],
     api_url: UNIPILE_DSN,
     expiresOn: hostedAuthExpiresOn(),
-    name: String(salesId),
+    name: String(sale.id),
     success_redirect_url: `${CRM_BASE_URL}/profile?linkedin=connected`,
     failure_redirect_url: `${CRM_BASE_URL}/profile?linkedin=failed`,
   };

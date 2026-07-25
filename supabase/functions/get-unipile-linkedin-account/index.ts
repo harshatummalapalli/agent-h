@@ -1,6 +1,7 @@
 // Agent H Unipile Phase 3: read/sync recruiter LinkedIn connection state from Unipile.
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { getUserSaleFromRequest } from "../_shared/getUserSale.ts";
 import {
   detectLinkedInSeatType,
   fetchUnipileAccount,
@@ -17,26 +18,19 @@ const handler = async (req: Request) => {
   if (req.method !== "POST")
     return jsonResponse({ error: "Method Not Allowed" }, 405);
 
+  const sale = await getUserSaleFromRequest(req);
+  if (!sale) return jsonResponse({ error: "Sales profile not found" }, 404);
+
   const authHeader = req.headers.get("authorization")!;
-
-  const salesRes = await restFetch(
-    "sales?select=id,unipile_account_id,unipile_linkedin_seat_type,unipile_account_status,unipile_checkpoint_type,unipile_connected_at,unipile_last_sync_at&limit=1",
-    authHeader,
-  );
-  if (!salesRes.ok)
-    return jsonResponse({ error: "Failed to load profile" }, 502);
-
-  const sales = (await salesRes.json())?.[0];
-  if (!sales) return jsonResponse({ error: "Sales profile not found" }, 404);
 
   const base = {
     configured: isUnipileConfigured(),
-    account_id: sales.unipile_account_id as string | null,
-    seat_type: sales.unipile_linkedin_seat_type as string | null,
-    status: (sales.unipile_account_status as string | null) ?? "disconnected",
-    checkpoint_type: sales.unipile_checkpoint_type as string | null,
-    connected_at: sales.unipile_connected_at as string | null,
-    last_sync_at: sales.unipile_last_sync_at as string | null,
+    account_id: sale.unipile_account_id as string | null,
+    seat_type: sale.unipile_linkedin_seat_type as string | null,
+    status: (sale.unipile_account_status as string | null) ?? "disconnected",
+    checkpoint_type: sale.unipile_checkpoint_type as string | null,
+    connected_at: sale.unipile_connected_at as string | null,
+    last_sync_at: sale.unipile_last_sync_at as string | null,
   };
 
   if (!base.account_id || !isUnipileConfigured()) {
@@ -49,7 +43,7 @@ const handler = async (req: Request) => {
     const seatType = detectLinkedInSeatType(account);
     const now = new Date().toISOString();
 
-    await restFetch(`sales?id=eq.${sales.id}`, authHeader, {
+    await restFetch(`sales?id=eq.${sale.id}`, authHeader, {
       method: "PATCH",
       body: JSON.stringify({
         unipile_linkedin_seat_type: seatType,

@@ -1,6 +1,7 @@
 // Agent H Unipile Phase 3: solve LinkedIn auth checkpoint (2FA, OTP, etc.).
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { getUserSaleFromRequest } from "../_shared/getUserSale.ts";
 import {
   detectLinkedInSeatType,
   isUnipileConfigured,
@@ -35,16 +36,15 @@ const handler = async (req: Request) => {
     return jsonResponse({ error: "code is required" }, 400);
   }
 
-  const authHeader = req.headers.get("authorization")!;
-  const salesRes = await restFetch(
-    "sales?select=id,unipile_account_id&limit=1",
-    authHeader,
-  );
-  const sales = (await salesRes.json())?.[0];
-  const accountId = sales?.unipile_account_id as string | undefined;
+  const sale = await getUserSaleFromRequest(req);
+  if (!sale) return jsonResponse({ error: "Sales profile not found" }, 404);
+
+  const accountId = sale.unipile_account_id as string | undefined;
   if (!accountId) {
     return jsonResponse({ error: "No LinkedIn account connected yet" }, 400);
   }
+
+  const authHeader = req.headers.get("authorization")!;
 
   const response = await unipileFetch("/accounts/checkpoint", {
     method: "POST",
@@ -65,7 +65,7 @@ const handler = async (req: Request) => {
       | Record<string, unknown>
       | undefined;
     const checkpointType = String(checkpoint?.type ?? "unknown");
-    await restFetch(`sales?id=eq.${sales.id}`, authHeader, {
+    await restFetch(`sales?id=eq.${sale.id}`, authHeader, {
       method: "PATCH",
       body: JSON.stringify({
         unipile_account_status: "checkpoint_pending",
@@ -99,7 +99,7 @@ const handler = async (req: Request) => {
   const mapped = mapUnipileAccountStatus(result as Record<string, unknown>);
   const now = new Date().toISOString();
 
-  await restFetch(`sales?id=eq.${sales.id}`, authHeader, {
+  await restFetch(`sales?id=eq.${sale.id}`, authHeader, {
     method: "PATCH",
     body: JSON.stringify({
       unipile_linkedin_seat_type: seatType,

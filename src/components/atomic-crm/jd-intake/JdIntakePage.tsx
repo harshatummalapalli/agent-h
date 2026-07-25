@@ -19,6 +19,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { CrmDataProvider } from "../providers/types";
+import "../inbox/agent-h-theme.css";
 
 const SENIORITY_OPTIONS = [
   "intern",
@@ -94,8 +95,7 @@ type ParsedRoleBrief = {
   past_companies: string[];
 };
 
-const arrayToText = (values: string[] | undefined) =>
-  (values ?? []).join(", ");
+const arrayToText = (values: string[] | undefined) => (values ?? []).join(", ");
 
 const textToArray = (value: string) =>
   value
@@ -245,357 +245,359 @@ export const JdIntakePage = () => {
   };
 
   return (
-    <div className="flex flex-col gap-6 max-w-3xl mx-auto p-6">
-      <div>
-        <h1 className="text-2xl font-semibold">JD Intake</h1>
-        <p className="text-muted-foreground text-sm">
-          Paste a job description in plain language. It'll be parsed into a
-          structured role brief you can review and edit before saving.
-        </p>
-      </div>
-
-      <div className="flex flex-col gap-2">
-        <Label htmlFor="jd-text">Job description</Label>
-        <Textarea
-          id="jd-text"
-          value={jdText}
-          onChange={(e) => setJdText(e.target.value)}
-          rows={10}
-          placeholder="Paste the full job description here..."
-        />
+    <div className="ah-scope">
+      <div className="flex flex-col gap-6 max-w-3xl mx-auto p-6 pb-16">
         <div>
-          <Button onClick={handleParse} disabled={parsing}>
-            {parsing ? "Parsing..." : "Parse with AI"}
-          </Button>
+          <h1 className="text-2xl font-semibold">JD Intake</h1>
+          <p className="text-muted-foreground text-sm">
+            Paste a job description in plain language. It'll be parsed into a
+            structured role brief you can review and edit before saving.
+          </p>
         </div>
-      </div>
 
-      {parsed && (
-        <div className="flex flex-col gap-4 rounded-2xl border border-border/70 bg-card/60 p-6">
-          <h2 className="text-lg font-medium">Review extracted fields</h2>
-
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="title">Role title</Label>
-            <Input
-              id="title"
-              value={parsed.title}
-              onChange={(e) => updateParsed({ title: e.target.value })}
-            />
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="jd-text">Job description</Label>
+          <Textarea
+            id="jd-text"
+            value={jdText}
+            onChange={(e) => setJdText(e.target.value)}
+            rows={10}
+            placeholder="Paste the full job description here..."
+          />
+          <div>
+            <Button onClick={handleParse} disabled={parsing}>
+              {parsing ? "Parsing..." : "Parse with AI"}
+            </Button>
           </div>
+        </div>
 
-          <div className="grid grid-cols-2 gap-4">
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="seniority">Seniority</Label>
-              <select
-                id="seniority"
-                className="border border-input bg-background text-foreground rounded-md h-9 px-2"
-                value={parsed.seniority}
-                onChange={(e) => updateParsed({ seniority: e.target.value })}
-              >
-                {SENIORITY_OPTIONS.map((option) => (
-                  <option key={option} value={option}>
-                    {option}
-                  </option>
-                ))}
-              </select>
-            </div>
+        {parsed && (
+          <div className="ah-panel flex flex-col gap-4 p-6">
+            <h2 className="text-lg font-medium">Review extracted fields</h2>
 
             <div className="flex flex-col gap-2">
-              <Label htmlFor="employment_type">Employment type</Label>
-              <select
-                id="employment_type"
-                className="border border-input bg-background text-foreground rounded-md h-9 px-2"
-                value={parsed.employment_type}
-                onChange={(e) =>
-                  updateParsed({ employment_type: e.target.value })
-                }
-              >
-                {EMPLOYMENT_TYPE_OPTIONS.map((option) => (
-                  <option key={option} value={option}>
-                    {option}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="location">Location</Label>
+              <Label htmlFor="title">Role title</Label>
               <Input
-                id="location"
-                value={parsed.location}
-                onChange={(e) => updateParsed({ location: e.target.value })}
+                id="title"
+                value={parsed.title}
+                onChange={(e) => updateParsed({ title: e.target.value })}
               />
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="industry">Industry</Label>
-              <Input
-                id="industry"
-                value={parsed.industry ?? ""}
-                onChange={(e) => updateParsed({ industry: e.target.value })}
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="years_min">Years experience (min)</Label>
-              <Input
-                id="years_min"
-                type="number"
-                value={parsed.years_experience_min ?? ""}
-                onChange={(e) =>
-                  updateParsed({
-                    years_experience_min: e.target.value
-                      ? Number(e.target.value)
-                      : null,
-                  })
-                }
-              />
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="years_max">Years experience (max)</Label>
-              <Input
-                id="years_max"
-                type="number"
-                value={parsed.years_experience_max ?? ""}
-                onChange={(e) =>
-                  updateParsed({
-                    years_experience_max: e.target.value
-                      ? Number(e.target.value)
-                      : null,
-                  })
-                }
-              />
-            </div>
-          </div>
-
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="skills">Required skills (comma-separated)</Label>
-            <Input
-              id="skills"
-              value={skillsText}
-              onChange={(e) => setSkillsText(e.target.value)}
-            />
-          </div>
-
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="must-have">
-              Must-have keywords (comma-separated)
-            </Label>
-            <Input
-              id="must-have"
-              value={mustHaveText}
-              onChange={(e) => setMustHaveText(e.target.value)}
-            />
-          </div>
-
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="nice-to-have">
-              Nice-to-have keywords (comma-separated)
-            </Label>
-            <Input
-              id="nice-to-have"
-              value={niceToHaveText}
-              onChange={(e) => setNiceToHaveText(e.target.value)}
-            />
-          </div>
-
-          {parsed.clarifying_questions.length > 0 && !questionsDismissed && (
-            <div className="flex flex-col gap-2 rounded-md border border-amber-200 bg-amber-50 p-3">
-              <h3 className="text-sm font-medium text-amber-900">
-                Worth confirming before sourcing starts
-              </h3>
-              <ul className="list-disc pl-5 text-sm text-amber-900">
-                {parsed.clarifying_questions.map((question, i) => (
-                  <li key={i}>{question}</li>
-                ))}
-              </ul>
-              <div>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setQuestionsDismissed(true)}
-                >
-                  Dismiss
-                </Button>
-              </div>
-            </div>
-          )}
-
-          {parsed.preference_tiers.length > 0 && (
-            <div className="flex flex-col gap-3 rounded-md border p-3">
-              <div>
-                <h3 className="text-sm font-medium">
-                  Ranked candidate preferences
-                </h3>
-                <p className="text-muted-foreground text-xs">
-                  This JD described a primary-vs-fallback profile -- edit
-                  each tier below, or clear a tier's keywords to drop it.
-                </p>
-              </div>
-              {[...parsed.preference_tiers]
-                .sort((a, b) => a.rank - b.rank)
-                .map((tier) => (
-                  <div
-                    key={tier.rank}
-                    className="flex flex-col gap-2 rounded-md bg-muted/40 p-2"
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-medium text-muted-foreground">
-                        Tier {tier.rank}
-                      </span>
-                      <Input
-                        aria-label={`Tier ${tier.rank} label`}
-                        value={tier.label}
-                        onChange={(e) =>
-                          updateTier(tier.rank, { label: e.target.value })
-                        }
-                        className="h-8"
-                      />
-                    </div>
-                    <Input
-                      aria-label={`Tier ${tier.rank} keywords`}
-                      placeholder="Keywords (comma-separated)"
-                      value={arrayToText(tier.keywords)}
-                      onChange={(e) =>
-                        updateTier(tier.rank, {
-                          keywords: textToArray(e.target.value),
-                        })
-                      }
-                      className="h-8"
-                    />
-                    <Input
-                      aria-label={`Tier ${tier.rank} condition`}
-                      placeholder="Extra qualifying condition (optional)"
-                      value={tier.condition ?? ""}
-                      onChange={(e) =>
-                        updateTier(tier.rank, {
-                          condition: e.target.value || null,
-                        })
-                      }
-                      className="h-8"
-                    />
-                  </div>
-                ))}
-            </div>
-          )}
-
-          <div className="border-t pt-4 flex flex-col gap-4">
-            <div>
-              <h3 className="text-sm font-medium">
-                Sourcing preferences (optional)
-              </h3>
-              <p className="text-muted-foreground text-xs">
-                Which companies to pull candidates from -- not facts about
-                this role, just where to look.
-              </p>
             </div>
 
             <div className="grid grid-cols-2 gap-4">
               <div className="flex flex-col gap-2">
-                <Label htmlFor="company_type">Company type</Label>
-                <Input
-                  id="company_type"
-                  placeholder="Startup, Product, Services..."
-                  value={parsed.company_type ?? ""}
+                <Label htmlFor="seniority">Seniority</Label>
+                <select
+                  id="seniority"
+                  className="border border-input bg-background text-foreground rounded-md h-9 px-2"
+                  value={parsed.seniority}
+                  onChange={(e) => updateParsed({ seniority: e.target.value })}
+                >
+                  {SENIORITY_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="employment_type">Employment type</Label>
+                <select
+                  id="employment_type"
+                  className="border border-input bg-background text-foreground rounded-md h-9 px-2"
+                  value={parsed.employment_type}
                   onChange={(e) =>
-                    updateParsed({ company_type: e.target.value || null })
+                    updateParsed({ employment_type: e.target.value })
+                  }
+                >
+                  {EMPLOYMENT_TYPE_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="location">Location</Label>
+                <Input
+                  id="location"
+                  value={parsed.location}
+                  onChange={(e) => updateParsed({ location: e.target.value })}
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="industry">Industry</Label>
+                <Input
+                  id="industry"
+                  value={parsed.industry ?? ""}
+                  onChange={(e) => updateParsed({ industry: e.target.value })}
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="years_min">Years experience (min)</Label>
+                <Input
+                  id="years_min"
+                  type="number"
+                  value={parsed.years_experience_min ?? ""}
+                  onChange={(e) =>
+                    updateParsed({
+                      years_experience_min: e.target.value
+                        ? Number(e.target.value)
+                        : null,
+                    })
                   }
                 />
               </div>
               <div className="flex flex-col gap-2">
-                <Label>Company size (employees)</Label>
-                <div className="flex items-center gap-2">
-                  <Input
-                    type="number"
-                    aria-label="Minimum company size"
-                    placeholder="Min"
-                    value={parsed.company_size_min ?? ""}
-                    onChange={(e) =>
-                      updateParsed({
-                        company_size_min: e.target.value
-                          ? Number(e.target.value)
-                          : null,
-                      })
-                    }
-                  />
-                  <span className="text-muted-foreground text-sm">to</span>
-                  <Input
-                    type="number"
-                    aria-label="Maximum company size"
-                    placeholder="Max"
-                    value={parsed.company_size_max ?? ""}
-                    onChange={(e) =>
-                      updateParsed({
-                        company_size_max: e.target.value
-                          ? Number(e.target.value)
-                          : null,
-                      })
-                    }
-                  />
-                </div>
+                <Label htmlFor="years_max">Years experience (max)</Label>
+                <Input
+                  id="years_max"
+                  type="number"
+                  value={parsed.years_experience_max ?? ""}
+                  onChange={(e) =>
+                    updateParsed({
+                      years_experience_max: e.target.value
+                        ? Number(e.target.value)
+                        : null,
+                    })
+                  }
+                />
               </div>
             </div>
 
             <div className="flex flex-col gap-2">
-              <Label htmlFor="excluded-companies">
-                Excluded companies (comma-separated)
-              </Label>
+              <Label htmlFor="skills">Required skills (comma-separated)</Label>
               <Input
-                id="excluded-companies"
-                placeholder="Companies to never surface -- competitors, already contacted, etc."
-                value={excludedCompaniesText}
-                onChange={(e) => setExcludedCompaniesText(e.target.value)}
+                id="skills"
+                value={skillsText}
+                onChange={(e) => setSkillsText(e.target.value)}
               />
             </div>
 
             <div className="flex flex-col gap-2">
-              <Label htmlFor="exclusion-keywords">
-                Exclusion keywords (comma-separated)
+              <Label htmlFor="must-have">
+                Must-have keywords (comma-separated)
               </Label>
               <Input
-                id="exclusion-keywords"
-                placeholder="Terms that should rule a candidate out"
-                value={exclusionKeywordsText}
-                onChange={(e) => setExclusionKeywordsText(e.target.value)}
+                id="must-have"
+                value={mustHaveText}
+                onChange={(e) => setMustHaveText(e.target.value)}
               />
             </div>
 
             <div className="flex flex-col gap-2">
-              <Label htmlFor="past-titles">
-                Past titles (comma-separated, optional)
+              <Label htmlFor="nice-to-have">
+                Nice-to-have keywords (comma-separated)
               </Label>
               <Input
-                id="past-titles"
-                placeholder="Boosts, doesn't require -- e.g. 'Founding Engineer' for someone who held that title earlier in their career"
-                value={pastTitlesText}
-                onChange={(e) => setPastTitlesText(e.target.value)}
+                id="nice-to-have"
+                value={niceToHaveText}
+                onChange={(e) => setNiceToHaveText(e.target.value)}
               />
             </div>
 
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="past-companies">
-                Past companies (comma-separated, optional)
-              </Label>
-              <Input
-                id="past-companies"
-                placeholder="Boosts, doesn't require -- e.g. 'Microsoft' for candidates who worked there at any point, not just currently"
-                value={pastCompaniesText}
-                onChange={(e) => setPastCompaniesText(e.target.value)}
-              />
+            {parsed.clarifying_questions.length > 0 && !questionsDismissed && (
+              <div className="flex flex-col gap-2 rounded-md border border-amber-200 bg-amber-50 p-3">
+                <h3 className="text-sm font-medium text-amber-900">
+                  Worth confirming before sourcing starts
+                </h3>
+                <ul className="list-disc pl-5 text-sm text-amber-900">
+                  {parsed.clarifying_questions.map((question, i) => (
+                    <li key={i}>{question}</li>
+                  ))}
+                </ul>
+                <div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setQuestionsDismissed(true)}
+                  >
+                    Dismiss
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {parsed.preference_tiers.length > 0 && (
+              <div className="flex flex-col gap-3 rounded-md border p-3">
+                <div>
+                  <h3 className="text-sm font-medium">
+                    Ranked candidate preferences
+                  </h3>
+                  <p className="text-muted-foreground text-xs">
+                    This JD described a primary-vs-fallback profile -- edit each
+                    tier below, or clear a tier's keywords to drop it.
+                  </p>
+                </div>
+                {[...parsed.preference_tiers]
+                  .sort((a, b) => a.rank - b.rank)
+                  .map((tier) => (
+                    <div
+                      key={tier.rank}
+                      className="flex flex-col gap-2 rounded-md bg-muted/40 p-2"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-medium text-muted-foreground">
+                          Tier {tier.rank}
+                        </span>
+                        <Input
+                          aria-label={`Tier ${tier.rank} label`}
+                          value={tier.label}
+                          onChange={(e) =>
+                            updateTier(tier.rank, { label: e.target.value })
+                          }
+                          className="h-8"
+                        />
+                      </div>
+                      <Input
+                        aria-label={`Tier ${tier.rank} keywords`}
+                        placeholder="Keywords (comma-separated)"
+                        value={arrayToText(tier.keywords)}
+                        onChange={(e) =>
+                          updateTier(tier.rank, {
+                            keywords: textToArray(e.target.value),
+                          })
+                        }
+                        className="h-8"
+                      />
+                      <Input
+                        aria-label={`Tier ${tier.rank} condition`}
+                        placeholder="Extra qualifying condition (optional)"
+                        value={tier.condition ?? ""}
+                        onChange={(e) =>
+                          updateTier(tier.rank, {
+                            condition: e.target.value || null,
+                          })
+                        }
+                        className="h-8"
+                      />
+                    </div>
+                  ))}
+              </div>
+            )}
+
+            <div className="border-t pt-4 flex flex-col gap-4">
+              <div>
+                <h3 className="text-sm font-medium">
+                  Sourcing preferences (optional)
+                </h3>
+                <p className="text-muted-foreground text-xs">
+                  Which companies to pull candidates from -- not facts about
+                  this role, just where to look.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="company_type">Company type</Label>
+                  <Input
+                    id="company_type"
+                    placeholder="Startup, Product, Services..."
+                    value={parsed.company_type ?? ""}
+                    onChange={(e) =>
+                      updateParsed({ company_type: e.target.value || null })
+                    }
+                  />
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label>Company size (employees)</Label>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      type="number"
+                      aria-label="Minimum company size"
+                      placeholder="Min"
+                      value={parsed.company_size_min ?? ""}
+                      onChange={(e) =>
+                        updateParsed({
+                          company_size_min: e.target.value
+                            ? Number(e.target.value)
+                            : null,
+                        })
+                      }
+                    />
+                    <span className="text-muted-foreground text-sm">to</span>
+                    <Input
+                      type="number"
+                      aria-label="Maximum company size"
+                      placeholder="Max"
+                      value={parsed.company_size_max ?? ""}
+                      onChange={(e) =>
+                        updateParsed({
+                          company_size_max: e.target.value
+                            ? Number(e.target.value)
+                            : null,
+                        })
+                      }
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="excluded-companies">
+                  Excluded companies (comma-separated)
+                </Label>
+                <Input
+                  id="excluded-companies"
+                  placeholder="Companies to never surface -- competitors, already contacted, etc."
+                  value={excludedCompaniesText}
+                  onChange={(e) => setExcludedCompaniesText(e.target.value)}
+                />
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="exclusion-keywords">
+                  Exclusion keywords (comma-separated)
+                </Label>
+                <Input
+                  id="exclusion-keywords"
+                  placeholder="Terms that should rule a candidate out"
+                  value={exclusionKeywordsText}
+                  onChange={(e) => setExclusionKeywordsText(e.target.value)}
+                />
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="past-titles">
+                  Past titles (comma-separated, optional)
+                </Label>
+                <Input
+                  id="past-titles"
+                  placeholder="Boosts, doesn't require -- e.g. 'Founding Engineer' for someone who held that title earlier in their career"
+                  value={pastTitlesText}
+                  onChange={(e) => setPastTitlesText(e.target.value)}
+                />
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="past-companies">
+                  Past companies (comma-separated, optional)
+                </Label>
+                <Input
+                  id="past-companies"
+                  placeholder="Boosts, doesn't require -- e.g. 'Microsoft' for candidates who worked there at any point, not just currently"
+                  value={pastCompaniesText}
+                  onChange={(e) => setPastCompaniesText(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div>
+              <Button onClick={handleCreate} disabled={saving}>
+                {saving ? "Saving..." : "Create Role Brief"}
+              </Button>
             </div>
           </div>
-
-          <div>
-            <Button onClick={handleCreate} disabled={saving}>
-              {saving ? "Saving..." : "Create Role Brief"}
-            </Button>
-          </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 };

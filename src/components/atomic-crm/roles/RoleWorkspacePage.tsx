@@ -27,7 +27,9 @@ import {
   useGetList,
   useRecordContext,
 } from "ra-core";
-import { useParams } from "react-router";
+import { useNavigate, useParams } from "react-router";
+import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EditButton } from "@/components/admin/edit-button";
@@ -43,72 +45,154 @@ import type { CrmDataProvider } from "../providers/types";
 import { useConfigurationContext } from "../root/ConfigurationContext";
 import { SourceCandidatesPage } from "../sourcing/SourceCandidatesPage";
 import { SourcingSidebar } from "../sourcing/SourcingSidebar";
+import { AgentHShell } from "../shell/AgentHShell";
+import { useRoleShellContext } from "../shell/useShellContext";
 import type { Deal } from "../types";
+import "../inbox/agent-h-theme.css";
 
 export const RoleWorkspacePage = () => {
   const { id } = useParams<{ id: string }>();
-  // Task #32 (2026-07-22): the sourcing chat sidebar existed on the Inbox
-  // (InboxPage) but was never wired into the Role Workspace -- a recruiter
-  // already looking at a specific role's page had no way to reach the same
-  // "talk to Agent H" conversation without leaving for the Inbox first, an
-  // inconsistency worth fixing since this page is meant to be the single
-  // place a role's work happens. Same component/hook as the Inbox
-  // (useSourcingThread inside SourcingSidebar) -- just a second mount point.
+
+  if (!id) return null;
+
+  return (
+    <ShowBase id={id} resource="deals">
+      <RoleWorkspaceContent dealId={id} />
+    </ShowBase>
+  );
+};
+
+const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
+  const navigate = useNavigate();
+  const dataProvider = useDataProvider<CrmDataProvider>();
+  const queryClient = useQueryClient();
+  const { dealStages } = useConfigurationContext();
+  const deal = useRecordContext<Deal>();
   const [sourcingOpen, setSourcingOpen] = useState(false);
   const { data: openDeals } = useGetList<Deal>("deals", {
     pagination: { page: 1, perPage: 20 },
     sort: { field: "updated_at", order: "DESC" },
     filter: { "archived_at@is": null },
   });
+  const { total: pipelineCount = 0, isPending: pipelinePending } = useGetList(
+    "deal_candidates",
+    {
+      pagination: { page: 1, perPage: 1 },
+      filter: { deal_id: dealId },
+    },
+  );
 
-  if (!id) return null;
+  const shellContext = useRoleShellContext({
+    deal,
+    dealStages,
+    pipelineCount,
+    isPending: !deal || pipelinePending,
+  });
+
+  const runFreeTextCommand = async (commandText: string) => {
+    const dealIdNum = Number(dealId);
+    try {
+      const parsed = await dataProvider.parseAgentCommand(commandText, {
+        view: "canvas",
+        open_deals: (openDeals ?? []).map((d) => ({ id: d.id, name: d.name })),
+        current_deal_id: Number.isFinite(dealIdNum) ? dealIdNum : null,
+      });
+
+      if (parsed.action === "create_role") {
+        navigate("/jd-intake");
+      } else if (
+        parsed.action === "continue_sourcing" &&
+        parsed.deal_id != null
+      ) {
+        const dealName =
+          openDeals?.find((d) => d.id === parsed.deal_id)?.name ??
+          deal?.name ??
+          "this role";
+        const result = await dataProvider.continueSourcingForDeal(
+          parsed.deal_id,
+        );
+        queryClient.invalidateQueries({ queryKey: ["deals", dealId] });
+        queryClient.invalidateQueries({
+          queryKey: ["deal_candidates"],
+        });
+        const filteredNote =
+          result.filteredCount > 0
+            ? `, ${result.filteredCount} filtered as not relevant`
+            : "";
+        toast.success(
+          `${dealName}: found ${result.foundCount}, saved ${result.savedCount} to pipeline${filteredNote}`,
+        );
+      } else if (
+        parsed.action === "relax_criterion" &&
+        parsed.criterion_id != null
+      ) {
+        await dataProvider.relaxLearnedCriterion(parsed.criterion_id);
+        queryClient.invalidateQueries({ queryKey: ["inbox_per_deal_signals"] });
+        toast.success("Criterion relaxed");
+      } else if (parsed.action === "show_roles") {
+        navigate("/deals");
+      } else {
+        toast(parsed.explanation);
+      }
+    } catch {
+      toast.error("Couldn't run that command");
+    }
+  };
 
   return (
-    <div className="flex flex-col gap-8 max-w-3xl mx-auto p-6 pb-16">
-      <ShowBase id={id} resource="deals">
+    <AgentHShell
+      context={shellContext}
+      commandBar={{
+        placeholder: "Tell Agent H what you need for this role",
+        hint: "Try: “find more candidates like these” or “relax the Python requirement”.",
+        slashActions: [
+          { cmd: "/relax", label: "Relax a criterion on this role" },
+        ],
+        onSubmit: runFreeTextCommand,
+      }}
+    >
+      <div className="flex flex-col gap-8 max-w-3xl mx-auto p-6 pb-8 overflow-y-auto flex-1 min-h-0">
         <RoleWorkspaceHeader
           sourcingOpen={sourcingOpen}
           onToggleSourcing={() => setSourcingOpen((v) => !v)}
         />
-      </ShowBase>
 
-      <div className="rounded-2xl border border-border/70 bg-card/60 p-6">
-        <SourceCandidatesPage initialRoleBriefId={id} />
+        <SourceCandidatesPage initialRoleBriefId={dealId} />
+
+        <div className="ah-panel p-6 flex flex-col gap-6">
+          <ManualResumeUploadPanel dealId={dealId} />
+          <Separator />
+          <BulkResumeUploadPanel dealId={dealId} />
+        </div>
+
+        <div className="ah-panel p-6">
+          <DealCandidatesSection dealId={dealId} />
+        </div>
+
+        <div className="ah-panel p-6">
+          <h3 className="text-sm font-medium tracking-wide uppercase text-muted-foreground mb-3">
+            Notes
+          </h3>
+          <InfiniteListBase
+            resource="deal_notes"
+            filter={{ deal_id: dealId }}
+            sort={{ field: "date", order: "DESC" }}
+            perPage={25}
+            disableSyncWithLocation
+            storeKey={false}
+            empty={<NoteCreate reference="deals" />}
+          >
+            <NotesIterator reference="deals" />
+          </InfiniteListBase>
+        </div>
+
+        <SourcingSidebar
+          open={sourcingOpen}
+          onClose={() => setSourcingOpen(false)}
+          openDeals={openDeals ?? []}
+        />
       </div>
-
-      <div className="rounded-2xl border border-border/70 bg-card/60 p-6 flex flex-col gap-6">
-        <ManualResumeUploadPanel dealId={id} />
-        <Separator />
-        <BulkResumeUploadPanel dealId={id} />
-      </div>
-
-      <div className="rounded-2xl border border-border/70 bg-card/60 p-6">
-        <DealCandidatesSection dealId={id} />
-      </div>
-
-      <div className="rounded-2xl border border-border/70 bg-card/60 p-6">
-        <h3 className="text-sm font-medium tracking-wide uppercase text-muted-foreground mb-3">
-          Notes
-        </h3>
-        <InfiniteListBase
-          resource="deal_notes"
-          filter={{ deal_id: id }}
-          sort={{ field: "date", order: "DESC" }}
-          perPage={25}
-          disableSyncWithLocation
-          storeKey={false}
-          empty={<NoteCreate reference="deals" />}
-        >
-          <NotesIterator reference="deals" />
-        </InfiniteListBase>
-      </div>
-
-      <SourcingSidebar
-        open={sourcingOpen}
-        onClose={() => setSourcingOpen(false)}
-        openDeals={openDeals ?? []}
-      />
-    </div>
+    </AgentHShell>
   );
 };
 

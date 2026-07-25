@@ -143,3 +143,10 @@
     opacity: 0.3;
   }
 }
+
+/* Nested section panels inside an ah-scope shell (Role Workspace, embedded sourcing). */
+.ah-panel {
+  background: var(--ah-glass);
+  border: 1px solid var(--ah-border);
+  border-radius: var(--ah-radius);
+}

@@ -3271,6 +3271,197 @@ async function handleCriteriaImpact(
   });
 }
 
+/** Re-fetch a single Crustdata profile by stored person id (cheap restore). */
+async function fetchCrustdataPersonById(
+  sourceId: string,
+): Promise<Record<string, unknown> | null> {
+  if (!CRUSTDATA_API_KEY) return null;
+  const numericId = Number(sourceId);
+  if (!Number.isFinite(numericId)) return null;
+
+  const response = await fetch(CRUSTDATA_SEARCH_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${CRUSTDATA_API_KEY}`,
+      "x-api-version": CRUSTDATA_API_VERSION,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      filters: {
+        field: "crustdata_person_id",
+        type: "=",
+        value: numericId,
+      },
+      limit: 1,
+    }),
+  });
+
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(
+      `Crustdata person lookup failed (${response.status}): ${JSON.stringify(
+        (result as Record<string, unknown>)?.error ?? result,
+      )}`,
+    );
+  }
+
+  const profiles = (result as Record<string, unknown>)?.profiles as
+    | Array<Record<string, unknown>>
+    | undefined;
+  if (!profiles?.length) return null;
+  return normalizeCrustdataCandidate(profiles[0]) as Record<string, unknown>;
+}
+
+// Restore candidates from discovery_source_attribution (written on each
+// Fetch / Search wider). Does NOT re-run the full role query — one Crustdata
+// lookup per stored person id, so you get the same people back without
+// paying for a brand-new search.
+async function handleRehydrateFromAttribution(
+  body: Record<string, unknown>,
+  authHeader: string,
+): Promise<Response> {
+  const dealId = body?.deal_id;
+  if (!dealId || typeof dealId !== "number") {
+    return jsonResponse({ error: "deal_id is required" }, 400);
+  }
+  if (!crustdataProvider.isConfigured()) {
+    return jsonResponse(
+      {
+        error:
+          "CRUSTDATA_API_KEY is not set for this project -- required to restore search results.",
+      },
+      500,
+    );
+  }
+
+  const roleBrief = await fetchRoleBrief(dealId, authHeader);
+  if (!roleBrief) {
+    return jsonResponse(
+      { error: "Role brief not found (or you don't have access to it)" },
+      404,
+    );
+  }
+
+  const nowIso = new Date().toISOString();
+  const attrRes = await fetch(
+    `${SUPABASE_URL}/rest/v1/discovery_source_attribution?deal_id=eq.${dealId}&expires_at=gt.${encodeURIComponent(nowIso)}&select=source_id,vendor&order=created_at.asc`,
+    {
+      headers: {
+        apikey: SUPABASE_ANON_KEY ?? "",
+        Authorization: authHeader,
+      },
+    },
+  );
+  if (!attrRes.ok) {
+    console.error(
+      "rehydrate_from_attribution: attribution fetch failed",
+      attrRes.status,
+      await attrRes.text(),
+    );
+    return jsonResponse(
+      { error: "Failed to load saved search person ids for this role" },
+      502,
+    );
+  }
+
+  const rows = (await attrRes.json()) as Array<{
+    source_id: string;
+    vendor: string;
+  }>;
+  if (!rows.length) {
+    return jsonResponse(
+      {
+        error:
+          "No recent search results on file for this role. If you refreshed the page, browser session data may be gone — run Fetch candidates again.",
+        rehydrated_count: 0,
+      },
+      404,
+    );
+  }
+
+  const notes: string[] = [
+    `Restored ${rows.length} candidate id(s) from your last discovery search on this role (one Crustdata lookup each, not a new search).`,
+  ];
+  const candidates: Array<Record<string, unknown>> = [];
+  let lookupFailures = 0;
+  let skippedVendor = 0;
+
+  for (const row of rows) {
+    if (row.vendor !== "crustdata") {
+      skippedVendor += 1;
+      continue;
+    }
+    try {
+      const person = await fetchCrustdataPersonById(row.source_id);
+      if (person) candidates.push(person);
+    } catch (error) {
+      lookupFailures += 1;
+      console.error(
+        "rehydrate_from_attribution: person lookup failed",
+        row.source_id,
+        error,
+      );
+    }
+  }
+
+  if (skippedVendor > 0) {
+    notes.push(
+      `${skippedVendor} hit(s) from non-Crustdata sources were skipped (restore supports Crustdata fetch results only).`,
+    );
+  }
+  if (lookupFailures > 0) {
+    notes.push(
+      `${lookupFailures} profile(s) could not be reloaded from Crustdata.`,
+    );
+  }
+  if (candidates.length === 0) {
+    return jsonResponse(
+      {
+        error:
+          "Could not reload any profiles from the saved search ids — they may have expired at Crustdata. Run Fetch candidates again.",
+        rehydrated_count: 0,
+      },
+      404,
+    );
+  }
+
+  try {
+    await annotateAlreadySaved(candidates, authHeader);
+  } catch (error) {
+    console.error("rehydrate annotateAlreadySaved failed (non-fatal)", error);
+  }
+
+  if (VOYAGE_API_KEY) {
+    try {
+      const roleBriefVector = await getOrRefreshRoleBriefEmbedding(
+        roleBrief,
+        authHeader,
+      );
+      await scoreAndSortCandidates(candidates, roleBriefVector);
+    } catch (error) {
+      console.error("rehydrate scoring failed (non-fatal)", error);
+      notes.push(
+        "Match scoring unavailable for restored profiles — shown in discovery order.",
+      );
+    }
+  }
+
+  return jsonResponse({
+    role_brief: {
+      id: roleBrief.id,
+      title: roleBrief.name,
+      location: roleBrief.location,
+    },
+    query_used: null,
+    notes,
+    total: candidates.length,
+    total_matches_all: null,
+    candidates: candidates.map(stripVendorFieldsForClient),
+    scroll_token: roleBrief.role_brief_last_scroll_token ?? null,
+    rehydrated_count: candidates.length,
+  });
+}
+
 // Signature note (2026-07-17 calibration-loop change): this used to parse
 // its own request body from a raw Request. Deno.serve below now reads the
 // JSON body ONCE (a Request body can only be consumed once) and branches on
@@ -3547,6 +3738,9 @@ Deno.serve(async (req: Request) => {
   }
   if (body?.mode === "criteria_impact") {
     return handleCriteriaImpact(body, authHeader);
+  }
+  if (body?.mode === "rehydrate_from_attribution") {
+    return handleRehydrateFromAttribution(body, authHeader);
   }
 
   return discoverCandidates(body, authHeader);

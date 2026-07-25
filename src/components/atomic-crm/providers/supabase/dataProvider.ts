@@ -450,6 +450,61 @@ const getDataProviderWithCustomMethods = () => {
       return data;
     },
 
+    // Restore candidates from discovery_source_attribution after a page
+    // refresh wiped in-memory search results (one Crustdata lookup per id).
+    async rehydrateDiscoveryCandidates(roleBriefId: Identifier) {
+      const { data, error } = await getSupabaseClient().functions.invoke<{
+        role_brief: {
+          id: number;
+          title: string | null;
+          location: string | null;
+        };
+        query_used: unknown;
+        notes: string[];
+        total: number;
+        total_matches_all: number | null;
+        candidates: Array<{
+          id: string;
+          full_name?: string;
+          job_title?: string;
+          job_company_name?: string;
+          location_name?: string;
+          linkedin_url?: string;
+          emails?: { address: string; type?: string }[];
+          skills?: string[];
+          _already_saved?: boolean;
+          _candidate_id?: number | null;
+          _match_score?: number | null;
+        }>;
+        scroll_token: string | null;
+        rehydrated_count?: number;
+      }>("source-candidates-discovery", {
+        method: "POST",
+        body: {
+          mode: "rehydrate_from_attribution",
+          deal_id: Number(roleBriefId),
+        },
+      });
+
+      if (!data || error) {
+        console.error("rehydrateDiscoveryCandidates.error", error);
+        const errorDetails = await (async () => {
+          try {
+            return (await error?.context?.json()) ?? {};
+          } catch {
+            return {};
+          }
+        })();
+        throw new Error(
+          errorDetails?.message ||
+            errorDetails?.error ||
+            "Failed to restore last search results",
+        );
+      }
+
+      return data;
+    },
+
     // Agent H Stage 3: X-ray search (2026-07-22). Runs multiple Exa
     // searches per portal, scoped via includeDomains to linkedin.com /
     // codechef.com / hackerrank.com -- see source-candidates-xray/index.ts's

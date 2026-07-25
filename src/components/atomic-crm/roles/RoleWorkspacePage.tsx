@@ -46,6 +46,7 @@ import { useConfigurationContext } from "../root/ConfigurationContext";
 import { SourceCandidatesPage } from "../sourcing/SourceCandidatesPage";
 import { SourcingSidebar } from "../sourcing/SourcingSidebar";
 import { AgentHShell } from "../shell/AgentHShell";
+import { RoleConversationTranscript } from "../shell/RoleConversationTranscript";
 import { useRoleShellContext } from "../shell/useShellContext";
 import type { Deal } from "../types";
 import "../inbox/agent-h-theme.css";
@@ -156,6 +157,8 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
           sourcingOpen={sourcingOpen}
           onToggleSourcing={() => setSourcingOpen((v) => !v)}
         />
+
+        <RoleConversationTranscript dealId={dealId} />
 
         <SourceCandidatesPage initialRoleBriefId={dealId} />
 

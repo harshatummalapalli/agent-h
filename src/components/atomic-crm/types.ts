@@ -152,6 +152,18 @@ export type Deal = {
   role_brief_last_scroll_updated_at?: string | null;
 } & Pick<RaRecord, "id">;
 
+// See docs/adr/ADR-617f-phase-b-role-conversation-turns.md
+export type RoleConversationTurn = {
+  deal_id: Identifier;
+  speaker: "recruiter" | "agent";
+  actor_sales_id?: Identifier | null;
+  content: string;
+  in_reply_to?: Identifier | null;
+  idempotency_key?: string | null;
+  metadata?: Record<string, unknown>;
+  created_at: string;
+} & Pick<RaRecord, "id">;
+
 export type DealNote = {
   deal_id: Identifier;
   text: string;

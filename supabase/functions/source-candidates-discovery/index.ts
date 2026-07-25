@@ -1819,7 +1819,7 @@ async function fetchCoresignalTotal(
   }
 }
 
-const coresignalProvider: DiscoveryProvider = {
+const _coresignalProvider: DiscoveryProvider = {
   name: "coresignal",
   isConfigured: () => Boolean(CORESIGNAL_API_KEY),
   async search(criteria, options) {
@@ -2617,24 +2617,21 @@ const crustdataProvider: DiscoveryProvider = {
 //     comment above), plus its People Search call has an open, undiagnosed
 //     502 bug. Reserved instead for a later, separate contact-enrichment
 //     step on candidates already found via Coresignal (task #27).
-//   - crustdataProvider: added 2026-07-23 as a second ACTIVE provider
-//     (unlike PDL/Apollo, not dormant) -- explicitly for optionality, not
-//     because it's won a vendor comparison against Coresignal. Listed
-//     second, after coresignalProvider, so: (a) a normal search still tries
-//     Coresignal first and only falls through to Crustdata on a genuine
-//     Coresignal failure (network/auth/rate-limit/insufficient-credits --
-//     see runDiscovery's fallback logic below), and (b) an explicit
-//     `provider: "crustdata"` in the request body (see discoverCandidates'
-//     preferredProvider handling) can force it on demand, e.g. to compare
-//     results side by side or to switch entirely if Coresignal's pricing/
-//     plan ever changes. isConfigured() gates on CRUSTDATA_API_KEY being
-//     set, so until that secret is added in the Supabase dashboard,
-//     crustdataProvider is silently skipped -- zero behavior change for
-//     existing searches.
-const DISCOVERY_PROVIDERS: DiscoveryProvider[] = [
-  coresignalProvider,
-  crustdataProvider,
-];
+//   - crustdataProvider: sole ACTIVE discovery provider as of Phase 1 vendor
+//     consolidation (2026-07-25, ADR-unipile-linkedin-outreach). Listed
+//     alone in DISCOVERY_PROVIDERS — Coresignal is dormant (code kept).
+//     isConfigured() gates on CRUSTDATA_API_KEY being set.
+const DISCOVERY_PROVIDERS: DiscoveryProvider[] = [crustdataProvider];
+
+function getPrimaryDiscoveryProvider(): DiscoveryProvider {
+  const configured = DISCOVERY_PROVIDERS.filter((p) => p.isConfigured());
+  if (configured.length === 0) {
+    throw new Error(
+      "No discovery provider is configured for this project. Add CRUSTDATA_API_KEY under Project Settings > Edge Functions > Secrets.",
+    );
+  }
+  return configured[0];
+}
 
 // Tries each configured provider in priority order. A provider that isn't
 // configured (no API key set) is skipped silently, not counted as a
@@ -2656,7 +2653,7 @@ async function runDiscovery(
   const configured = DISCOVERY_PROVIDERS.filter((p) => p.isConfigured());
   if (configured.length === 0) {
     throw new Error(
-      "No discovery provider is configured for this project. Add CORESIGNAL_API_KEY under Project Settings > Edge Functions > Secrets (PDL and Apollo are currently dormant for discovery -- see the header comment near DISCOVERY_PROVIDERS).",
+      "No discovery provider is configured for this project. Add CRUSTDATA_API_KEY under Project Settings > Edge Functions > Secrets (Coresignal/Apollo/PDL are dormant for discovery — see DISCOVERY_PROVIDERS).",
     );
   }
 
@@ -2744,11 +2741,11 @@ async function handleCalibrationContextualize(
       500,
     );
   }
-  if (!CORESIGNAL_API_KEY) {
+  if (!crustdataProvider.isConfigured()) {
     return jsonResponse(
       {
         error:
-          "CORESIGNAL_API_KEY is not set for this project -- required to preview a learned criterion's impact.",
+          "CRUSTDATA_API_KEY is not set for this project -- required to preview a learned criterion's impact.",
       },
       500,
     );
@@ -2971,8 +2968,8 @@ async function handleCalibrationContextualize(
       cachedScrollQuery: null,
     };
     const [beforeResult, afterResult] = await Promise.all([
-      coresignalProvider.search(baseCriteria, previewOptions),
-      coresignalProvider.search(afterCriteria, previewOptions),
+      getPrimaryDiscoveryProvider().search(baseCriteria, previewOptions),
+      getPrimaryDiscoveryProvider().search(afterCriteria, previewOptions),
     ]);
     currentTotal = beforeResult.totalMatches ?? null;
     projectedTotal = afterResult.totalMatches ?? null;
@@ -3062,11 +3059,11 @@ async function handleCriteriaImpact(
   if (!dealId || typeof dealId !== "number") {
     return jsonResponse({ error: "deal_id is required" }, 400);
   }
-  if (!CORESIGNAL_API_KEY) {
+  if (!crustdataProvider.isConfigured()) {
     return jsonResponse(
       {
         error:
-          "CORESIGNAL_API_KEY is not set for this project -- required to compute criteria impact.",
+          "CRUSTDATA_API_KEY is not set for this project -- required to compute criteria impact.",
       },
       500,
     );
@@ -3144,7 +3141,7 @@ async function handleCriteriaImpact(
 
   let baseTotal: number | null = null;
   try {
-    const baseResult = await coresignalProvider.search(
+    const baseResult = await getPrimaryDiscoveryProvider().search(
       baseCriteriaFor(activeCriteria),
       previewOptions,
     );
@@ -3204,7 +3201,7 @@ async function handleCriteriaImpact(
       try {
         if (criterion.status === "active") {
           const without = activeCriteria.filter((c) => c.id !== criterion.id);
-          const result = await coresignalProvider.search(
+          const result = await getPrimaryDiscoveryProvider().search(
             baseCriteriaFor(without),
             previewOptions,
           );
@@ -3215,7 +3212,7 @@ async function handleCriteriaImpact(
               : null;
         } else {
           const withThis = [...activeCriteria, criterion];
-          const result = await coresignalProvider.search(
+          const result = await getPrimaryDiscoveryProvider().search(
             baseCriteriaFor(withThis),
             previewOptions,
           );

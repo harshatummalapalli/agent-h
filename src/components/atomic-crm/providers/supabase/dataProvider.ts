@@ -291,7 +291,7 @@ const getDataProviderWithCustomMethods = () => {
       scrollToken?: string | null,
       isPreview?: boolean,
       // Taxonomy/boolean-logic test addition: optional forced vendor name
-      // ("apollo" | "coresignal"), passed straight through to the edge
+      // ("crustdata" active; "coresignal"/"apollo" dormant).
       // function's runDiscovery preferredProvider param -- lets the same
       // role brief be run against ONE specific vendor on demand for a real
       // side-by-side comparison, bypassing the normal priority-fallback

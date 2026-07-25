@@ -3,6 +3,10 @@
 // architecture doc's "SeekOut: niche technical enrichment depth" line
 // item, logged there as "deferred, not forgotten").
 //
+// Directory note (2026-07-25): this folder was recreated as a real directory
+// (replacing a OneDrive junction that broke Supabase bundler/deploy on
+// Windows — same fix as save-sourced-candidate). See ADR-unipile Phase 0.
+//
 // Scope, same manual/on-demand discipline as enrich-candidate-contact:
 // runs only when a recruiter explicitly clicks "Enrich dev signals" on one
 // specific already-saved candidate. Nothing here fires automatically on
@@ -128,7 +132,10 @@ async function fetchCompanyName(
   authHeader: string,
 ): Promise<string | null> {
   if (!companyId) return null;
-  const response = await restFetch(`companies?id=eq.${companyId}&select=name`, authHeader);
+  const response = await restFetch(
+    `companies?id=eq.${companyId}&select=name`,
+    authHeader,
+  );
   if (!response.ok) return null;
   const rows = await response.json();
   return rows?.[0]?.name ?? null;
@@ -140,7 +147,10 @@ async function fetchCompanyName(
 // across platforms. Deliberately not a fuzzy edit-distance match either --
 // that would risk false positives (matching two different companies with
 // similar short names), which is worse than a missed corroboration here.
-function looselyMatches(a: string | null | undefined, b: string | null | undefined): boolean {
+function looselyMatches(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): boolean {
   if (!a || !b) return false;
   const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
   const na = normalize(a);
@@ -171,26 +181,40 @@ async function searchGithub(
   if (!candidate.first_name || !candidate.last_name) return null;
   const fullName = `${candidate.first_name} ${candidate.last_name}`.trim();
 
-  const headers: Record<string, string> = { Accept: "application/vnd.github+json" };
+  const headers: Record<string, string> = {
+    Accept: "application/vnd.github+json",
+  };
   if (GITHUB_TOKEN) headers.Authorization = `Bearer ${GITHUB_TOKEN}`;
 
   const searchUrl = `${GITHUB_SEARCH_URL}?q=${encodeURIComponent(`${fullName} in:name`)}&per_page=5`;
   const searchResponse = await fetch(searchUrl, { headers });
   if (!searchResponse.ok) {
     const body = await searchResponse.text();
-    throw new Error(`GitHub search API error (${searchResponse.status}): ${body}`);
+    throw new Error(
+      `GitHub search API error (${searchResponse.status}): ${body}`,
+    );
   }
   const searchResult = await searchResponse.json();
   const candidates: Array<{ login: string }> = searchResult?.items ?? [];
   if (candidates.length === 0) return null;
 
-  const strictMatches: Array<{ login: string; profile: any; corroborated: boolean }> = [];
+  const strictMatches: Array<{
+    login: string;
+    profile: any;
+    corroborated: boolean;
+  }> = [];
   for (const item of candidates.slice(0, 5)) {
-    const profileResponse = await fetch(`${GITHUB_USER_URL}/${item.login}`, { headers });
+    const profileResponse = await fetch(`${GITHUB_USER_URL}/${item.login}`, {
+      headers,
+    });
     if (!profileResponse.ok) continue;
     const profile = await profileResponse.json();
     const profileName: string | null = profile?.name ?? null;
-    if (!profileName || profileName.trim().toLowerCase() !== fullName.toLowerCase()) continue;
+    if (
+      !profileName ||
+      profileName.trim().toLowerCase() !== fullName.toLowerCase()
+    )
+      continue;
     const corroborated = looselyMatches(profile?.company, companyName);
     strictMatches.push({ login: item.login, profile, corroborated });
   }
@@ -201,7 +225,8 @@ async function searchGithub(
   // matches; otherwise only accept if there's exactly one strict match at
   // all (no way to disambiguate two same-named, same-unconfirmed people).
   const corroboratedMatch = strictMatches.find((m) => m.corroborated);
-  const chosen = corroboratedMatch ?? (strictMatches.length === 1 ? strictMatches[0] : null);
+  const chosen =
+    corroboratedMatch ?? (strictMatches.length === 1 ? strictMatches[0] : null);
   if (!chosen) return null;
 
   return {
@@ -231,14 +256,19 @@ async function searchStackOverflow(
   });
   if (STACK_EXCHANGE_API_KEY) params.set("key", STACK_EXCHANGE_API_KEY);
 
-  const response = await fetch(`${STACK_EXCHANGE_USERS_URL}?${params.toString()}`);
+  const response = await fetch(
+    `${STACK_EXCHANGE_USERS_URL}?${params.toString()}`,
+  );
   if (!response.ok) {
     const body = await response.text();
     throw new Error(`Stack Exchange API error (${response.status}): ${body}`);
   }
   const result = await response.json();
-  const items: Array<{ display_name: string; link: string; about_me?: string }> =
-    result?.items ?? [];
+  const items: Array<{
+    display_name: string;
+    link: string;
+    about_me?: string;
+  }> = result?.items ?? [];
   if (items.length === 0) return null;
 
   const strictMatches = items.filter(
@@ -253,7 +283,8 @@ async function searchStackOverflow(
   const corroboratedMatch = strictMatches.find((u) =>
     looselyMatches(u.about_me, companyName),
   );
-  const chosen = corroboratedMatch ?? (strictMatches.length === 1 ? strictMatches[0] : null);
+  const chosen =
+    corroboratedMatch ?? (strictMatches.length === 1 ? strictMatches[0] : null);
   if (!chosen) return null;
 
   return {
@@ -295,7 +326,10 @@ const enrichCandidateDevsignals = async (req: Request) => {
   ];
   let hadFailure = false;
 
-  const companyName = await fetchCompanyName(candidate.current_company_id, authHeader);
+  const companyName = await fetchCompanyName(
+    candidate.current_company_id,
+    authHeader,
+  );
 
   let github: DevSignalMatch | null = null;
   try {
@@ -341,8 +375,8 @@ const enrichCandidateDevsignals = async (req: Request) => {
     devsignal_enrichment_status: hadFailure
       ? "failed"
       : github || stackoverflow
-      ? "enriched"
-      : "not_found",
+        ? "enriched"
+        : "not_found",
   };
   if (github) {
     patchBody.github_url = github.url;
@@ -354,16 +388,27 @@ const enrichCandidateDevsignals = async (req: Request) => {
     patchBody.stackoverflow_profile_raw = stackoverflow.raw;
   }
 
-  const patchResponse = await restFetch(`candidates?id=eq.${candidateId}`, authHeader, {
-    method: "PATCH",
-    headers: { Prefer: "return=representation" },
-    body: JSON.stringify(patchBody),
-  });
+  const patchResponse = await restFetch(
+    `candidates?id=eq.${candidateId}`,
+    authHeader,
+    {
+      method: "PATCH",
+      headers: { Prefer: "return=representation" },
+      body: JSON.stringify(patchBody),
+    },
+  );
 
   if (!patchResponse.ok) {
     const errorBody = await patchResponse.text();
-    console.error("devsignal enrichment PATCH failed", patchResponse.status, errorBody);
-    return jsonResponse({ error: "Enrichment ran but failed to save to the candidate record" }, 502);
+    console.error(
+      "devsignal enrichment PATCH failed",
+      patchResponse.status,
+      errorBody,
+    );
+    return jsonResponse(
+      { error: "Enrichment ran but failed to save to the candidate record" },
+      502,
+    );
   }
 
   return jsonResponse({

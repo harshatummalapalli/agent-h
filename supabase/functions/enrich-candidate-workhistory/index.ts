@@ -55,6 +55,10 @@ const CORESIGNAL_API_KEY = Deno.env.get("CORESIGNAL_API_KEY");
 const CORESIGNAL_COLLECT_BASE =
   "https://api.coresignal.com/cdapi/v2/employee_multi_source/collect/";
 
+// Phase 1 vendor consolidation (docs/adr/ADR-unipile-linkedin-outreach.md):
+// Coresignal Collect disabled — code kept for re-enable.
+const CORESIGNAL_COLLECT_ENABLED = false;
+
 const PDL_API_KEY = Deno.env.get("PDL_API_KEY");
 const PDL_ENRICH_URL = "https://api.peopledatalabs.com/v5/person/enrich";
 
@@ -81,7 +85,9 @@ async function requireAuth(req: Request): Promise<Response | null> {
     return jsonResponse({ error: "Invalid authorization header" }, 401);
   }
   try {
-    await jose.jwtVerify(token, SUPABASE_JWT_KEYS, { issuer: SUPABASE_JWT_ISSUER });
+    await jose.jwtVerify(token, SUPABASE_JWT_KEYS, {
+      issuer: SUPABASE_JWT_ISSUER,
+    });
     return null;
   } catch {
     return jsonResponse({ error: "Unauthorized" }, 401);
@@ -136,7 +142,14 @@ type ProfileResult = {
 // etc.) and the rich profile view reads from the raw blob directly anyway.
 function extractWorkHistory(
   experience: unknown,
-  fieldMap: { title: string; company: string; dateFrom: string; dateTo: string; duration?: string; description: string },
+  fieldMap: {
+    title: string;
+    company: string;
+    dateFrom: string;
+    dateTo: string;
+    duration?: string;
+    description: string;
+  },
 ): Array<Record<string, unknown>> {
   if (!Array.isArray(experience)) return [];
   return experience.map((entry) => {
@@ -146,13 +159,17 @@ function extractWorkHistory(
       company: e[fieldMap.company] ?? null,
       date_from: e[fieldMap.dateFrom] ?? null,
       date_to: e[fieldMap.dateTo] ?? null,
-      duration_months: fieldMap.duration ? e[fieldMap.duration] ?? null : null,
+      duration_months: fieldMap.duration
+        ? (e[fieldMap.duration] ?? null)
+        : null,
       description: e[fieldMap.description] ?? null,
     };
   });
 }
 
-async function tryCoresignalCollect(candidate: CandidateRow): Promise<ProfileResult | null> {
+async function tryCoresignalCollect(
+  candidate: CandidateRow,
+): Promise<ProfileResult | null> {
   if (!CORESIGNAL_API_KEY || !candidate.linkedin_url) return null;
 
   const url = `${CORESIGNAL_COLLECT_BASE}${encodeURIComponent(candidate.linkedin_url)}`;
@@ -181,7 +198,9 @@ async function tryCoresignalCollect(candidate: CandidateRow): Promise<ProfileRes
   };
 }
 
-async function tryPdlEnrich(candidate: CandidateRow): Promise<ProfileResult | null> {
+async function tryPdlEnrich(
+  candidate: CandidateRow,
+): Promise<ProfileResult | null> {
   if (!PDL_API_KEY || !candidate.linkedin_url) return null;
 
   const url = new URL(PDL_ENRICH_URL);
@@ -193,7 +212,9 @@ async function tryPdlEnrich(candidate: CandidateRow): Promise<ProfileResult | nu
 
   if (response.status === 404) return null; // Clean "no record" -- not an error.
   if (!response.ok) {
-    throw new Error(`PDL enrich error (${response.status}): ${JSON.stringify(result)}`);
+    throw new Error(
+      `PDL enrich error (${response.status}): ${JSON.stringify(result)}`,
+    );
   }
 
   const raw = result?.data;
@@ -232,12 +253,18 @@ const enrichCandidateWorkHistory = async (req: Request) => {
   const authHeader = req.headers.get("authorization")!;
   const candidate = await fetchCandidate(candidateId, authHeader);
   if (!candidate) {
-    return jsonResponse({ error: "Candidate not found (or you don't have access to it)" }, 404);
+    return jsonResponse(
+      { error: "Candidate not found (or you don't have access to it)" },
+      404,
+    );
   }
 
   if (!candidate.linkedin_url) {
     return jsonResponse(
-      { error: "This candidate has no LinkedIn URL on file -- full-profile lookup needs one." },
+      {
+        error:
+          "This candidate has no LinkedIn URL on file -- full-profile lookup needs one.",
+      },
       400,
     );
   }
@@ -256,25 +283,40 @@ const enrichCandidateWorkHistory = async (req: Request) => {
   let result: ProfileResult | null = null;
   let hadFailure = false;
 
-  try {
-    result = await tryCoresignalCollect(candidate);
-    if (!result) notes.push("Coresignal has no collect-able record for this profile URL.");
-  } catch (error) {
-    hadFailure = true;
-    console.error("Coresignal collect failed (non-fatal, trying PDL next)", error);
+  if (CORESIGNAL_COLLECT_ENABLED) {
+    try {
+      result = await tryCoresignalCollect(candidate);
+      if (!result)
+        notes.push(
+          "Coresignal has no collect-able record for this profile URL.",
+        );
+    } catch (error) {
+      hadFailure = true;
+      console.error(
+        "Coresignal collect failed (non-fatal, trying PDL next)",
+        error,
+      );
+      notes.push(
+        `Coresignal collect failed: ${error instanceof Error ? error.message : String(error)}. Falling through to PDL.`,
+      );
+    }
+  } else {
     notes.push(
-      `Coresignal collect failed: ${error instanceof Error ? error.message : String(error)}. Falling through to PDL.`,
+      "Coresignal Collect is disabled during Phase 1 vendor consolidation — trying PDL only.",
     );
   }
 
   if (!result) {
     try {
       result = await tryPdlEnrich(candidate);
-      if (!result) notes.push("PDL has no enrichment record for this profile URL either.");
+      if (!result)
+        notes.push("PDL has no enrichment record for this profile URL either.");
     } catch (error) {
       hadFailure = true;
       console.error("PDL enrich failed (non-fatal)", error);
-      notes.push(`PDL enrich failed: ${error instanceof Error ? error.message : String(error)}`);
+      notes.push(
+        `PDL enrich failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 
@@ -290,23 +332,36 @@ const enrichCandidateWorkHistory = async (req: Request) => {
     patchBody.full_profile_status = hadFailure ? "failed" : "not_found";
   }
 
-  const patchResponse = await restFetch(`candidates?id=eq.${candidateId}`, authHeader, {
-    method: "PATCH",
-    headers: { Prefer: "return=representation" },
-    body: JSON.stringify(patchBody),
-  });
+  const patchResponse = await restFetch(
+    `candidates?id=eq.${candidateId}`,
+    authHeader,
+    {
+      method: "PATCH",
+      headers: { Prefer: "return=representation" },
+      body: JSON.stringify(patchBody),
+    },
+  );
 
   if (!patchResponse.ok) {
     const errorBody = await patchResponse.text();
-    console.error("full-profile enrichment PATCH failed", patchResponse.status, errorBody);
-    return jsonResponse({ error: "Enrichment ran but failed to save to the candidate record" }, 502);
+    console.error(
+      "full-profile enrichment PATCH failed",
+      patchResponse.status,
+      errorBody,
+    );
+    return jsonResponse(
+      { error: "Enrichment ran but failed to save to the candidate record" },
+      502,
+    );
   }
 
   return jsonResponse({
     status: patchBody.full_profile_status,
     source: result?.source ?? null,
     experience_count: result?.workHistory.length ?? 0,
-    education_count: Array.isArray((result?.raw as Record<string, unknown> | undefined)?.education)
+    education_count: Array.isArray(
+      (result?.raw as Record<string, unknown> | undefined)?.education,
+    )
       ? ((result!.raw as Record<string, unknown>).education as unknown[]).length
       : 0,
     notes,

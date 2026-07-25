@@ -44,46 +44,46 @@
 }
 
 :root {
-  /* Agent H brand pass (2026-07-22): retint the shared shadcn tokens that
-     every page's Button/Card/Input already consumes, so "modernize the
-     whole platform" lands as one token change instead of a page-by-page
-     rewrite. Purple/teal accent lifted directly from
-     inbox/agent-h-theme.css (--ah-accent / --ah-accent-2) so the Inbox and
-     the rest of the app read as one product. Light mode keeps a neutral,
-     bright surface (recruiters live in this app all day) but adopts the
-     same accent + radius language as dark mode. */
-  --radius: 0.75rem;
+  /* Agent H redesign (2026-07-26): Noon-style design north star.
+     Deep navy (#1e2a4a range) for primary CTAs; warm orange (oklch 45°)
+     for active/selected states in sidebar rail and tabs.
+     Light surface stays clean white — recruiters live in this app all day.
+     Purple accent removed: this is a role-first product, not a purple AI SaaS. */
+  --radius: 0.625rem;
   --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
+  --foreground: oklch(0.13 0.02 255);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
+  --card-foreground: oklch(0.13 0.02 255);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.56 0.19 291);
-  --primary-foreground: oklch(0.985 0 0);
+  --popover-foreground: oklch(0.13 0.02 255);
+  --primary: oklch(0.24 0.07 255);
+  --primary-foreground: oklch(0.99 0 0);
   --secondary: oklch(0.97 0 0);
   --secondary-foreground: oklch(0.205 0 0);
   --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.94 0.03 291);
-  --accent-foreground: oklch(0.36 0.15 291);
+  --muted-foreground: oklch(0.52 0.02 255);
+  --accent: oklch(0.96 0.01 255);
+  --accent-foreground: oklch(0.24 0.07 255);
   --destructive: oklch(0.63 0.21 25);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.56 0.19 291);
+  --border: oklch(0.91 0.01 255);
+  --input: oklch(0.91 0.01 255);
+  --ring: oklch(0.24 0.07 255);
+  /* orange-active: warm amber-orange used for sidebar active states */
+  --orange-active: oklch(0.68 0.18 45);
+  --orange-active-soft: oklch(0.97 0.04 45);
   --chart-1: oklch(0.646 0.222 41.116);
   --chart-2: oklch(0.6 0.118 184.704);
   --chart-3: oklch(0.398 0.07 227.392);
   --chart-4: oklch(0.828 0.189 84.429);
   --chart-5: oklch(0.769 0.188 70.08);
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.56 0.19 291);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.94 0.03 291);
-  --sidebar-accent-foreground: oklch(0.36 0.15 291);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.56 0.19 291);
+  --sidebar: oklch(0.985 0.005 255);
+  --sidebar-foreground: oklch(0.13 0.02 255);
+  --sidebar-primary: oklch(0.68 0.18 45);
+  --sidebar-primary-foreground: oklch(0.99 0 0);
+  --sidebar-accent: oklch(0.96 0.03 45);
+  --sidebar-accent-foreground: oklch(0.24 0.07 255);
+  --sidebar-border: oklch(0.91 0.01 255);
+  --sidebar-ring: oklch(0.68 0.18 45);
   --avatar-0: oklch(0.85 0.08 240);
   --avatar-1: oklch(0.88 0.1 340);
   --avatar-2: oklch(0.85 0.07 180);
@@ -97,44 +97,40 @@
 }
 
 .dark {
-  /* Values below are the Agent H dark-glass palette (same hex as
-     inbox/agent-h-theme.css's --ah-bg-0, --ah-bg-1, --ah-text-1/2/3, and
-     --ah-accent), expressed as the shadcn tokens, so every shadcn Button/Card/Input in
-     the app (Roles board, Job Intake, Source Candidates, Candidates,
-     Settings, the top nav) now renders with the same near-black surface,
-     glass borders, and purple/teal accent as the Inbox, instead of the
-     generic oklch grayscale shadcn ships with. */
-  --background: #0a0b0f;
-  --foreground: #f2f3f7;
-  --card: #101218;
-  --card-foreground: #f2f3f7;
-  --popover: #101218;
-  --popover-foreground: #f2f3f7;
-  --primary: #7c6cff;
-  --primary-foreground: #0a0b0f;
+  /* Dark mode: near-black surface, warm orange active states, navy CTAs. */
+  --background: #0c0d12;
+  --foreground: #eceef4;
+  --card: #111318;
+  --card-foreground: #eceef4;
+  --popover: #111318;
+  --popover-foreground: #eceef4;
+  --primary: #c8d4f0;
+  --primary-foreground: #0c0d12;
   --secondary: #1a1c24;
-  --secondary-foreground: #f2f3f7;
+  --secondary-foreground: #eceef4;
   --muted: #1a1c24;
-  --muted-foreground: #a8adba;
+  --muted-foreground: #9aa0b4;
   --accent: #1f2230;
-  --accent-foreground: #f2f3f7;
+  --accent-foreground: #eceef4;
   --destructive: #ff6b6b;
-  --border: rgba(255, 255, 255, 0.09);
-  --input: rgba(255, 255, 255, 0.09);
-  --ring: #7c6cff;
-  --chart-1: #7c6cff;
+  --border: rgba(255, 255, 255, 0.08);
+  --input: rgba(255, 255, 255, 0.08);
+  --ring: oklch(0.68 0.18 45);
+  --orange-active: oklch(0.72 0.18 45);
+  --orange-active-soft: oklch(0.25 0.06 45);
+  --chart-1: oklch(0.68 0.18 45);
   --chart-2: #4fd8c4;
   --chart-3: #5aa0ff;
   --chart-4: #ffb454;
   --chart-5: #ff6b6b;
-  --sidebar: #0a0b0f;
-  --sidebar-foreground: #f2f3f7;
-  --sidebar-primary: #7c6cff;
-  --sidebar-primary-foreground: #0a0b0f;
+  --sidebar: #0c0d12;
+  --sidebar-foreground: #eceef4;
+  --sidebar-primary: oklch(0.72 0.18 45);
+  --sidebar-primary-foreground: #0c0d12;
   --sidebar-accent: #1a1c24;
-  --sidebar-accent-foreground: #f2f3f7;
-  --sidebar-border: rgba(255, 255, 255, 0.09);
-  --sidebar-ring: #7c6cff;
+  --sidebar-accent-foreground: #eceef4;
+  --sidebar-border: rgba(255, 255, 255, 0.08);
+  --sidebar-ring: oklch(0.72 0.18 45);
   --avatar-0: oklch(0.35 0.12 240);
   --avatar-1: oklch(0.38 0.14 340);
   --avatar-2: oklch(0.35 0.11 180);

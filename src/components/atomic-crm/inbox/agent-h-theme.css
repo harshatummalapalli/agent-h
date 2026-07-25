@@ -19,13 +19,12 @@
   --ah-text-1: var(--foreground);
   --ah-text-2: var(--muted-foreground);
   --ah-text-3: color-mix(in oklch, var(--muted-foreground) 80%, transparent);
-  --ah-accent: var(--primary);
-  --ah-accent-2: oklch(0.72 0.12 180);
+  --ah-accent: var(--orange-active, oklch(0.68 0.18 45));
+  --ah-accent-2: oklch(0.58 0.14 220);
   --ah-accent-grad: linear-gradient(
     135deg,
-    var(--primary) 0%,
-    oklch(0.62 0.16 250) 50%,
-    oklch(0.72 0.12 180) 100%
+    var(--orange-active, oklch(0.68 0.18 45)) 0%,
+    oklch(0.58 0.14 220) 100%
   );
   --ah-danger: var(--destructive);
   --ah-warn: oklch(0.75 0.15 70);

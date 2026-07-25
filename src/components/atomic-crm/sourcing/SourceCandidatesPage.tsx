@@ -1063,6 +1063,51 @@ function ScorePanel({ result }: { result: ScoreResult }) {
   );
 }
 
+// Quick-action bar shown at the TOP of every candidate card during search
+// (before "Add to pipeline"). Email is a plain mailto link (no backend
+// needed). LinkedIn Outreach calls handleOutreachFromSearch which auto-saves
+// the candidate first if not yet persisted, then runs prepareFirstOutreach.
+function CandidateQuickActionBar({
+  emails,
+  linkedInUrl,
+  isLinkedInSource,
+  outreachState,
+  onLinkedInOutreach,
+}: {
+  emails?: { address: string; type?: string }[];
+  linkedInUrl?: string | null;
+  isLinkedInSource: boolean;
+  outreachState: EnrichState;
+  onLinkedInOutreach: () => void;
+}) {
+  const primaryEmail = emails?.[0]?.address;
+  if (!primaryEmail && !isLinkedInSource) return null;
+  return (
+    <div className="flex items-center gap-2 flex-wrap pb-2 border-b mb-1">
+      {primaryEmail && (
+        <a
+          href={`mailto:${primaryEmail}`}
+          className="inline-flex items-center gap-1 text-xs border rounded px-2 py-1 hover:bg-accent/40 transition-colors text-foreground no-underline"
+          title={primaryEmail}
+        >
+          ✉ Email
+        </a>
+      )}
+      {isLinkedInSource && (
+        <button
+          type="button"
+          className="inline-flex items-center gap-1 text-xs border rounded px-2 py-1 hover:bg-accent/40 transition-colors disabled:opacity-50"
+          disabled={outreachState === "loading"}
+          onClick={onLinkedInOutreach}
+          title={linkedInUrl ? `LinkedIn: ${linkedInUrl}` : "LinkedIn outreach"}
+        >
+          {outreachState === "loading" ? "Preparing..." : "LinkedIn Outreach"}
+        </button>
+      )}
+    </div>
+  );
+}
+
 // Agent H Stage 3: renders the holistic, non-numeric fit read for one
 // candidate against the currently selected role brief -- see
 // assess-candidate-fit/index.ts for the full design reasoning.
@@ -3452,6 +3497,52 @@ export const SourceCandidatesPage = ({
     }
   };
 
+  // Action bar outreach: save-then-prepare in one shot so Email/LinkedIn
+  // buttons work during search, before the recruiter manually clicks "Add to
+  // pipeline". If the candidate is already saved we skip the save step.
+  const handleOutreachFromSearch = async (candidate: PdlCandidate) => {
+    if (!selectedId) return;
+    let cId = candidateDbIds[candidate.id];
+    if (!cId) {
+      setSaveStates((prev) => ({ ...prev, [candidate.id]: "saving" }));
+      try {
+        const outcome = await dataProvider.saveSourcedCandidate(
+          Number(selectedId),
+          candidate,
+        );
+        if (outcome.candidate_id) {
+          cId = outcome.candidate_id;
+          setCandidateDbIds((prev) => ({
+            ...prev,
+            [candidate.id]: cId!,
+          }));
+          setSaveStates((prev) => ({ ...prev, [candidate.id]: "saved" }));
+        }
+      } catch (error: any) {
+        setSaveStates((prev) => ({ ...prev, [candidate.id]: "idle" }));
+        notify(error?.message || "Failed to save candidate", { type: "error" });
+        return;
+      }
+    }
+    if (!cId) return;
+    setOutreachStates((prev) => ({ ...prev, [candidate.id]: "loading" }));
+    try {
+      const result = await dataProvider.prepareFirstOutreach(
+        cId,
+        Number(selectedId),
+      );
+      setOutreachPrepared((prev) => ({
+        ...prev,
+        [candidate.id]: result as OutreachPrepared,
+      }));
+      setOutreachStates((prev) => ({ ...prev, [candidate.id]: "done" }));
+      notify("Review the outreach message before sending", { type: "info" });
+    } catch (error: any) {
+      setOutreachStates((prev) => ({ ...prev, [candidate.id]: "idle" }));
+      notify(error?.message || "Failed to prepare outreach", { type: "error" });
+    }
+  };
+
   const handleConfirmSendOutreach = async (candidate: PdlCandidate) => {
     const candidateId = candidateDbIds[candidate.id];
     const prepared = outreachPrepared[candidate.id];
@@ -4533,6 +4624,15 @@ export const SourceCandidatesPage = ({
                     key={candidate.id}
                     className="flex flex-col gap-3 border rounded-md p-3 text-sm"
                   >
+                    <CandidateQuickActionBar
+                      emails={candidate.emails}
+                      linkedInUrl={candidate.linkedin_url}
+                      isLinkedInSource={Boolean(candidate.linkedin_url)}
+                      outreachState={outreachStates[candidate.id] ?? "idle"}
+                      onLinkedInOutreach={() =>
+                        handleOutreachFromSearch(candidate)
+                      }
+                    />
                     <div className="flex items-center justify-between gap-3">
                       <div className="flex flex-col gap-0.5">
                         <div className="flex items-center gap-2 flex-wrap">
@@ -5169,6 +5269,13 @@ export const SourceCandidatesPage = ({
                 key={candidate.id}
                 className="border rounded-md p-3 flex flex-col gap-3"
               >
+                <CandidateQuickActionBar
+                  emails={candidate.emails}
+                  linkedInUrl={candidate.linkedin_url}
+                  isLinkedInSource={Boolean(candidate.linkedin_url)}
+                  outreachState={outreachStates[candidate.id] ?? "idle"}
+                  onLinkedInOutreach={() => handleOutreachFromSearch(candidate)}
+                />
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex gap-3">
                     <div

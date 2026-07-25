@@ -62,6 +62,11 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import type { CrmDataProvider } from "../providers/types";
 import { mergeCandidatesAcrossSources } from "./mergeCandidates";
+import {
+  loadSourcingSnapshot,
+  saveSourcingSnapshot,
+  type SourcingSessionSnapshot,
+} from "./sourcingSessionSnapshot";
 import "../inbox/agent-h-theme.css";
 
 /** Semantic status badge classes (agent-h-theme.css) — Phase 2 theming pass. */
@@ -2169,6 +2174,7 @@ export const SourceCandidatesPage = ({
   const [previewLoading, setPreviewLoading] = useState(false);
   const [fetchLoading, setFetchLoading] = useState(false);
   const [wideningLoading, setWideningLoading] = useState(false);
+  const [restoreLoading, setRestoreLoading] = useState(false);
 
   const [roleBriefTitle, setRoleBriefTitle] = useState<string | null>(null);
   const [total, setTotal] = useState(0);
@@ -2453,8 +2459,7 @@ export const SourceCandidatesPage = ({
   // Switching role briefs invalidates any preview/results from the last
   // one -- otherwise a stale total or candidate list from role A could sit
   // on screen while role B is selected, which would be actively misleading.
-  const handleRoleBriefChange = (value: string) => {
-    setSelectedId(value);
+  const resetSearchUiState = () => {
     setStage("idle");
     setTotal(0);
     setNotes([]);
@@ -2471,6 +2476,9 @@ export const SourceCandidatesPage = ({
     setFullProfileExpanded({});
     setScoreStates({});
     setScoreResults({});
+    setEvidenceStates({});
+    setEvidenceResults({});
+    setEvidenceExpanded({});
     setFitStates({});
     setFitResults({});
     setCalibrationLoading(false);
@@ -2485,34 +2493,88 @@ export const SourceCandidatesPage = ({
     setCriteriaImpact(null);
     setCriteriaActionStates({});
     setRoleBriefDetail(null);
-
-    if (value) {
-      dataProvider
-        .getCalibrationFeedback(Number(value))
-        .then((rows) =>
-          setExistingCalibrationFeedback(
-            (rows as any[]).map((r) => ({
-              source_id: r.source_id,
-              fit: r.fit,
-            })),
-          ),
-        )
-        .catch(() => {
-          // Non-fatal -- just means the "already calibrated" heads-up won't
-          // show. Doesn't block anything else on the page.
-        });
-
-      dataProvider
-        .getOne("deals", { id: Number(value) })
-        .then(({ data }) =>
-          setRoleBriefDetail(data as unknown as RoleBriefDetail),
-        )
-        .catch(() => {
-          // Non-fatal -- just means the "Searching for:" panel won't show;
-          // Preview/Fetch still work off the backend's own read of the row.
-        });
-    }
   };
+
+  const loadRoleBriefContext = (value: string) => {
+    if (!value) return;
+    dataProvider
+      .getCalibrationFeedback(Number(value))
+      .then((rows) =>
+        setExistingCalibrationFeedback(
+          (rows as any[]).map((r) => ({
+            source_id: r.source_id,
+            fit: r.fit,
+          })),
+        ),
+      )
+      .catch(() => {});
+
+    dataProvider
+      .getOne("deals", { id: Number(value) })
+      .then(({ data }) =>
+        setRoleBriefDetail(data as unknown as RoleBriefDetail),
+      )
+      .catch(() => {});
+  };
+
+  const applySourcingSnapshot = (
+    snapshot: SourcingSessionSnapshot,
+    source: "session" | "server",
+  ) => {
+    setSelectedId(snapshot.dealId);
+    setStage(snapshot.stage);
+    setCandidates(snapshot.candidates as PdlCandidate[]);
+    setScrollToken(snapshot.scrollToken);
+    setTotal(snapshot.total);
+    setTotalMatchesAll(snapshot.totalMatchesAll);
+    setNotes(snapshot.notes);
+    setSaveStates(snapshot.saveStates as Record<string, SaveState>);
+    setCandidateDbIds(snapshot.candidateDbIds);
+    setEvidenceExpanded(
+      Object.fromEntries(snapshot.candidates.map((c) => [c.id, true])),
+    );
+    loadRoleBriefContext(snapshot.dealId);
+    notify(
+      source === "session"
+        ? `Restored ${snapshot.candidates.length} candidate(s) from this browser session (no new search credits).`
+        : `Restored ${snapshot.candidates.length} candidate(s) from your last search on this role.`,
+      { type: "success" },
+    );
+  };
+
+  const handleRoleBriefChange = (value: string) => {
+    resetSearchUiState();
+    setSelectedId(value);
+    loadRoleBriefContext(value);
+  };
+
+  // Persist fetched lists — they are NOT in the database until Add to pipeline.
+  useEffect(() => {
+    if (!selectedId || stage !== "fetched" || candidates.length === 0) return;
+    saveSourcingSnapshot({
+      version: 1,
+      savedAt: new Date().toISOString(),
+      dealId: selectedId,
+      stage,
+      candidates,
+      scrollToken,
+      total,
+      totalMatchesAll,
+      notes,
+      saveStates,
+      candidateDbIds,
+    });
+  }, [
+    selectedId,
+    stage,
+    candidates,
+    scrollToken,
+    total,
+    totalMatchesAll,
+    notes,
+    saveStates,
+    candidateDbIds,
+  ]);
 
   // Re-order the already-fetched candidates in place when the recruiter
   // changes the sort control -- no re-fetch, no re-charge against the
@@ -2537,14 +2599,17 @@ export const SourceCandidatesPage = ({
     sortByCompanySize,
   ]);
 
-  // Role Workspace embedding (2026-07-19): when a role brief id arrives via
-  // props instead of the dropdown, select it exactly once on mount by
-  // reusing the same handleRoleBriefChange path a manual dropdown pick would
-  // take -- same reset-then-load behavior, same calibration-feedback and
-  // role-brief-detail fetches, no separate code path to keep in sync.
+  // Role Workspace: restore browser session snapshot on mount when possible —
+  // a full page refresh used to wipe fetched candidates (they live only in
+  // React state until Add to pipeline).
   useEffect(() => {
-    if (initialRoleBriefId) {
-      handleRoleBriefChange(initialRoleBriefId);
+    if (!initialRoleBriefId) return;
+    const snapshot = loadSourcingSnapshot(initialRoleBriefId);
+    if (snapshot?.candidates?.length) {
+      applySourcingSnapshot(snapshot, "session");
+    } else {
+      setSelectedId(initialRoleBriefId);
+      loadRoleBriefContext(initialRoleBriefId);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialRoleBriefId]);
@@ -3081,6 +3146,72 @@ export const SourceCandidatesPage = ({
       notify(error?.message || "Failed to load match evidence", {
         type: "error",
       });
+    }
+  };
+
+  const handleRestoreLastSearch = async () => {
+    if (!selectedId) {
+      notify("Pick a role brief first", { type: "warning" });
+      return;
+    }
+    const sessionSnap = loadSourcingSnapshot(selectedId);
+    if (sessionSnap?.candidates?.length) {
+      applySourcingSnapshot(sessionSnap, "session");
+      void Promise.allSettled(
+        sessionSnap.candidates
+          .filter((c) => !sessionSnap.candidateDbIds[c.id])
+          .map((c) => handleDiscoveryEvidence(c as PdlCandidate)),
+      );
+      return;
+    }
+
+    setRestoreLoading(true);
+    try {
+      const data = await dataProvider.rehydrateDiscoveryCandidates(
+        Number(selectedId),
+      );
+      const sorted = sortCandidatesForDisplay(
+        data.candidates as PdlCandidate[],
+        sortField,
+        sortByMatchEvidence,
+        sortByYearsExperience,
+        sortByCompanySize,
+      );
+      const seeded: Record<string, SaveState> = {};
+      const seededDbIds: Record<string, number> = {};
+      for (const candidate of data.candidates) {
+        if (candidate._already_saved) seeded[candidate.id] = "saved";
+        if (candidate._candidate_id) {
+          seededDbIds[candidate.id] = candidate._candidate_id;
+        }
+      }
+      applySourcingSnapshot(
+        {
+          version: 1,
+          savedAt: new Date().toISOString(),
+          dealId: selectedId,
+          stage: "fetched",
+          candidates: sorted,
+          scrollToken: data.scroll_token,
+          total: data.total,
+          totalMatchesAll: data.total_matches_all,
+          notes: data.notes,
+          saveStates: seeded,
+          candidateDbIds: seededDbIds,
+        },
+        "server",
+      );
+      void Promise.allSettled(
+        sorted
+          .filter((c) => !seededDbIds[c.id])
+          .map((c) => handleDiscoveryEvidence(c)),
+      );
+    } catch (error: any) {
+      notify(error?.message || "Could not restore last search", {
+        type: "error",
+      });
+    } finally {
+      setRestoreLoading(false);
     }
   };
 
@@ -4205,13 +4336,33 @@ export const SourceCandidatesPage = ({
         </div>
       )}
 
-      <div>
-        <Button
-          onClick={handlePreview}
-          disabled={previewLoading || !selectedId}
-        >
-          {previewLoading ? "Searching..." : "Preview matches"}
-        </Button>
+      <div className="flex flex-col gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            onClick={handlePreview}
+            disabled={previewLoading || !selectedId}
+          >
+            {previewLoading ? "Searching..." : "Preview matches"}
+          </Button>
+          {selectedId && candidates.length === 0 && (
+            <Button
+              variant="outline"
+              onClick={handleRestoreLastSearch}
+              disabled={
+                restoreLoading || previewLoading || fetchLoading || !selectedId
+              }
+            >
+              {restoreLoading ? "Restoring..." : "Restore last search"}
+            </Button>
+          )}
+        </div>
+        {selectedId && candidates.length === 0 && (
+          <p className="text-xs text-muted-foreground max-w-xl">
+            Lost fetched candidates after a refresh? Restore last search reloads
+            them from this browser session or from saved search ids (one profile
+            lookup each, not a new discovery search).
+          </p>
+        )}
       </div>
 
       {/* Free-portal sourcing (2026-07-19): GitHub/Stack Overflow via their

@@ -1564,6 +1564,63 @@ const getDataProviderWithCustomMethods = () => {
       });
       return data;
     },
+    // Phase C: recruiter-authored turn in the shared role transcript.
+    // See docs/adr/ADR-617f-phase-c-human-in-the-loop-approval.md
+    async createRoleConversationTurn(
+      dealId: Identifier,
+      turn: {
+        content: string;
+        metadata?: Record<string, unknown>;
+        in_reply_to?: Identifier | null;
+        idempotency_key?: string | null;
+      },
+    ) {
+      const { data } = await baseDataProvider.create(
+        "role_conversation_turns",
+        {
+          data: {
+            deal_id: Number(dealId),
+            speaker: "recruiter",
+            content: turn.content,
+            metadata: turn.metadata ?? {},
+            in_reply_to: turn.in_reply_to ?? null,
+            idempotency_key: turn.idempotency_key ?? null,
+          },
+        },
+      );
+      return data;
+    },
+    async appendAgentConversationTurn(
+      dealId: Identifier,
+      turn: {
+        content: string;
+        metadata?: Record<string, unknown>;
+        in_reply_to?: Identifier | null;
+        idempotency_key?: string | null;
+      },
+    ) {
+      const { data, error } = await getSupabaseClient().functions.invoke<{
+        turn: Record<string, unknown>;
+      }>("append-agent-conversation-turn", {
+        method: "POST",
+        body: {
+          deal_id: Number(dealId),
+          content: turn.content,
+          metadata: turn.metadata ?? {},
+          in_reply_to: turn.in_reply_to ?? null,
+          idempotency_key: turn.idempotency_key ?? null,
+        },
+      });
+
+      if (!data?.turn || error) {
+        console.error("appendAgentConversationTurn.error", error);
+        throw new Error(
+          "Failed to record the agent's reply in the transcript.",
+        );
+      }
+
+      return data.turn;
+    },
     // Agent H, Triage Inbox + Command Canvas: classifies command-bar free
     // text into one of the app's real supported actions via parse-agent-
     // command (Claude Haiku tool-use). Has no side effects itself -- the

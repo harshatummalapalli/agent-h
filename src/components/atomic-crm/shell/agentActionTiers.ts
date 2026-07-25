@@ -38,6 +38,15 @@ export type ConversationTurnMetadata = {
     subject: string;
     html: string;
   };
+  linkedin_preview?: {
+    channel: "linkedin_connection" | "linkedin_inmail";
+    message_body: string;
+    char_count: number;
+    is_open_profile: boolean;
+    linkedin_provider_id: string;
+    cap_remaining?: number;
+    drafted_by?: "claude" | "fallback_template";
+  };
   booking_link_url?: string;
   undo?: {
     action: string;
@@ -77,13 +86,15 @@ export function isPendingTier3Proposal(
   );
 }
 
+type TurnSummary = {
+  id: Identifier;
+  in_reply_to?: Identifier | null;
+  metadata?: ConversationTurnMetadata;
+};
+
 export function getLatestEmailPreview(
   proposalTurnId: Identifier,
-  turns: Array<{
-    id: Identifier;
-    in_reply_to?: Identifier | null;
-    metadata?: ConversationTurnMetadata;
-  }>,
+  turns: TurnSummary[],
 ): ConversationTurnMetadata["email_preview"] | undefined {
   const proposal = turns.find((t) => t.id === proposalTurnId);
   let preview = proposal?.metadata?.email_preview;
@@ -95,6 +106,27 @@ export function getLatestEmailPreview(
       turn.metadata.email_preview
     ) {
       preview = turn.metadata.email_preview;
+    }
+  }
+
+  return preview;
+}
+
+/** Like getLatestEmailPreview but for LinkedIn outreach previews. */
+export function getLatestLinkedInPreview(
+  proposalTurnId: Identifier,
+  turns: TurnSummary[],
+): ConversationTurnMetadata["linkedin_preview"] | undefined {
+  const proposal = turns.find((t) => t.id === proposalTurnId);
+  let preview = proposal?.metadata?.linkedin_preview;
+
+  for (const turn of turns) {
+    if (
+      turn.in_reply_to === proposalTurnId &&
+      turn.metadata?.kind === "refinement" &&
+      turn.metadata.linkedin_preview
+    ) {
+      preview = turn.metadata.linkedin_preview;
     }
   }
 

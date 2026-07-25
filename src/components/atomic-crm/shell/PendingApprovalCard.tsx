@@ -4,7 +4,10 @@ import type { RoleConversationTurn } from "../types";
 import {
   type ConversationTurnMetadata,
   getLatestEmailPreview,
+  getLatestLinkedInPreview,
 } from "./agentActionTiers";
+
+const CONNECTION_CHAR_LIMIT = 300;
 
 type PendingApprovalCardProps = {
   turn: RoleConversationTurn;
@@ -12,11 +15,13 @@ type PendingApprovalCardProps = {
   onApprove: (
     turn: RoleConversationTurn,
     preview?: ConversationTurnMetadata["email_preview"],
+    linkedinPreview?: ConversationTurnMetadata["linkedin_preview"],
   ) => void | Promise<void>;
   onStop: (turn: RoleConversationTurn) => void | Promise<void>;
   onRefine: (
     turn: RoleConversationTurn,
     preview?: ConversationTurnMetadata["email_preview"],
+    linkedinPreview?: ConversationTurnMetadata["linkedin_preview"],
   ) => void | Promise<void>;
   busy?: boolean;
 };
@@ -30,11 +35,21 @@ export const PendingApprovalCard = ({
   busy = false,
 }: PendingApprovalCardProps) => {
   const metadata = turn.metadata as ConversationTurnMetadata | undefined;
-  const initialPreview = getLatestEmailPreview(turn.id, allTurns);
-  const [preview, setPreview] = useState(initialPreview);
+  const initialEmailPreview = getLatestEmailPreview(turn.id, allTurns);
+  const initialLinkedInPreview = getLatestLinkedInPreview(turn.id, allTurns);
+
+  const [emailPreview, setEmailPreview] = useState(initialEmailPreview);
+  const [linkedinPreview, setLinkedInPreview] = useState(
+    initialLinkedInPreview,
+  );
 
   const inputClass =
     "border border-input bg-background text-foreground rounded px-2 py-1 text-xs w-full";
+
+  const charCount = linkedinPreview?.message_body?.length ?? 0;
+  const isConnectionChannel =
+    linkedinPreview?.channel === "linkedin_connection";
+  const overLimit = isConnectionChannel && charCount > CONNECTION_CHAR_LIMIT;
 
   return (
     <li className="border border-amber-300 bg-amber-50/80 rounded-md p-3 flex flex-col gap-2 text-sm">
@@ -45,19 +60,69 @@ export const PendingApprovalCard = ({
         <span className="whitespace-pre-wrap">{turn.content}</span>
       </div>
 
-      {preview ? (
+      {linkedinPreview ? (
+        <>
+          <div className="flex items-center justify-between text-xs text-muted-foreground">
+            <span>
+              {linkedinPreview.channel === "linkedin_inmail"
+                ? "LinkedIn InMail (open profile)"
+                : "LinkedIn connection note"}
+            </span>
+            <span
+              className={overLimit ? "text-destructive font-medium" : undefined}
+            >
+              {charCount}
+              {isConnectionChannel ? `/${CONNECTION_CHAR_LIMIT}` : ""} chars
+            </span>
+          </div>
+          <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+            Message
+            <textarea
+              className={`${inputClass} ${overLimit ? "border-destructive" : ""}`}
+              rows={isConnectionChannel ? 4 : 6}
+              value={linkedinPreview.message_body}
+              onChange={(e) =>
+                setLinkedInPreview({
+                  ...linkedinPreview,
+                  message_body: e.target.value,
+                  char_count: e.target.value.length,
+                })
+              }
+            />
+          </label>
+          {overLimit && (
+            <p className="text-xs text-destructive">
+              Connection notes must be {CONNECTION_CHAR_LIMIT} characters or
+              fewer. Trim the message before sending.
+            </p>
+          )}
+          {linkedinPreview.cap_remaining !== undefined && (
+            <p className="text-xs text-muted-foreground">
+              {linkedinPreview.cap_remaining} sends remaining today
+            </p>
+          )}
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={busy}
+            onClick={() => onRefine(turn, undefined, linkedinPreview)}
+          >
+            Save edits
+          </Button>
+        </>
+      ) : emailPreview ? (
         <>
           <label className="flex flex-col gap-1 text-xs text-muted-foreground">
             To
-            <input className={inputClass} value={preview.to} readOnly />
+            <input className={inputClass} value={emailPreview.to} readOnly />
           </label>
           <label className="flex flex-col gap-1 text-xs text-muted-foreground">
             Subject
             <input
               className={inputClass}
-              value={preview.subject}
+              value={emailPreview.subject}
               onChange={(e) =>
-                setPreview({ ...preview, subject: e.target.value })
+                setEmailPreview({ ...emailPreview, subject: e.target.value })
               }
             />
           </label>
@@ -66,15 +131,17 @@ export const PendingApprovalCard = ({
             <textarea
               className={inputClass}
               rows={5}
-              value={preview.html}
-              onChange={(e) => setPreview({ ...preview, html: e.target.value })}
+              value={emailPreview.html}
+              onChange={(e) =>
+                setEmailPreview({ ...emailPreview, html: e.target.value })
+              }
             />
           </label>
           <Button
             size="sm"
             variant="outline"
             disabled={busy}
-            onClick={() => onRefine(turn, preview)}
+            onClick={() => onRefine(turn, emailPreview)}
           >
             Save edits
           </Button>
@@ -93,8 +160,14 @@ export const PendingApprovalCard = ({
       <div className="flex gap-2">
         <Button
           size="sm"
-          disabled={busy}
-          onClick={() => onApprove(turn, preview ?? undefined)}
+          disabled={busy || overLimit}
+          onClick={() =>
+            onApprove(
+              turn,
+              emailPreview ?? undefined,
+              linkedinPreview ?? undefined,
+            )
+          }
         >
           {busy ? "Sending…" : "Approve & send"}
         </Button>

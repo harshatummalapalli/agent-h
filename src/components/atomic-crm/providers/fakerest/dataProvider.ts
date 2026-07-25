@@ -183,6 +183,9 @@ export const createDataProvider = ({
       }
       return baseDataProvider.getList(resource, params);
     },
+    prepareFirstOutreach: async () => {
+      throw new Error("prepareFirstOutreach is not available in demo mode");
+    },
     unarchiveDeal: async (deal: Deal) => {
       // get all deals where stage is the same as the deal to unarchive
       const { data: deals } = await baseDataProvider.getList<Deal>("deals", {

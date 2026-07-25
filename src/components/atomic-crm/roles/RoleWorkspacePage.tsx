@@ -162,10 +162,16 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
   const handleApproveProposal = async (
     turn: RoleConversationTurn,
     preview?: ConversationTurnMetadata["email_preview"],
+    linkedinPreview?: ConversationTurnMetadata["linkedin_preview"],
   ) => {
     setApprovalBusy(true);
     try {
-      await approveTier3Proposal(orchestratorDeps, turn, preview);
+      await approveTier3Proposal(
+        orchestratorDeps,
+        turn,
+        preview,
+        linkedinPreview,
+      );
       toast.success("Approved and sent");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Approval failed");
@@ -189,6 +195,7 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
   const handleRefineProposal = async (
     turn: RoleConversationTurn,
     preview?: ConversationTurnMetadata["email_preview"],
+    linkedinPreview?: ConversationTurnMetadata["linkedin_preview"],
   ) => {
     setApprovalBusy(true);
     try {
@@ -197,6 +204,7 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
         turn,
         "Updated the draft before sending.",
         preview,
+        linkedinPreview,
       );
       toast.success("Draft updated");
     } catch (error) {

@@ -171,6 +171,47 @@ async function buildTier3ProposalMetadata(
     }
   }
 
+  if (parsed.action === "send_first_outreach" && candidateId && dealId) {
+    try {
+      const result = await deps.dataProvider.prepareFirstOutreach(
+        candidateId,
+        dealId,
+      );
+      if (result.channel === "email" && result.email_preview) {
+        return {
+          ...base,
+          email_preview:
+            result.email_preview as ConversationTurnMetadata["email_preview"],
+        };
+      }
+      if (
+        (result.channel === "linkedin_connection" ||
+          result.channel === "linkedin_inmail") &&
+        result.message_body &&
+        result.linkedin_provider_id
+      ) {
+        return {
+          ...base,
+          linkedin_preview: {
+            channel: result.channel,
+            message_body: result.message_body,
+            char_count: result.char_count ?? result.message_body.length,
+            is_open_profile: result.is_open_profile ?? false,
+            linkedin_provider_id: result.linkedin_provider_id,
+            cap_remaining: result.cap_remaining ?? undefined,
+            drafted_by: result.drafted_by,
+          } as ConversationTurnMetadata["linkedin_preview"],
+        };
+      }
+      return base;
+    } catch (error) {
+      return {
+        ...base,
+        explanation: `${parsed.explanation} (${error instanceof Error ? error.message : "Couldn't prepare the outreach preview"})`,
+      };
+    }
+  }
+
   if (isLeavesPlatformAction(parsed.action) && !candidateId) {
     return {
       ...base,
@@ -253,6 +294,7 @@ export async function approveTier3Proposal(
   deps: RoleAgentOrchestratorDeps,
   proposalTurn: RoleConversationTurn,
   approvedPreview?: ConversationTurnMetadata["email_preview"],
+  approvedLinkedInPreview?: ConversationTurnMetadata["linkedin_preview"],
 ): Promise<void> {
   const metadata = proposalTurn.metadata as
     | ConversationTurnMetadata
@@ -298,8 +340,31 @@ export async function approveTier3Proposal(
     });
     resultSummary = `Resume request sent to ${approvedPreview.to}.`;
   } else if (action === "send_first_outreach" && candidateId) {
-    await deps.dataProvider.sendFirstOutreach(candidateId, dealId);
-    resultSummary = "Outreach email sent.";
+    const linkedInPreview =
+      approvedLinkedInPreview ?? metadata?.linkedin_preview;
+    const emailPreviewForSend = approvedPreview;
+    if (linkedInPreview) {
+      await deps.dataProvider.sendFirstOutreach(candidateId, dealId, {
+        channel: linkedInPreview.channel,
+        message_body: linkedInPreview.message_body,
+        linkedin_provider_id: linkedInPreview.linkedin_provider_id,
+      });
+      const channelLabel =
+        linkedInPreview.channel === "linkedin_inmail"
+          ? "LinkedIn InMail"
+          : "LinkedIn connection request";
+      resultSummary = `${channelLabel} sent.`;
+    } else if (emailPreviewForSend) {
+      await deps.dataProvider.sendFirstOutreach(candidateId, dealId, {
+        channel: "email",
+        subject: emailPreviewForSend.subject,
+        html: emailPreviewForSend.html,
+      });
+      resultSummary = `Outreach email sent to ${emailPreviewForSend.to}.`;
+    } else {
+      await deps.dataProvider.sendFirstOutreach(candidateId, dealId);
+      resultSummary = "Outreach sent.";
+    }
   } else {
     resultSummary =
       metadata.explanation ??
@@ -348,6 +413,7 @@ export async function refineTier3Proposal(
   proposalTurn: RoleConversationTurn,
   note: string,
   emailPreview?: ConversationTurnMetadata["email_preview"],
+  linkedinPreview?: ConversationTurnMetadata["linkedin_preview"],
 ): Promise<void> {
   await appendRecruiterTurn(
     deps,
@@ -357,6 +423,7 @@ export async function refineTier3Proposal(
       action: (proposalTurn.metadata as ConversationTurnMetadata | undefined)
         ?.action,
       email_preview: emailPreview,
+      linkedin_preview: linkedinPreview,
     },
     proposalTurn.id,
   );

@@ -1456,18 +1456,75 @@ const getDataProviderWithCustomMethods = () => {
         resume_reply_text: string | null;
       };
     },
-    // Agent H, Stage 1: Outreach -- the bridge between "candidate sourced"
-    // and "actively being contacted". Calls send-first-outreach, which
-    // drafts a Claude-personalized email grounded in the candidate's fit
-    // evidence (candidate_scores/candidate_fit_assessments) and sends it
-    // via Resend, then flips deal_candidates.response_status to "sent".
-    // Same invoke/error-unwrap shape as requestCandidateResume/sendOffer.
-    async sendFirstOutreach(candidateId: Identifier, dealId: Identifier) {
+    // Agent H Phase 4: prepare first outreach — detect channel (LinkedIn
+    // connection/InMail or email fallback), resolve Unipile provider_id,
+    // draft message with Claude, check daily cap. Returns preview for
+    // recruiter approval before send is called (Phase C).
+    async prepareFirstOutreach(candidateId: Identifier, dealId: Identifier) {
+      const { data, error } = await getSupabaseClient().functions.invoke(
+        "prepare-first-outreach",
+        {
+          method: "POST",
+          body: { candidate_id: Number(candidateId), deal_id: Number(dealId) },
+        },
+      );
+
+      if (!data || error) {
+        console.error("prepareFirstOutreach.error", error);
+        const errorDetails = await (async () => {
+          try {
+            return (await error?.context?.json()) ?? {};
+          } catch {
+            return {};
+          }
+        })();
+        throw new Error(
+          errorDetails?.message ||
+            errorDetails?.error ||
+            "Failed to prepare outreach",
+        );
+      }
+
+      return data as {
+        channel: "email" | "linkedin_connection" | "linkedin_inmail";
+        linkedin_provider_id: string | null;
+        message_body: string | null;
+        char_count: number | null;
+        is_open_profile: boolean | null;
+        cap_remaining: number | null;
+        drafted_by: "claude" | "fallback_template";
+        email_preview: {
+          to: string;
+          reply_to?: string;
+          subject: string;
+          html: string;
+        } | null;
+      };
+    },
+
+    // Agent H, Stage 1: Outreach — send first outreach after recruiter
+    // approval (Phase C). Now accepts channel + approved message body for
+    // LinkedIn path; falls back to email when channel is omitted or "email".
+    async sendFirstOutreach(
+      candidateId: Identifier,
+      dealId: Identifier,
+      opts?: {
+        channel?: "email" | "linkedin_connection" | "linkedin_inmail";
+        message_body?: string;
+        linkedin_provider_id?: string;
+        subject?: string;
+        html?: string;
+      },
+    ) {
       const { data, error } = await getSupabaseClient().functions.invoke(
         "send-first-outreach",
         {
           method: "POST",
-          body: { candidate_id: Number(candidateId), deal_id: Number(dealId) },
+          body: {
+            candidate_id: Number(candidateId),
+            deal_id: Number(dealId),
+            ...(opts ?? {}),
+          },
         },
       );
 
@@ -1750,6 +1807,9 @@ const getDataProviderWithCustomMethods = () => {
           | "reject_candidates"
           | "show_candidates"
           | "show_roles"
+          | "send_first_outreach"
+          | "send_offer"
+          | "send_booking_link"
           | "unknown";
         deal_id: number | null;
         criterion_id: number | null;

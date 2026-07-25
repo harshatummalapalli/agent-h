@@ -11,11 +11,13 @@ type RoleConversationTranscriptProps = {
   onApprove: (
     turn: RoleConversationTurn,
     preview?: ConversationTurnMetadata["email_preview"],
+    linkedinPreview?: ConversationTurnMetadata["linkedin_preview"],
   ) => void | Promise<void>;
   onStop: (turn: RoleConversationTurn) => void | Promise<void>;
   onRefine: (
     turn: RoleConversationTurn,
     preview?: ConversationTurnMetadata["email_preview"],
+    linkedinPreview?: ConversationTurnMetadata["linkedin_preview"],
   ) => void | Promise<void>;
   actionBusy?: boolean;
 };

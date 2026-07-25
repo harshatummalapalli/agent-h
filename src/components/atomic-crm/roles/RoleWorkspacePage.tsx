@@ -19,7 +19,7 @@
 // SourceCandidatesPage for sourcing) plus a small role-brief header of its
 // own.
 import { isValid } from "date-fns";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   InfiniteListBase,
   ShowBase,
@@ -48,7 +48,15 @@ import { SourcingSidebar } from "../sourcing/SourcingSidebar";
 import { AgentHShell } from "../shell/AgentHShell";
 import { RoleConversationTranscript } from "../shell/RoleConversationTranscript";
 import { useRoleShellContext } from "../shell/useShellContext";
-import type { Deal } from "../types";
+import {
+  approveTier3Proposal,
+  dispatchRoleAgentCommand,
+  refineTier3Proposal,
+  stopTier3Proposal,
+  type RoleAgentOrchestratorDeps,
+} from "../shell/roleAgentOrchestrator";
+import type { ConversationTurnMetadata } from "../shell/agentActionTiers";
+import type { Deal, RoleConversationTurn } from "../types";
 import "../inbox/agent-h-theme.css";
 
 export const RoleWorkspacePage = () => {
@@ -70,6 +78,8 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
   const { dealStages } = useConfigurationContext();
   const deal = useRecordContext<Deal>();
   const [sourcingOpen, setSourcingOpen] = useState(false);
+  const [commandBusy, setCommandBusy] = useState(false);
+  const [approvalBusy, setApprovalBusy] = useState(false);
   const { data: openDeals } = useGetList<Deal>("deals", {
     pagination: { page: 1, perPage: 20 },
     sort: { field: "updated_at", order: "DESC" },
@@ -90,53 +100,82 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
     isPending: !deal || pipelinePending,
   });
 
-  const runFreeTextCommand = async (commandText: string) => {
-    const dealIdNum = Number(dealId);
-    try {
-      const parsed = await dataProvider.parseAgentCommand(commandText, {
-        view: "canvas",
-        open_deals: (openDeals ?? []).map((d) => ({ id: d.id, name: d.name })),
-        current_deal_id: Number.isFinite(dealIdNum) ? dealIdNum : null,
-      });
-
-      if (parsed.action === "create_role") {
-        navigate("/jd-intake");
-      } else if (
-        parsed.action === "continue_sourcing" &&
-        parsed.deal_id != null
-      ) {
-        const dealName =
-          openDeals?.find((d) => d.id === parsed.deal_id)?.name ??
-          deal?.name ??
-          "this role";
-        const result = await dataProvider.continueSourcingForDeal(
-          parsed.deal_id,
-        );
-        queryClient.invalidateQueries({ queryKey: ["deals", dealId] });
+  const orchestratorDeps: RoleAgentOrchestratorDeps = useMemo(
+    () => ({
+      dealId,
+      deal,
+      openDeals: openDeals ?? [],
+      dataProvider,
+      queryClient,
+      navigate,
+      invalidateTranscript: () => {
         queryClient.invalidateQueries({
-          queryKey: ["deal_candidates"],
+          queryKey: ["role_conversation_turns"],
         });
-        const filteredNote =
-          result.filteredCount > 0
-            ? `, ${result.filteredCount} filtered as not relevant`
-            : "";
-        toast.success(
-          `${dealName}: found ${result.foundCount}, saved ${result.savedCount} to pipeline${filteredNote}`,
-        );
-      } else if (
-        parsed.action === "relax_criterion" &&
-        parsed.criterion_id != null
-      ) {
-        await dataProvider.relaxLearnedCriterion(parsed.criterion_id);
-        queryClient.invalidateQueries({ queryKey: ["inbox_per_deal_signals"] });
-        toast.success("Criterion relaxed");
-      } else if (parsed.action === "show_roles") {
-        navigate("/deals");
-      } else {
-        toast(parsed.explanation);
-      }
-    } catch {
-      toast.error("Couldn't run that command");
+      },
+    }),
+    [deal, dealId, dataProvider, navigate, openDeals, queryClient],
+  );
+
+  const runFreeTextCommand = async (commandText: string) => {
+    setCommandBusy(true);
+    try {
+      await dispatchRoleAgentCommand(orchestratorDeps, commandText);
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Couldn't run that command",
+      );
+    } finally {
+      setCommandBusy(false);
+    }
+  };
+
+  const handleApproveProposal = async (
+    turn: RoleConversationTurn,
+    preview?: ConversationTurnMetadata["email_preview"],
+  ) => {
+    setApprovalBusy(true);
+    try {
+      await approveTier3Proposal(orchestratorDeps, turn, preview);
+      toast.success("Approved and sent");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Approval failed");
+    } finally {
+      setApprovalBusy(false);
+    }
+  };
+
+  const handleStopProposal = async (turn: RoleConversationTurn) => {
+    setApprovalBusy(true);
+    try {
+      await stopTier3Proposal(orchestratorDeps, turn);
+      toast.success("Stopped — nothing was sent");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Couldn't stop");
+    } finally {
+      setApprovalBusy(false);
+    }
+  };
+
+  const handleRefineProposal = async (
+    turn: RoleConversationTurn,
+    preview?: ConversationTurnMetadata["email_preview"],
+  ) => {
+    setApprovalBusy(true);
+    try {
+      await refineTier3Proposal(
+        orchestratorDeps,
+        turn,
+        "Updated the draft before sending.",
+        preview,
+      );
+      toast.success("Draft updated");
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Couldn't save edits",
+      );
+    } finally {
+      setApprovalBusy(false);
     }
   };
 
@@ -158,7 +197,13 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
           onToggleSourcing={() => setSourcingOpen((v) => !v)}
         />
 
-        <RoleConversationTranscript dealId={dealId} />
+        <RoleConversationTranscript
+          dealId={dealId}
+          onApprove={handleApproveProposal}
+          onStop={handleStopProposal}
+          onRefine={handleRefineProposal}
+          actionBusy={approvalBusy || commandBusy}
+        />
 
         <SourceCandidatesPage initialRoleBriefId={dealId} />
 

@@ -32,8 +32,10 @@ import {
 } from "@/components/ui/tooltip";
 
 import ImageEditorField from "../misc/ImageEditorField";
+import { UnipileLinkedInConnectionCard } from "./UnipileLinkedInConnectionCard";
 import type { CrmDataProvider } from "../providers/types";
 import type { Sale, SalesFormData } from "../types";
+import "../inbox/agent-h-theme.css";
 
 export const ProfilePage = () => {
   const [isEditMode, setEditMode] = useState(false);
@@ -230,6 +232,7 @@ const ProfileForm = ({
           </div>
         </CardContent>
       </Card>
+      <UnipileLinkedInConnectionCard />
       {import.meta.env.VITE_INBOUND_EMAIL && (
         <Card>
           <CardContent>

@@ -150,3 +150,83 @@
   border: 1px solid var(--ah-border);
   border-radius: var(--ah-radius);
 }
+
+/* Status badges — shared by SourceCandidatesPage panels and future Unipile states. */
+.ah-status-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.25;
+  border-width: 1px;
+  border-style: solid;
+  border-radius: 0.375rem;
+  padding: 0.125rem 0.5rem;
+}
+
+.ah-status-good {
+  background: var(--ah-good-soft);
+  color: var(--ah-good);
+  border-color: color-mix(in oklch, var(--ah-good) 35%, transparent);
+}
+
+.ah-status-warn {
+  background: color-mix(in oklch, var(--ah-warn) 18%, transparent);
+  color: color-mix(in oklch, var(--ah-warn) 85%, var(--foreground));
+  border-color: color-mix(in oklch, var(--ah-warn) 35%, transparent);
+}
+
+.ah-status-danger {
+  background: var(--ah-danger-soft);
+  color: var(--ah-danger);
+  border-color: color-mix(in oklch, var(--destructive) 35%, transparent);
+}
+
+.ah-status-info {
+  background: var(--ah-accent-soft);
+  color: var(--ah-accent);
+  border-color: var(--ah-accent-soft-border);
+}
+
+.ah-status-accent {
+  background: color-mix(in oklch, var(--primary) 16%, transparent);
+  color: var(--primary);
+  border-color: var(--ah-accent-soft-border);
+}
+
+.ah-status-neutral {
+  background: var(--ah-muted-row);
+  color: var(--ah-text-2);
+  border-color: var(--ah-border);
+}
+
+.ah-text-good {
+  color: var(--ah-good);
+}
+
+.ah-text-warn {
+  color: color-mix(in oklch, var(--ah-warn) 85%, var(--foreground));
+}
+
+.ah-text-danger {
+  color: var(--ah-danger);
+}
+
+.ah-link {
+  color: var(--ah-accent);
+  text-decoration: underline;
+}
+
+.ah-callout-warn {
+  border: 1px solid color-mix(in oklch, var(--ah-warn) 35%, transparent);
+  border-radius: var(--ah-radius-sm);
+  background: color-mix(in oklch, var(--ah-warn) 12%, var(--card));
+  color: color-mix(in oklch, var(--ah-warn) 70%, var(--foreground));
+}
+
+.ah-callout-danger {
+  border: 1px solid color-mix(in oklch, var(--destructive) 30%, transparent);
+  border-radius: var(--ah-radius-sm);
+  background: var(--ah-danger-soft);
+  color: var(--ah-danger);
+}

@@ -3258,13 +3258,8 @@ export const SourceCandidatesPage = ({
   // sourceCandidates call the real fetch uses (size=3, not a preview) --
   // this naturally advances the shared scroll position, so a later "Fetch
   // candidates" continues past these 3 instead of re-showing them.
-  // Taxonomy/boolean-logic test addition: an optional forced vendor name
-  // ("apollo" | "coresignal"), passed straight through to sourceCandidates.
-  // Lets the exact same role brief be calibrated against ONE specific
-  // vendor on demand -- see the "Test with Apollo" / "Test with Coresignal"
-  // buttons below -- for a real side-by-side comparison now that PDL is
-  // disabled, rather than only ever seeing whichever vendor the normal
-  // priority-fallback order happens to pick.
+  // Taxonomy/boolean-logic test addition: optional forced vendor name
+  // ("crustdata" active; "coresignal"/"apollo" dormant — see DISCOVERY_PROVIDERS).
   const handleStartCalibration = async (provider?: string) => {
     if (!selectedId) return;
     setCalibrationLoading(true);
@@ -3480,7 +3475,7 @@ export const SourceCandidatesPage = ({
     if (!selectedId) return;
     if (CRITERIA_IMPACT_DISABLED) {
       notify(
-        "Control panel refresh is temporarily disabled -- it was burning Coresignal credits (one live search per learned criterion, uncapped). Re-enabling once the cost cap is deployed.",
+        "Control panel refresh is temporarily disabled -- it was burning discovery API credits (one live search per learned criterion, uncapped). Re-enabling once the cost cap is deployed.",
         { type: "warning" },
       );
       return;
@@ -3777,8 +3772,8 @@ export const SourceCandidatesPage = ({
           </div>
           {CRITERIA_IMPACT_DISABLED && (
             <p className="text-xs text-amber-700">
-              Temporarily disabled to stop unbounded Coresignal spend (one live
-              search per learned criterion, every refresh). Being fixed
+              Temporarily disabled to stop unbounded discovery API spend (one
+              live search per learned criterion, every refresh). Being fixed
               server-side.
             </p>
           )}

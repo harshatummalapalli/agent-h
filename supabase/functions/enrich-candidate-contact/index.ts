@@ -2,6 +2,10 @@
 // enrichment waterfall (task #27, per the PRD's build order and the
 // sourcing-engine architecture doc's "Enrichment waterfall" section).
 //
+// Directory note (2026-07-25): this folder was recreated as a real directory
+// (replacing a OneDrive junction that broke Supabase bundler/deploy on
+// Windows — same fix as save-sourced-candidate). See ADR-unipile Phase 0.
+//
 // Scope, deliberately narrow, same discipline as save-sourced-candidate:
 // this function runs ONLY when a recruiter explicitly clicks "Enrich
 // contact" on one specific ALREADY-SAVED candidate (a public.candidates
@@ -72,6 +76,11 @@ const HUNTER_EMAIL_FINDER_URL = "https://api.hunter.io/v2/email-finder";
 
 const APOLLO_API_KEY = Deno.env.get("APOLLO_API_KEY");
 const APOLLO_MATCH_URL = "https://api.apollo.io/api/v1/people/match";
+
+// Phase 1 vendor consolidation (docs/adr/ADR-unipile-linkedin-outreach.md):
+// Hunter/Apollo calls disabled — code kept for re-enable. Unipile LinkedIn
+// outreach replaces email-finder enrichment for Phase 4.
+const CONTACT_ENRICHMENT_VENDORS_ENABLED = false;
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -168,7 +177,9 @@ async function fetchCompanyDomain(
   // bare domain -- normalize to just the hostname, which is what Hunter's
   // `domain` parameter expects.
   try {
-    const withScheme = website.startsWith("http") ? website : `https://${website}`;
+    const withScheme = website.startsWith("http")
+      ? website
+      : `https://${website}`;
     return new URL(withScheme).hostname.replace(/^www\./, "");
   } catch {
     return null;
@@ -210,13 +221,16 @@ async function tryHunter(
     // below). Thrown so the caller can record contact_enrichment_status =
     // "failed" for this vendor rather than silently treating it the same
     // as "not_found."
-    throw new Error(`Hunter API error (${response.status}): ${JSON.stringify(result)}`);
+    throw new Error(
+      `Hunter API error (${response.status}): ${JSON.stringify(result)}`,
+    );
   }
 
   const email: string | null = result?.data?.email ?? null;
   if (!email) return null;
 
-  const score: number | null = typeof result?.data?.score === "number" ? result.data.score : null;
+  const score: number | null =
+    typeof result?.data?.score === "number" ? result.data.score : null;
   return {
     source: "hunter",
     email,
@@ -262,7 +276,9 @@ async function tryApollo(
   const result = await response.json();
 
   if (!response.ok) {
-    throw new Error(`Apollo API error (${response.status}): ${JSON.stringify(result)}`);
+    throw new Error(
+      `Apollo API error (${response.status}): ${JSON.stringify(result)}`,
+    );
   }
 
   const email: string | null = result?.person?.email ?? null;
@@ -299,6 +315,20 @@ const enrichCandidateContact = async (req: Request) => {
     return jsonResponse({ error: "candidate_id is required" }, 400);
   }
 
+  if (!CONTACT_ENRICHMENT_VENDORS_ENABLED) {
+    return jsonResponse(
+      {
+        status: "not_found",
+        source: null,
+        email: null,
+        notes: [
+          "Contact enrichment (Hunter/Apollo) is disabled during Phase 1 vendor consolidation — LinkedIn outreach via Unipile replaces this path in Phase 4.",
+        ],
+      },
+      200,
+    );
+  }
+
   const authHeader = req.headers.get("authorization")!;
   const candidate = await fetchCandidate(candidateId, authHeader);
   if (!candidate) {
@@ -323,7 +353,10 @@ const enrichCandidateContact = async (req: Request) => {
   let hadFailure = false;
 
   try {
-    const domain = await fetchCompanyDomain(candidate.current_company_id, authHeader);
+    const domain = await fetchCompanyDomain(
+      candidate.current_company_id,
+      authHeader,
+    );
     if (domain) {
       result = await tryHunter(candidate, domain);
     } else {
@@ -333,7 +366,10 @@ const enrichCandidateContact = async (req: Request) => {
     }
   } catch (error) {
     hadFailure = true;
-    console.error("Hunter enrichment failed (non-fatal, trying Apollo next)", error);
+    console.error(
+      "Hunter enrichment failed (non-fatal, trying Apollo next)",
+      error,
+    );
     // Surfaced directly rather than "see server logs" -- a recruiter using
     // this button has no access to Supabase's logs, so a generic pointer
     // there is functionally useless. Same "never hide" disclosure
@@ -394,16 +430,27 @@ const enrichCandidateContact = async (req: Request) => {
     patchBody.contact_enrichment_status = hadFailure ? "failed" : "not_found";
   }
 
-  const patchResponse = await restFetch(`candidates?id=eq.${candidateId}`, authHeader, {
-    method: "PATCH",
-    headers: { Prefer: "return=representation" },
-    body: JSON.stringify(patchBody),
-  });
+  const patchResponse = await restFetch(
+    `candidates?id=eq.${candidateId}`,
+    authHeader,
+    {
+      method: "PATCH",
+      headers: { Prefer: "return=representation" },
+      body: JSON.stringify(patchBody),
+    },
+  );
 
   if (!patchResponse.ok) {
     const errorBody = await patchResponse.text();
-    console.error("contact enrichment PATCH failed", patchResponse.status, errorBody);
-    return jsonResponse({ error: "Enrichment ran but failed to save to the candidate record" }, 502);
+    console.error(
+      "contact enrichment PATCH failed",
+      patchResponse.status,
+      errorBody,
+    );
+    return jsonResponse(
+      { error: "Enrichment ran but failed to save to the candidate record" },
+      502,
+    );
   }
 
   return jsonResponse({

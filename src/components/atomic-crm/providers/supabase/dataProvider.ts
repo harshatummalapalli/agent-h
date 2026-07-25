@@ -1569,6 +1569,11 @@ const getDataProviderWithCustomMethods = () => {
         linkedin_provider_id?: string;
         subject?: string;
         html?: string;
+        // Dual-channel (B3): send email in parallel with LinkedIn
+        also_send_email?: boolean;
+        email_to?: string;
+        email_subject?: string;
+        email_html?: string;
       },
     ) {
       const { data, error } = await getSupabaseClient().functions.invoke(

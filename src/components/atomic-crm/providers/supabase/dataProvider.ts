@@ -1654,6 +1654,76 @@ const getDataProviderWithCustomMethods = () => {
 
       return data.turn;
     },
+    // Agent H Unipile Phase 3: LinkedIn hosted auth + checkpoint handling.
+    async createUnipileHostedAuthLink(reconnect = false) {
+      const { data, error } = await getSupabaseClient().functions.invoke<{
+        url: string;
+        expires_on?: string;
+      }>("create-unipile-hosted-auth-link", {
+        method: "POST",
+        body: { reconnect },
+      });
+
+      if (!data?.url || error) {
+        console.error("createUnipileHostedAuthLink.error", error);
+        const errorDetails = await (async () => {
+          try {
+            return (await error?.context?.json()) ?? {};
+          } catch {
+            return {};
+          }
+        })();
+        throw new Error(
+          errorDetails?.message ||
+            errorDetails?.error ||
+            "Failed to start LinkedIn connection",
+        );
+      }
+
+      return data;
+    },
+    async getUnipileLinkedInAccount() {
+      const { data, error } = await getSupabaseClient().functions.invoke(
+        "get-unipile-linkedin-account",
+        { method: "POST", body: {} },
+      );
+
+      if (!data || error) {
+        console.error("getUnipileLinkedInAccount.error", error);
+        throw new Error("Failed to load LinkedIn connection status");
+      }
+
+      return data;
+    },
+    async solveUnipileCheckpoint(code: string, tryAnotherWay = false) {
+      const { data, error } = await getSupabaseClient().functions.invoke<{
+        status: string;
+        checkpoint_type?: string;
+        seat_type?: string;
+        message?: string;
+      }>("solve-unipile-checkpoint", {
+        method: "POST",
+        body: { code, try_another_way: tryAnotherWay },
+      });
+
+      if (!data || error) {
+        console.error("solveUnipileCheckpoint.error", error);
+        const errorDetails = await (async () => {
+          try {
+            return (await error?.context?.json()) ?? {};
+          } catch {
+            return {};
+          }
+        })();
+        throw new Error(
+          errorDetails?.message ||
+            errorDetails?.error ||
+            "Failed to verify LinkedIn checkpoint",
+        );
+      }
+
+      return data;
+    },
     // Agent H, Triage Inbox + Command Canvas: classifies command-bar free
     // text into one of the app's real supported actions via parse-agent-
     // command (Claude Haiku tool-use). Has no side effects itself -- the

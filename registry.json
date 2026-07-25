@@ -126,6 +126,30 @@
           "type": "registry:component"
         },
         {
+          "path": "src/components/atomic-crm/sourcing/useVoiceInput.ts",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/sourcing/useSourcingThread.ts",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/sourcing/sourcingThreadTypes.ts",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/sourcing/mergeCandidates.ts",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/sourcing/SourcingSidebar.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/sourcing/SourceCandidatesPage.tsx",
+          "type": "registry:component"
+        },
+        {
           "path": "src/components/atomic-crm/simple-list/SimpleListLoading.tsx",
           "type": "registry:component"
         },
@@ -143,6 +167,42 @@
         },
         {
           "path": "src/components/atomic-crm/simple-list/ListNoResults.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/shell/useShellContext.ts",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/shell/types.ts",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/shell/roleAgentOrchestrator.ts",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/shell/agentActionTiers.ts",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/shell/RoleConversationTranscript.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/shell/PendingApprovalCard.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/shell/ContextStrip.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/shell/AgentHShell.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/settings/UnipileLinkedInConnectionCard.tsx",
           "type": "registry:component"
         },
         {
@@ -186,6 +246,10 @@
           "type": "registry:component"
         },
         {
+          "path": "src/components/atomic-crm/root/productScope.ts",
+          "type": "registry:component"
+        },
+        {
           "path": "src/components/atomic-crm/root/defaultConfiguration.ts",
           "type": "registry:component"
         },
@@ -195,6 +259,10 @@
         },
         {
           "path": "src/components/atomic-crm/root/CRM.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/roles/RoleWorkspacePage.tsx",
           "type": "registry:component"
         },
         {
@@ -211,6 +279,10 @@
         },
         {
           "path": "src/components/atomic-crm/providers/supabase/dataProvider.ts",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/providers/supabase/candidateRelevanceFilter.ts",
           "type": "registry:component"
         },
         {
@@ -538,6 +610,34 @@
           "type": "registry:component"
         },
         {
+          "path": "src/components/atomic-crm/jd-intake/JdIntakePage.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/inbox/useInboxDecisions.ts",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/inbox/agentActivityStore.ts",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/inbox/ShortcutsModal.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/inbox/InboxPage.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/inbox/CommandBar.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/inbox/ActivityPanel.tsx",
+          "type": "registry:component"
+        },
+        {
           "path": "src/components/atomic-crm/filters/FilterCategory.tsx",
           "type": "registry:component"
         },
@@ -594,6 +694,10 @@
           "type": "registry:component"
         },
         {
+          "path": "src/components/atomic-crm/deals/DealCandidatesSection.tsx",
+          "type": "registry:component"
+        },
+        {
           "path": "src/components/atomic-crm/deals/DealArchivedList.tsx",
           "type": "registry:component"
         },
@@ -607,6 +711,10 @@
         },
         {
           "path": "src/components/atomic-crm/dashboard/TasksList.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/dashboard/OpenRolesSummary.tsx",
           "type": "registry:component"
         },
         {
@@ -795,6 +903,26 @@
         },
         {
           "path": "src/components/atomic-crm/companies/AutocompleteCompanyInput.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/canvas/CanvasPage.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/candidates/index.ts",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/candidates/CandidateShow.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/candidates/CandidateList.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/apply/CandidateApplicationPage.tsx",
           "type": "registry:component"
         },
         {

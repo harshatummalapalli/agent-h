@@ -40,6 +40,14 @@ export type Sale = {
    */
   email: string;
 
+  /** Unipile Phase 3 — synced from edge functions, not edited in forms. */
+  unipile_account_id?: string | null;
+  unipile_linkedin_seat_type?: string | null;
+  unipile_account_status?: string | null;
+  unipile_checkpoint_type?: string | null;
+  unipile_connected_at?: string | null;
+  unipile_last_sync_at?: string | null;
+
   /**
    * This is used by the fake rest provider to store the password
    * DO NOT USE this field in your code besides the fake rest provider

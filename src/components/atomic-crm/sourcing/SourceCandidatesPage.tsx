@@ -62,6 +62,21 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import type { CrmDataProvider } from "../providers/types";
 import { mergeCandidatesAcrossSources } from "./mergeCandidates";
+import "../inbox/agent-h-theme.css";
+
+/** Semantic status badge classes (agent-h-theme.css) — Phase 2 theming pass. */
+const AH_STATUS = {
+  good: "ah-status-badge ah-status-good",
+  warn: "ah-status-badge ah-status-warn",
+  danger: "ah-status-badge ah-status-danger",
+  info: "ah-status-badge ah-status-info",
+  accent: "ah-status-badge ah-status-accent",
+  neutral: "ah-status-badge ah-status-neutral",
+} as const;
+
+const AH_CALLOUT_WARN =
+  "border rounded-md p-3 ah-callout-warn flex flex-col gap-2 text-sm";
+const AH_CALLOUT_DANGER = "text-xs ah-callout-danger rounded px-2 py-1";
 
 type RoleBriefOption = {
   id: number;
@@ -486,11 +501,11 @@ type ScoreResult = {
 };
 
 const VERDICT_COLORS: Record<ScoreResult["verdict"], string> = {
-  "EXCEPTIONAL MATCH": "bg-violet-100 text-violet-800 border-violet-300",
-  "STRONG MATCH": "bg-green-100 text-green-800 border-green-300",
-  "POTENTIAL MATCH": "bg-amber-100 text-amber-800 border-amber-300",
-  "WEAK MATCH": "bg-orange-100 text-orange-800 border-orange-300",
-  "NOT A MATCH": "bg-red-100 text-red-800 border-red-300",
+  "EXCEPTIONAL MATCH": AH_STATUS.accent,
+  "STRONG MATCH": AH_STATUS.good,
+  "POTENTIAL MATCH": AH_STATUS.warn,
+  "WEAK MATCH": AH_STATUS.warn,
+  "NOT A MATCH": AH_STATUS.danger,
 };
 
 const ACTION_LABELS: Record<ScoreResult["recommended_action"], string> = {
@@ -529,9 +544,9 @@ const FIT_BUCKET_LABELS: Record<FitBucket, string> = {
 };
 
 const FIT_BUCKET_COLORS: Record<FitBucket, string> = {
-  worth_reaching_out: "bg-green-100 text-green-800 border-green-300",
-  possible_check: "bg-amber-100 text-amber-800 border-amber-300",
-  not_a_fit: "bg-red-100 text-red-800 border-red-300",
+  worth_reaching_out: AH_STATUS.good,
+  possible_check: AH_STATUS.warn,
+  not_a_fit: AH_STATUS.danger,
 };
 
 // Real calibration loop (2026-07-17): after a "Not a fit" judgment is
@@ -614,12 +629,12 @@ const INTERVIEW_STATUS_COLORS: Record<
   NonNullable<InterviewResult["status"]>,
   string
 > = {
-  link_sent: "bg-blue-100 text-blue-800 border-blue-300",
-  booked: "bg-green-100 text-green-800 border-green-300",
-  rescheduled: "bg-amber-100 text-amber-800 border-amber-300",
-  cancelled: "bg-red-100 text-red-800 border-red-300",
-  completed: "bg-muted text-muted-foreground border-border",
-  no_show: "bg-red-100 text-red-800 border-red-300",
+  link_sent: AH_STATUS.info,
+  booked: AH_STATUS.good,
+  rescheduled: AH_STATUS.warn,
+  cancelled: AH_STATUS.danger,
+  completed: AH_STATUS.neutral,
+  no_show: AH_STATUS.danger,
 };
 
 // Agent H, task 76: outreach + resume-reply capture. Deliberately NOT a
@@ -640,9 +655,9 @@ const RESUME_STATUS_LABELS: Record<ResumeInfo["resume_status"], string> = {
 };
 
 const RESUME_STATUS_COLORS: Record<ResumeInfo["resume_status"], string> = {
-  not_requested: "bg-muted text-muted-foreground border-border",
-  requested: "bg-blue-100 text-blue-800 border-blue-300",
-  received: "bg-green-100 text-green-800 border-green-300",
+  not_requested: AH_STATUS.neutral,
+  requested: AH_STATUS.info,
+  received: AH_STATUS.good,
 };
 
 // Agent H Stage 6: Offer. Deliberately not a messaging system either (same
@@ -682,13 +697,13 @@ const OFFER_STATUS_LABELS: Record<OfferInfo["status"], string> = {
 };
 
 const OFFER_STATUS_COLORS: Record<OfferInfo["status"], string> = {
-  draft: "bg-muted text-muted-foreground border-border",
-  sent: "bg-blue-100 text-blue-800 border-blue-300",
-  responded: "bg-amber-100 text-amber-800 border-amber-300",
-  accepted: "bg-green-100 text-green-800 border-green-300",
-  declined: "bg-red-100 text-red-800 border-red-300",
-  negotiating: "bg-amber-100 text-amber-800 border-amber-300",
-  expired: "bg-muted text-muted-foreground border-border",
+  draft: AH_STATUS.neutral,
+  sent: AH_STATUS.info,
+  responded: AH_STATUS.warn,
+  accepted: AH_STATUS.good,
+  declined: AH_STATUS.danger,
+  negotiating: AH_STATUS.warn,
+  expired: AH_STATUS.neutral,
 };
 
 // Draft state for the inline "compose an offer" form -- amounts kept as
@@ -890,13 +905,13 @@ function ScorePanel({ result }: { result: ScoreResult }) {
       </div>
 
       {result.deal_breaker_warning && (
-        <p className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1">
+        <p className={`text-xs ${AH_CALLOUT_DANGER}`}>
           {result.deal_breaker_warning}
         </p>
       )}
 
       {result.scored_text_source === "plain_fields" && (
-        <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+        <p className={`text-xs ${AH_CALLOUT_WARN}`}>
           Scored against limited discovery fields only -- run "View full
           profile" first for a more reliable score.
         </p>
@@ -937,10 +952,10 @@ function ScorePanel({ result }: { result: ScoreResult }) {
                 <span
                   className={
                     m.status === "found"
-                      ? "text-green-700"
+                      ? "ah-text-good"
                       : m.status === "inferred"
-                        ? "text-amber-700"
-                        : "text-red-700"
+                        ? "ah-text-warn"
+                        : "ah-text-danger"
                   }
                 >
                   {m.status === "found"
@@ -1006,19 +1021,19 @@ function ScorePanel({ result }: { result: ScoreResult }) {
         <div className="text-xs flex flex-col gap-1">
           {result.green_flags.length > 0 && (
             <div>
-              <span className="font-medium text-green-700">Green flags: </span>
+              <span className="font-medium ah-text-good">Green flags: </span>
               {result.green_flags.join("; ")}
             </div>
           )}
           {result.watch_signals.length > 0 && (
             <div>
-              <span className="font-medium text-amber-700">Watch: </span>
+              <span className="font-medium ah-text-warn">Watch: </span>
               {result.watch_signals.join("; ")}
             </div>
           )}
           {result.review_flags.length > 0 && (
             <div>
-              <span className="font-medium text-red-700">Review: </span>
+              <span className="font-medium ah-text-danger">Review: </span>
               {result.review_flags.join("; ")}
             </div>
           )}
@@ -1041,7 +1056,7 @@ function FitAssessmentPanel({ result }: { result: FitAssessmentResult }) {
           {FIT_BUCKET_LABELS[result.fit_bucket]}
         </span>
         {result.scored_text_source === "plain_fields" && (
-          <span className="text-xs text-amber-700">
+          <span className="text-xs ah-text-warn">
             Limited discovery fields only -- run "View full profile" first for a
             better read.
           </span>
@@ -1076,7 +1091,7 @@ function FitAssessmentPanel({ result }: { result: FitAssessmentResult }) {
 
       {result.clear_gaps.length > 0 && (
         <div>
-          <div className="font-medium text-xs mb-1 text-red-700">
+          <div className="font-medium text-xs mb-1 ah-text-danger">
             Clear gaps
           </div>
           <ul className="text-xs text-muted-foreground list-disc pl-4">
@@ -1508,7 +1523,7 @@ function CandidateActionsPanel({
                 href={devSignalResult.github_url}
                 target="_blank"
                 rel="noreferrer"
-                className="text-blue-600 underline"
+                className="ah-link"
               >
                 {devSignalResult.github_url}
               </a>
@@ -1524,7 +1539,7 @@ function CandidateActionsPanel({
                 href={devSignalResult.stackoverflow_url}
                 target="_blank"
                 rel="noreferrer"
-                className="text-blue-600 underline"
+                className="ah-link"
               >
                 {devSignalResult.stackoverflow_url}
               </a>
@@ -1576,8 +1591,8 @@ function CandidateActionsPanel({
         bookingEmailPreview === null &&
         onConfirmSendBookingLink &&
         onCancelBookingPreview && (
-          <div className="border rounded-md p-3 bg-amber-50/80 border-amber-200 flex flex-col gap-2 text-sm">
-            <p className="text-xs text-amber-900">
+          <div className={AH_CALLOUT_WARN}>
+            <p className="text-xs font-medium">
               No email on file — confirm to save this booking link for manual
               sharing.
             </p>
@@ -1662,7 +1677,7 @@ function InterviewPanel({ result }: { result: InterviewResult }) {
             {INTERVIEW_STATUS_LABELS[result.status]}
           </span>
           {result.email_sent === false && !result.already_booked && (
-            <span className="text-xs text-amber-700">
+            <span className="text-xs ah-text-warn">
               {result.candidate_email
                 ? "Link saved, but the email didn't send -- share it manually."
                 : "No email on file -- share this link with the candidate manually."}
@@ -1885,8 +1900,8 @@ function EmailPreviewApprovalPanel({
   const inputClass =
     "border border-input bg-background text-foreground rounded px-2 py-1 text-xs w-full";
   return (
-    <div className="border rounded-md p-3 bg-amber-50/80 border-amber-200 flex flex-col gap-2 text-sm">
-      <p className="text-xs font-medium text-amber-900">
+    <div className={AH_CALLOUT_WARN}>
+      <p className="text-xs font-medium">
         Review before sending to {preview.to}
       </p>
       <label className="flex flex-col gap-1 text-xs text-muted-foreground">
@@ -3693,11 +3708,13 @@ export const SourceCandidatesPage = ({
           {roleBriefDetail.clarifying_questions &&
             roleBriefDetail.clarifying_questions.length > 0 &&
             !roleBriefDetail.clarifying_questions_dismissed && (
-              <div className="flex flex-col gap-2 mt-1 rounded-md border border-amber-200 bg-amber-50 p-3">
-                <h4 className="text-xs font-medium text-amber-900">
+              <div
+                className={`flex flex-col gap-2 mt-1 rounded-md p-3 ${AH_CALLOUT_WARN}`}
+              >
+                <h4 className="text-xs font-medium">
                   Worth confirming before sourcing further
                 </h4>
-                <ul className="list-disc pl-5 text-xs text-amber-900">
+                <ul className="list-disc pl-5 text-xs">
                   {roleBriefDetail.clarifying_questions.map((question, i) => (
                     <li key={i}>{question}</li>
                   ))}
@@ -3771,7 +3788,7 @@ export const SourceCandidatesPage = ({
             </Button>
           </div>
           {CRITERIA_IMPACT_DISABLED && (
-            <p className="text-xs text-amber-700">
+            <p className="text-xs ah-text-warn">
               Temporarily disabled to stop unbounded discovery API spend (one
               live search per learned criterion, every refresh). Being fixed
               server-side.
@@ -4149,7 +4166,7 @@ export const SourceCandidatesPage = ({
                             candidate._source_vendor === "exa") &&
                             roleBriefDetail?.location &&
                             !/remote/i.test(roleBriefDetail.location) && (
-                              <span className="text-xs text-amber-600 dark:text-amber-400 border border-amber-600 dark:border-amber-400 rounded px-1">
+                              <span className="text-xs ah-text-warn border border-current rounded px-1">
                                 location unverified
                               </span>
                             )}
@@ -4165,7 +4182,7 @@ export const SourceCandidatesPage = ({
                           </span>
                         )}
                         {candidate._match_evidence && (
-                          <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mt-1">
+                          <div className={`text-xs mt-1 ${AH_CALLOUT_WARN}`}>
                             Why this surfaced: {candidate._match_evidence}
                           </div>
                         )}
@@ -4493,7 +4510,7 @@ export const SourceCandidatesPage = ({
                             href={`https://${candidate.linkedin_url}`}
                             target="_blank"
                             rel="noreferrer"
-                            className="text-blue-600 underline"
+                            className="ah-link"
                           >
                             LinkedIn
                           </a>
@@ -4505,7 +4522,7 @@ export const SourceCandidatesPage = ({
                         </div>
                       )}
                       {candidate._match_evidence && (
-                        <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mt-1">
+                        <div className={`text-xs mt-1 ${AH_CALLOUT_WARN}`}>
                           Why this surfaced: {candidate._match_evidence}
                         </div>
                       )}
@@ -4745,7 +4762,7 @@ export const SourceCandidatesPage = ({
                             href={`https://${candidate.linkedin_url}`}
                             target="_blank"
                             rel="noreferrer"
-                            className="text-xs text-blue-600 underline"
+                            className="text-xs ah-link"
                           >
                             LinkedIn
                           </a>
@@ -4800,7 +4817,7 @@ export const SourceCandidatesPage = ({
                           }
                         }
                       }}
-                      className="text-xs text-blue-600 flex items-center gap-1"
+                      className="text-xs ah-link flex items-center gap-1"
                     >
                       Why this could be a fit
                       <span aria-hidden="true">
@@ -4843,10 +4860,10 @@ export const SourceCandidatesPage = ({
                               <span
                                 className={
                                   m.status === "found"
-                                    ? "text-green-700"
+                                    ? "ah-text-good"
                                     : m.status === "inferred"
-                                      ? "text-amber-700"
-                                      : "text-red-700"
+                                      ? "ah-text-warn"
+                                      : "ah-text-danger"
                                 }
                                 aria-hidden="true"
                               >

@@ -47,17 +47,20 @@ Changes:
 
 **Not in Phase 1:** Unipile wiring, candidate-card styling, outreach sequences.
 
-### Phase 2 — Candidate-card styling cleanup
+### Phase 2 — Candidate-card styling cleanup ✅
 
-`SourceCandidatesPage` still has ~20 hardcoded status-badge colors the Phase A theming pass missed. Fix **before** Unipile adds new candidate-card states (connection sent, InMail pending, checkpoint required, etc.) on top of inconsistent styling.
+`SourceCandidatesPage` status badges and callout panels now use semantic `ah-status-*` / `ah-callout-*` classes from `agent-h-theme.css` instead of hardcoded Tailwind color scales.
 
-### Phase 3 — Unipile account connection
+### Phase 3 — Unipile account connection ✅ (initial)
 
-- Hosted auth flow for recruiter LinkedIn accounts.
-- Seat-type detection (Unipile account metadata).
-- Checkpoint handling (2FA / verification challenges surfaced in UI, not swallowed).
+- Hosted auth link generation (`create-unipile-hosted-auth-link`)
+- Notify webhook (`unipile-hosted-auth-notify`) stores `unipile_account_id` on `sales`
+- Status sync + seat-type detection (`get-unipile-linkedin-account`)
+- Checkpoint solve UI (`solve-unipile-checkpoint`) on Profile page
 
-Secrets: `UNIPILE_API_KEY`, `UNIPILE_DSN` (or per Unipile docs), webhook URL for async events.
+Secrets: `UNIPILE_API_KEY`, `UNIPILE_DSN`, `UNIPILE_WEBHOOK_SECRET`, `CRM_BASE_URL`.
+
+Deploy: `create-unipile-hosted-auth-link`, `unipile-hosted-auth-notify`, `get-unipile-linkedin-account`, `solve-unipile-checkpoint`. Apply migration `20260725143000_agent_h_unipile_linkedin.sql`.
 
 ### Phase 4 — LinkedIn outreach sequence
 

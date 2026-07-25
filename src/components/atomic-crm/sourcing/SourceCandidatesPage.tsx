@@ -2204,7 +2204,12 @@ export const SourceCandidatesPage = ({
 
   const [roleBriefs, setRoleBriefs] = useState<RoleBriefOption[]>([]);
   const [selectedId, setSelectedId] = useState<string>("");
-  const [size, setSize] = useState(10);
+  const [size, setSize] = useState(25);
+  // Display-level pagination (C+D): save all fetched candidates to the DB,
+  // but show only DISPLAY_PAGE_SIZE at a time in the UI.
+  const DISPLAY_PAGE_SIZE = 25;
+  const [visibleCount, setVisibleCount] = useState(DISPLAY_PAGE_SIZE);
+  const [backgroundSaving, setBackgroundSaving] = useState(false);
 
   // Funnel bar Relax/Tighten (2026-07-24): both scroll to and reveal the
   // existing Control Panel rather than duplicating its logic -- "Relax"
@@ -2785,6 +2790,7 @@ export const SourceCandidatesPage = ({
       setSaveStates(seeded);
       setCandidateDbIds((prev) => ({ ...prev, ...seededDbIds }));
       setStage("fetched");
+      setVisibleCount(DISPLAY_PAGE_SIZE);
       // Auto-expand evidence panels for all fetched candidates and kick off
       // evidence loading immediately so fit signals are visible without a
       // click. Unsaved hits use evidence_only (must_haves_check only);
@@ -2797,6 +2803,8 @@ export const SourceCandidatesPage = ({
           .filter((c) => !seededDbIds[c.id])
           .map((c) => handleDiscoveryEvidence(c)),
       );
+      // C+D: background-persist all fetched candidates to deal_candidates
+      void autoSaveAllCandidates(data.candidates, Number(selectedId));
     } catch (error: any) {
       notify(error?.message || "Failed to fetch candidates", {
         type: "error",
@@ -2842,6 +2850,8 @@ export const SourceCandidatesPage = ({
       }
       setSaveStates((prev) => ({ ...prev, ...seeded }));
       setCandidateDbIds((prev) => ({ ...prev, ...seededDbIds }));
+      // C+D: background-persist new batch
+      void autoSaveAllCandidates(data.candidates, Number(selectedId));
     } catch (error: any) {
       notify(error?.message || "Failed to fetch more candidates", {
         type: "error",
@@ -2883,6 +2893,36 @@ export const SourceCandidatesPage = ({
       setSaveStates((prev) => ({ ...prev, [candidate.id]: "idle" }));
       notify(error?.message || "Failed to add candidate", { type: "error" });
     }
+  };
+
+  // C+D: Auto-save all fetched candidates to the DB in the background so
+  // they persist in deal_candidates regardless of whether the recruiter
+  // manually clicks "Add to pipeline". Only fires for candidates not already
+  // saved (_already_saved=true or candidateDbIds set). Shows a brief banner.
+  const autoSaveAllCandidates = async (
+    newCandidates: PdlCandidate[],
+    dealId: number,
+  ) => {
+    const unsaved = newCandidates.filter(
+      (c) => !c._already_saved && !candidateDbIds[c.id],
+    );
+    if (unsaved.length === 0) return;
+    setBackgroundSaving(true);
+    const results = await Promise.allSettled(
+      unsaved.map((c) => dataProvider.saveSourcedCandidate(dealId, c)),
+    );
+    const newDbIds: Record<string, number> = {};
+    const newSaveStates: Record<string, SaveState> = {};
+    unsaved.forEach((c, i) => {
+      const r = results[i];
+      if (r.status === "fulfilled" && r.value.candidate_id) {
+        newDbIds[c.id] = r.value.candidate_id;
+        newSaveStates[c.id] = "saved";
+      }
+    });
+    setCandidateDbIds((prev) => ({ ...prev, ...newDbIds }));
+    setSaveStates((prev) => ({ ...prev, ...newSaveStates }));
+    setBackgroundSaving(false);
   };
 
   // Unified free + low-cost search (2026-07-19): runs GitHub/Stack Exchange/
@@ -4991,12 +5031,14 @@ export const SourceCandidatesPage = ({
               </div>
               <div className="flex items-end gap-3">
                 <div className="flex flex-col gap-2 max-w-[200px]">
-                  <Label htmlFor="size">How many to pull first (max 25)</Label>
+                  <Label htmlFor="size">
+                    How many to fetch (max 100 — all saved, 25 shown at a time)
+                  </Label>
                   <input
                     id="size"
                     type="number"
                     min={1}
-                    max={25}
+                    max={100}
                     className="border border-input bg-background text-foreground rounded-md h-9 px-2"
                     value={size}
                     onChange={(e) => setSize(Number(e.target.value))}
@@ -5101,12 +5143,12 @@ export const SourceCandidatesPage = ({
 
               <div className="flex items-end gap-3 pt-2 border-t">
                 <div className="flex flex-col gap-2 max-w-[200px]">
-                  <Label htmlFor="size">How many to pull next (max 25)</Label>
+                  <Label htmlFor="size">How many more to fetch (max 100)</Label>
                   <input
                     id="size"
                     type="number"
                     min={1}
-                    max={25}
+                    max={100}
                     className="border border-input bg-background text-foreground rounded-md h-9 px-2"
                     value={size}
                     onChange={(e) => setSize(Number(e.target.value))}
@@ -5233,11 +5275,16 @@ export const SourceCandidatesPage = ({
             <p className="text-xs text-muted-foreground -mt-2">
               {candidates.some((c) => typeof c._match_score === "number")
                 ? "Sorted by match score (highest first)."
-                : "Candidates shown in discovery order."}
+                : "Candidates shown in discovery order."}{" "}
+              {backgroundSaving && (
+                <span className="text-muted-foreground">
+                  Saving {candidates.length} candidates to your pipeline…
+                </span>
+              )}
             </p>
           )}
 
-          {candidates.map((candidate) => {
+          {candidates.slice(0, visibleCount).map((candidate) => {
             const saveState = saveStates[candidate.id] ?? "idle";
             const candidateId = candidateDbIds[candidate.id];
             const contactState = contactEnrichStates[candidate.id] ?? "idle";
@@ -5559,6 +5606,19 @@ export const SourceCandidatesPage = ({
               </div>
             );
           })}
+
+          {stage === "fetched" && visibleCount < candidates.length && (
+            <Button
+              variant="outline"
+              onClick={() =>
+                setVisibleCount((n) =>
+                  Math.min(n + DISPLAY_PAGE_SIZE, candidates.length),
+                )
+              }
+            >
+              Show more ({candidates.length - visibleCount} remaining)
+            </Button>
+          )}
 
           {stage === "fetched" && (
             <div className="flex flex-col gap-1">

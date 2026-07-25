@@ -3,11 +3,30 @@ import isEqual from "lodash/isEqual";
 import { useDataProvider, useListContext, type DataProvider } from "ra-core";
 import { useEffect, useState } from "react";
 
+import { Skeleton } from "@/components/ui/skeleton";
 import { useConfigurationContext } from "../root/ConfigurationContext";
 import type { Deal } from "../types";
 import { DealColumn } from "./DealColumn";
 import type { DealsByStage } from "./stages";
 import { getDealsByStage } from "./stages";
+
+const KanbanSkeleton = ({ columnCount }: { columnCount: number }) => (
+  <div className="flex gap-6">
+    {Array.from({ length: columnCount }).map((_, i) => (
+      <div key={i} className="flex-1 pb-8 px-1">
+        <div className="flex flex-col items-center gap-0.5 pb-1">
+          <Skeleton className="h-4 w-24 mb-1" />
+          <Skeleton className="h-3 w-12" />
+        </div>
+        <div className="flex flex-col gap-3 mt-3">
+          {Array.from({ length: 2 }).map((_, j) => (
+            <Skeleton key={j} className="h-20 w-full rounded-xl" />
+          ))}
+        </div>
+      </div>
+    ))}
+  </div>
+);
 
 export const DealListContent = () => {
   const { dealStages } = useConfigurationContext();
@@ -28,7 +47,7 @@ export const DealListContent = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [unorderedDeals]);
 
-  if (isPending) return null;
+  if (isPending) return <KanbanSkeleton columnCount={dealStages.length || 4} />;
 
   const onDragEnd: OnDragEndResponder = (result) => {
     const { destination, source } = result;

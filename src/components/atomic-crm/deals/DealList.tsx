@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import type { InputProps } from "ra-core";
-import { useGetIdentity, useListContext, useTranslate } from "ra-core";
+import { useListContext, useTranslate } from "ra-core";
+import { Skeleton } from "@/components/ui/skeleton";
 import { matchPath, useLocation } from "react-router";
 import { AutocompleteInput } from "@/components/admin/autocomplete-input";
 import { CreateButton } from "@/components/admin/create-button";
@@ -22,11 +23,8 @@ import { DealShow } from "./DealShow";
 import { OnlyMineInput } from "./OnlyMineInput";
 
 const DealList = () => {
-  const { identity } = useGetIdentity();
   const { dealCategories } = useConfigurationContext();
   const translate = useTranslate();
-
-  if (!identity) return null;
 
   const dealFilters = [
     <SearchInput source="q" alwaysOn />,
@@ -73,7 +71,18 @@ const DealLayout = () => {
   const { data, isPending, filterValues } = useListContext();
   const hasFilters = filterValues && Object.keys(filterValues).length > 0;
 
-  if (isPending) return null;
+  if (isPending)
+    return (
+      <div className="flex gap-6 p-4">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <div key={i} className="flex-1">
+            <Skeleton className="h-4 w-24 mb-3" />
+            <Skeleton className="h-20 w-full rounded-xl mb-3" />
+            <Skeleton className="h-20 w-full rounded-xl" />
+          </div>
+        ))}
+      </div>
+    );
   if (!data?.length && !hasFilters)
     return (
       <>

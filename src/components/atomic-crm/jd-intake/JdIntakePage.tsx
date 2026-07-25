@@ -13,12 +13,18 @@
 // the data provider directly.
 
 import { useState } from "react";
-import { useDataProvider, useNotify, useRedirect } from "ra-core";
+import { useDataProvider, useGetList, useNotify, useRedirect } from "ra-core";
+import { useNavigate } from "react-router";
+import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { CrmDataProvider } from "../providers/types";
+import { AgentHShell } from "../shell/AgentHShell";
+import { useJdIntakeShellContext } from "../shell/useShellContext";
+import type { Deal } from "../types";
 import "../inbox/agent-h-theme.css";
 
 const SENIORITY_OPTIONS = [
@@ -107,6 +113,13 @@ export const JdIntakePage = () => {
   const dataProvider = useDataProvider<CrmDataProvider>();
   const notify = useNotify();
   const redirect = useRedirect();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const { data: openDeals } = useGetList<Deal>("deals", {
+    pagination: { page: 1, perPage: 20 },
+    sort: { field: "updated_at", order: "DESC" },
+    filter: { "archived_at@is": null },
+  });
 
   const [jdText, setJdText] = useState("");
   const [parsing, setParsing] = useState(false);
@@ -124,6 +137,62 @@ export const JdIntakePage = () => {
   // persisted as-is at create time so it doesn't resurface on the role
   // brief's own detail view.
   const [questionsDismissed, setQuestionsDismissed] = useState(false);
+
+  const shellContext = useJdIntakeShellContext({
+    parsedTitle: parsed?.title,
+    hasJdText: jdText.trim().length > 0,
+    isParsing: parsing,
+    isSaving: saving,
+  });
+
+  const runFreeTextCommand = async (commandText: string) => {
+    try {
+      const command = await dataProvider.parseAgentCommand(commandText, {
+        view: "inbox",
+        open_deals: (openDeals ?? []).map((d) => ({ id: d.id, name: d.name })),
+        current_deal_id: null,
+      });
+
+      if (command.action === "create_role") {
+        toast(command.explanation);
+      } else if (
+        command.action === "continue_sourcing" &&
+        command.deal_id != null
+      ) {
+        const dealName =
+          openDeals?.find((d) => d.id === command.deal_id)?.name ?? "that role";
+        const result = await dataProvider.continueSourcingForDeal(
+          command.deal_id,
+        );
+        queryClient.invalidateQueries({ queryKey: ["inbox_per_deal_signals"] });
+        const filteredNote =
+          result.filteredCount > 0
+            ? `, ${result.filteredCount} filtered as not relevant`
+            : "";
+        toast.success(
+          `${dealName}: found ${result.foundCount}, saved ${result.savedCount} to pipeline${filteredNote}`,
+        );
+      } else if (
+        command.action === "relax_criterion" &&
+        command.criterion_id != null
+      ) {
+        await dataProvider.relaxLearnedCriterion(command.criterion_id);
+        queryClient.invalidateQueries({ queryKey: ["inbox_per_deal_signals"] });
+        toast.success("Criterion relaxed");
+      } else if (
+        command.action === "show_candidates" &&
+        command.deal_id != null
+      ) {
+        navigate(`/roles/${command.deal_id}`);
+      } else if (command.action === "show_roles") {
+        navigate("/deals");
+      } else {
+        toast(command.explanation);
+      }
+    } catch {
+      toast.error("Couldn't run that command");
+    }
+  };
 
   const handleParse = async () => {
     if (!jdText.trim()) {
@@ -245,8 +314,16 @@ export const JdIntakePage = () => {
   };
 
   return (
-    <div className="ah-scope">
-      <div className="flex flex-col gap-6 max-w-3xl mx-auto p-6 pb-16">
+    <AgentHShell
+      context={shellContext}
+      commandBar={{
+        placeholder: "Tell Agent H what role you're hiring for",
+        hint: 'Try: "create a role for a senior backend engineer" or paste a JD above.',
+        slashActions: [],
+        onSubmit: runFreeTextCommand,
+      }}
+    >
+      <div className="flex flex-col gap-6 max-w-3xl mx-auto p-6 pb-8 overflow-y-auto flex-1 min-h-0">
         <div>
           <h1 className="text-2xl font-semibold">JD Intake</h1>
           <p className="text-muted-foreground text-sm">
@@ -598,7 +675,7 @@ export const JdIntakePage = () => {
           </div>
         )}
       </div>
-    </div>
+    </AgentHShell>
   );
 };
 

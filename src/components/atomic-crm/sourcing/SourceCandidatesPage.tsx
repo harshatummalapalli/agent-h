@@ -604,7 +604,7 @@ const INTERVIEW_STATUS_COLORS: Record<InterviewResult["status"], string> = {
   booked: "bg-green-100 text-green-800 border-green-300",
   rescheduled: "bg-amber-100 text-amber-800 border-amber-300",
   cancelled: "bg-red-100 text-red-800 border-red-300",
-  completed: "bg-slate-100 text-slate-800 border-slate-300",
+  completed: "bg-muted text-muted-foreground border-border",
   no_show: "bg-red-100 text-red-800 border-red-300",
 };
 
@@ -626,7 +626,7 @@ const RESUME_STATUS_LABELS: Record<ResumeInfo["resume_status"], string> = {
 };
 
 const RESUME_STATUS_COLORS: Record<ResumeInfo["resume_status"], string> = {
-  not_requested: "bg-slate-100 text-slate-800 border-slate-300",
+  not_requested: "bg-muted text-muted-foreground border-border",
   requested: "bg-blue-100 text-blue-800 border-blue-300",
   received: "bg-green-100 text-green-800 border-green-300",
 };
@@ -668,13 +668,13 @@ const OFFER_STATUS_LABELS: Record<OfferInfo["status"], string> = {
 };
 
 const OFFER_STATUS_COLORS: Record<OfferInfo["status"], string> = {
-  draft: "bg-slate-100 text-slate-800 border-slate-300",
+  draft: "bg-muted text-muted-foreground border-border",
   sent: "bg-blue-100 text-blue-800 border-blue-300",
   responded: "bg-amber-100 text-amber-800 border-amber-300",
   accepted: "bg-green-100 text-green-800 border-green-300",
   declined: "bg-red-100 text-red-800 border-red-300",
   negotiating: "bg-amber-100 text-amber-800 border-amber-300",
-  expired: "bg-slate-100 text-slate-800 border-slate-300",
+  expired: "bg-muted text-muted-foreground border-border",
 };
 
 // Draft state for the inline "compose an offer" form -- amounts kept as
@@ -1749,6 +1749,16 @@ function OfferForm({
 // from a dropdown, the workspace page's URL (`/roles/:id`) picks it for
 // them once, on mount. Standalone use at `/source-candidates` (no prop)
 // keeps working exactly as before, dropdown and all.
+const sourcingPanelClass = (
+  embedded: boolean,
+  layout: string,
+  shape: "lg" | "md" = "lg",
+) => {
+  if (embedded) return `ah-panel ${layout}`;
+  const radius = shape === "md" ? "rounded-md" : "rounded-lg";
+  return `border ${radius} bg-muted/30 ${layout}`;
+};
+
 export const SourceCandidatesPage = ({
   initialRoleBriefId,
 }: {
@@ -3220,7 +3230,9 @@ export const SourceCandidatesPage = ({
       )}
 
       {roleBriefDetail && (
-        <div className="flex flex-col gap-1.5 border rounded-lg p-4 bg-muted/30">
+        <div
+          className={sourcingPanelClass(embedded, "flex flex-col gap-1.5 p-4")}
+        >
           <h3 className="text-sm font-medium">Searching for:</h3>
           <ul className="text-sm list-disc pl-4 flex flex-col gap-0.5">
             <li>
@@ -3368,7 +3380,7 @@ export const SourceCandidatesPage = ({
       {selectedId && (
         <div
           ref={controlPanelRef}
-          className="flex flex-col gap-2 border rounded-lg p-4"
+          className={sourcingPanelClass(embedded, "flex flex-col gap-2 p-4")}
         >
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-medium">Control panel</h3>
@@ -4140,7 +4152,13 @@ export const SourceCandidatesPage = ({
               AI-influenced option and is kept visually separate and
               off by default, not just another item in the dropdown. */}
           {stage === "fetched" && candidates.length > 0 && (
-            <div className="flex items-center justify-between gap-3 flex-wrap border rounded-md bg-muted/30 p-3">
+            <div
+              className={sourcingPanelClass(
+                embedded,
+                "flex items-center justify-between gap-3 flex-wrap p-3",
+                "md",
+              )}
+            >
               <div className="flex items-center gap-3 flex-wrap">
                 <div className="text-sm text-muted-foreground">
                   {totalMatchesAll !== null

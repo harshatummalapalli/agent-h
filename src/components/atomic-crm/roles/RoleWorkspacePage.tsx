@@ -157,21 +157,19 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
           onToggleSourcing={() => setSourcingOpen((v) => !v)}
         />
 
-        <div className="rounded-2xl border border-border/70 bg-card/60 p-6">
-          <SourceCandidatesPage initialRoleBriefId={dealId} />
-        </div>
+        <SourceCandidatesPage initialRoleBriefId={dealId} />
 
-        <div className="rounded-2xl border border-border/70 bg-card/60 p-6 flex flex-col gap-6">
+        <div className="ah-panel p-6 flex flex-col gap-6">
           <ManualResumeUploadPanel dealId={dealId} />
           <Separator />
           <BulkResumeUploadPanel dealId={dealId} />
         </div>
 
-        <div className="rounded-2xl border border-border/70 bg-card/60 p-6">
+        <div className="ah-panel p-6">
           <DealCandidatesSection dealId={dealId} />
         </div>
 
-        <div className="rounded-2xl border border-border/70 bg-card/60 p-6">
+        <div className="ah-panel p-6">
           <h3 className="text-sm font-medium tracking-wide uppercase text-muted-foreground mb-3">
             Notes
           </h3>

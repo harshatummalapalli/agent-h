@@ -317,7 +317,11 @@ export const CanvasPage = () => {
   return (
     <div
       className="ah-scope"
-      style={{ display: "grid", gridTemplateRows: "auto 1fr auto" }}
+      style={{
+        display: "grid",
+        gridTemplateRows: "auto 1fr auto",
+        minHeight: "calc(100dvh - 8rem)",
+      }}
     >
       <div
         style={{

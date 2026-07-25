@@ -706,6 +706,21 @@ const OFFER_STATUS_COLORS: Record<OfferInfo["status"], string> = {
   expired: AH_STATUS.neutral,
 };
 
+// Per-candidate outreach preview returned by prepareFirstOutreach.
+// Handles both LinkedIn (connection/inmail) and email channels.
+type OutreachPrepared = {
+  channel: "email" | "linkedin_connection" | "linkedin_inmail";
+  message_body: string | null;
+  email_preview: {
+    to: string;
+    reply_to?: string;
+    subject: string;
+    html: string;
+  } | null;
+  linkedin_provider_id: string | null;
+  cap_remaining: number | null;
+};
+
 // Draft state for the inline "compose an offer" form -- amounts kept as
 // strings while editing (native number input value), parsed to a number
 // only at submit time.
@@ -1293,6 +1308,10 @@ function CandidateActionsPanel({
   offerSendState,
   onCheckOffer,
   onMarkOfferStatus,
+  hasEmail = true,
+  candidateLinkedInUrl,
+  onPrepareOutreach,
+  outreachState = "idle",
 }: {
   candidate: PdlCandidate;
   showFullProfile?: boolean;
@@ -1344,6 +1363,11 @@ function CandidateActionsPanel({
   offerSendState?: EnrichState;
   onCheckOffer: () => void;
   onMarkOfferStatus: (status: "accepted" | "declined" | "negotiating") => void;
+  // Outreach props (LinkedIn/email first contact)
+  hasEmail?: boolean;
+  candidateLinkedInUrl?: string | null;
+  onPrepareOutreach?: () => void;
+  outreachState?: EnrichState;
 }) {
   return (
     <div className="flex flex-col gap-2 pt-2 border-t">
@@ -1424,18 +1448,34 @@ function CandidateActionsPanel({
               ? "Refresh booking status"
               : "Schedule interview"}
         </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={resumeState === "loading"}
-          onClick={onRequestResume}
-        >
-          {resumeState === "loading"
-            ? "Preparing..."
-            : resumeInfo
-              ? "Re-request resume"
-              : "Request resume"}
-        </Button>
+        {hasEmail ? (
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={resumeState === "loading"}
+            onClick={onRequestResume}
+          >
+            {resumeState === "loading"
+              ? "Preparing..."
+              : resumeInfo
+                ? "Re-request resume"
+                : "Request resume"}
+          </Button>
+        ) : (
+          <span
+            title="No email on file — use LinkedIn outreach instead"
+            className="inline-flex"
+          >
+            <Button
+              variant="outline"
+              size="sm"
+              disabled
+              style={{ pointerEvents: "none" }}
+            >
+              Request resume
+            </Button>
+          </span>
+        )}
         {resumeInfo && resumeInfo.resume_status !== "received" && (
           <Button
             variant="outline"
@@ -1444,6 +1484,18 @@ function CandidateActionsPanel({
             onClick={onCheckForResume}
           >
             Check for resume
+          </Button>
+        )}
+        {candidateLinkedInUrl && onPrepareOutreach && (
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={outreachState === "loading"}
+            onClick={onPrepareOutreach}
+          >
+            {outreachState === "loading"
+              ? "Preparing..."
+              : "Reach out on LinkedIn"}
           </Button>
         )}
         <Button
@@ -1942,6 +1994,131 @@ function EmailPreviewApprovalPanel({
   );
 }
 
+// Approval panel for LinkedIn connection/InMail or email outreach —
+// handles both channels in one component so callers don't need to branch.
+const CONNECTION_CHAR_LIMIT_OUTREACH = 300;
+function OutreachPreviewPanel({
+  prepared,
+  onPreparedChange,
+  onConfirm,
+  onCancel,
+  confirming,
+}: {
+  prepared: OutreachPrepared;
+  onPreparedChange: (next: OutreachPrepared) => void;
+  onConfirm: () => void;
+  onCancel: () => void;
+  confirming: boolean;
+}) {
+  const inputClass =
+    "border border-input bg-background text-foreground rounded px-2 py-1 text-xs w-full";
+  const isLinkedIn =
+    prepared.channel === "linkedin_connection" ||
+    prepared.channel === "linkedin_inmail";
+  const charCount = prepared.message_body?.length ?? 0;
+  const overLimit =
+    prepared.channel === "linkedin_connection" &&
+    charCount > CONNECTION_CHAR_LIMIT_OUTREACH;
+
+  return (
+    <div className={AH_CALLOUT_WARN}>
+      {isLinkedIn ? (
+        <>
+          <p className="text-xs font-medium">
+            Review before sending —{" "}
+            {prepared.channel === "linkedin_inmail"
+              ? "LinkedIn InMail (open profile)"
+              : "LinkedIn connection note"}
+          </p>
+          <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+            Message
+            <textarea
+              className={`${inputClass} ${overLimit ? "border-destructive" : ""}`}
+              rows={prepared.channel === "linkedin_connection" ? 4 : 6}
+              value={prepared.message_body ?? ""}
+              onChange={(e) =>
+                onPreparedChange({
+                  ...prepared,
+                  message_body: e.target.value,
+                })
+              }
+            />
+          </label>
+          <p
+            className={`text-xs ${overLimit ? "text-destructive font-medium" : "text-muted-foreground"}`}
+          >
+            {prepared.channel === "linkedin_connection" &&
+              `${charCount}/${CONNECTION_CHAR_LIMIT_OUTREACH} chars${overLimit ? " — trim before sending" : ""}`}
+          </p>
+          {prepared.cap_remaining !== null && (
+            <p className="text-xs text-muted-foreground">
+              {prepared.cap_remaining} sends remaining today
+            </p>
+          )}
+        </>
+      ) : prepared.email_preview ? (
+        <>
+          <p className="text-xs font-medium">
+            Review before sending to {prepared.email_preview.to}
+          </p>
+          <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+            Subject
+            <input
+              className={inputClass}
+              value={prepared.email_preview.subject}
+              onChange={(e) =>
+                onPreparedChange({
+                  ...prepared,
+                  email_preview: {
+                    ...prepared.email_preview!,
+                    subject: e.target.value,
+                  },
+                })
+              }
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+            Email body (HTML)
+            <textarea
+              className={inputClass}
+              rows={5}
+              value={prepared.email_preview.html}
+              onChange={(e) =>
+                onPreparedChange({
+                  ...prepared,
+                  email_preview: {
+                    ...prepared.email_preview!,
+                    html: e.target.value,
+                  },
+                })
+              }
+            />
+          </label>
+        </>
+      ) : (
+        <p className="text-xs text-muted-foreground">Outreach ready to send.</p>
+      )}
+      <div className="flex gap-2">
+        <Button
+          size="sm"
+          disabled={confirming || overLimit}
+          onClick={onConfirm}
+        >
+          {confirming ? "Sending..." : "Approve & send"}
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={confirming}
+          onClick={onCancel}
+        >
+          Cancel
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 // Role Workspace (2026-07-19): when embedded inside RoleWorkspacePage,
 // `initialRoleBriefId` is passed so this component behaves as a "sourcing
 // panel" for one already-chosen role brief -- no dropdown, no NL-search
@@ -1964,8 +2141,12 @@ const sourcingPanelClass = (
 
 export const SourceCandidatesPage = ({
   initialRoleBriefId,
+  onCandidateSaved,
 }: {
   initialRoleBriefId?: string;
+  // TASK-004: called after a candidate is added to the pipeline so the
+  // parent (RoleWorkspacePage) can propose outreach in the transcript.
+  onCandidateSaved?: (candidateId: number, name: string) => void;
 } = {}) => {
   const dataProvider = useDataProvider<CrmDataProvider>();
   const notify = useNotify();
@@ -2085,6 +2266,17 @@ export const SourceCandidatesPage = ({
   >({});
   const [resumeSendStates, setResumeSendStates] = useState<
     Record<string, EnrichState>
+  >({});
+
+  // LinkedIn/email outreach (prepareFirstOutreach + sendFirstOutreach).
+  const [outreachStates, setOutreachStates] = useState<
+    Record<string, EnrichState>
+  >({});
+  const [outreachSendStates, setOutreachSendStates] = useState<
+    Record<string, EnrichState>
+  >({});
+  const [outreachPrepared, setOutreachPrepared] = useState<
+    Record<string, OutreachPrepared>
   >({});
 
   // Agent H Stage 6: per-candidate offer state. offerFormOpen/offerDrafts
@@ -2483,6 +2675,18 @@ export const SourceCandidatesPage = ({
       setSaveStates(seeded);
       setCandidateDbIds((prev) => ({ ...prev, ...seededDbIds }));
       setStage("fetched");
+      // Auto-expand evidence panels for all fetched candidates and kick off
+      // evidence loading immediately so fit signals are visible without a
+      // click. Unsaved hits use evidence_only (must_haves_check only);
+      // saved hits will use score-candidate when their panel opens.
+      setEvidenceExpanded(
+        Object.fromEntries(data.candidates.map((c) => [c.id, true])),
+      );
+      void Promise.allSettled(
+        data.candidates
+          .filter((c) => !seededDbIds[c.id])
+          .map((c) => handleDiscoveryEvidence(c)),
+      );
     } catch (error: any) {
       notify(error?.message || "Failed to fetch candidates", {
         type: "error",
@@ -2558,6 +2762,13 @@ export const SourceCandidatesPage = ({
           : "Already in your candidates -- linked to this role",
         { type: "success" },
       );
+      // TASK-004: notify parent so it can propose outreach in the transcript.
+      if (outcome.candidate_id && onCandidateSaved) {
+        const name =
+          [candidate.full_name].filter(Boolean).join(" ") ||
+          `Candidate #${outcome.candidate_id}`;
+        onCandidateSaved(outcome.candidate_id, name);
+      }
     } catch (error: any) {
       setSaveStates((prev) => ({ ...prev, [candidate.id]: "idle" }));
       notify(error?.message || "Failed to add candidate", { type: "error" });
@@ -3087,6 +3298,54 @@ export const SourceCandidatesPage = ({
 
   // Agent H, task 76: legacy name kept for prop wiring — now prepares preview.
   const handleRequestResume = handlePrepareResumeRequest;
+
+  // LinkedIn/email outreach: prepare (draft) + send after approval.
+  const handlePrepareOutreach = async (candidate: PdlCandidate) => {
+    const candidateId = candidateDbIds[candidate.id];
+    if (!candidateId || !selectedId) return;
+    setOutreachStates((prev) => ({ ...prev, [candidate.id]: "loading" }));
+    try {
+      const result = await dataProvider.prepareFirstOutreach(
+        candidateId,
+        Number(selectedId),
+      );
+      setOutreachPrepared((prev) => ({
+        ...prev,
+        [candidate.id]: result as OutreachPrepared,
+      }));
+      setOutreachStates((prev) => ({ ...prev, [candidate.id]: "done" }));
+      notify("Review the outreach message before sending", { type: "info" });
+    } catch (error: any) {
+      setOutreachStates((prev) => ({ ...prev, [candidate.id]: "idle" }));
+      notify(error?.message || "Failed to prepare outreach", { type: "error" });
+    }
+  };
+
+  const handleConfirmSendOutreach = async (candidate: PdlCandidate) => {
+    const candidateId = candidateDbIds[candidate.id];
+    const prepared = outreachPrepared[candidate.id];
+    if (!candidateId || !selectedId || !prepared) return;
+    setOutreachSendStates((prev) => ({ ...prev, [candidate.id]: "loading" }));
+    try {
+      await dataProvider.sendFirstOutreach(candidateId, Number(selectedId), {
+        channel: prepared.channel,
+        message_body: prepared.message_body ?? undefined,
+        linkedin_provider_id: prepared.linkedin_provider_id ?? undefined,
+        subject: prepared.email_preview?.subject,
+        html: prepared.email_preview?.html,
+      });
+      setOutreachSendStates((prev) => ({ ...prev, [candidate.id]: "done" }));
+      setOutreachPrepared((prev) => {
+        const next = { ...prev };
+        delete next[candidate.id];
+        return next;
+      });
+      notify("Outreach sent", { type: "success" });
+    } catch (error: any) {
+      setOutreachSendStates((prev) => ({ ...prev, [candidate.id]: "idle" }));
+      notify(error?.message || "Failed to send outreach", { type: "error" });
+    }
+  };
 
   // Agent H, task 76: re-reads resume_status from public.candidates -- a
   // reply only exists once the candidate actually checks their email.
@@ -4348,6 +4607,37 @@ export const SourceCandidatesPage = ({
                         onMarkOfferStatus={(status) =>
                           handleMarkOfferStatus(candidate, status)
                         }
+                        hasEmail={
+                          Boolean(candidate.emails?.length) ||
+                          Boolean(contactEnrichResults[candidate.id]?.email)
+                        }
+                        candidateLinkedInUrl={candidate.linkedin_url}
+                        onPrepareOutreach={() =>
+                          handlePrepareOutreach(candidate)
+                        }
+                        outreachState={outreachStates[candidate.id] ?? "idle"}
+                      />
+                    )}
+                    {candidateId && outreachPrepared[candidate.id] && (
+                      <OutreachPreviewPanel
+                        prepared={outreachPrepared[candidate.id]}
+                        onPreparedChange={(next) =>
+                          setOutreachPrepared((prev) => ({
+                            ...prev,
+                            [candidate.id]: next,
+                          }))
+                        }
+                        onConfirm={() => handleConfirmSendOutreach(candidate)}
+                        onCancel={() =>
+                          setOutreachPrepared((prev) => {
+                            const next = { ...prev };
+                            delete next[candidate.id];
+                            return next;
+                          })
+                        }
+                        confirming={
+                          outreachSendStates[candidate.id] === "loading"
+                        }
                       />
                     )}
 
@@ -4690,8 +4980,9 @@ export const SourceCandidatesPage = ({
           )}
           {stage === "fetched" && candidates.length > 0 && (
             <p className="text-xs text-muted-foreground -mt-2">
-              Default order is the order these candidates were found in &mdash;
-              not a ranking Agent H applied.
+              {candidates.some((c) => typeof c._match_score === "number")
+                ? "Sorted by match score (highest first)."
+                : "Candidates shown in discovery order."}
             </p>
           )}
 
@@ -4978,6 +5269,33 @@ export const SourceCandidatesPage = ({
                     onMarkOfferStatus={(status) =>
                       handleMarkOfferStatus(candidate, status)
                     }
+                    hasEmail={
+                      Boolean(candidate.emails?.length) ||
+                      Boolean(contactEnrichResults[candidate.id]?.email)
+                    }
+                    candidateLinkedInUrl={candidate.linkedin_url}
+                    onPrepareOutreach={() => handlePrepareOutreach(candidate)}
+                    outreachState={outreachStates[candidate.id] ?? "idle"}
+                  />
+                )}
+                {candidateId && outreachPrepared[candidate.id] && (
+                  <OutreachPreviewPanel
+                    prepared={outreachPrepared[candidate.id]}
+                    onPreparedChange={(next) =>
+                      setOutreachPrepared((prev) => ({
+                        ...prev,
+                        [candidate.id]: next,
+                      }))
+                    }
+                    onConfirm={() => handleConfirmSendOutreach(candidate)}
+                    onCancel={() =>
+                      setOutreachPrepared((prev) => {
+                        const next = { ...prev };
+                        delete next[candidate.id];
+                        return next;
+                      })
+                    }
+                    confirming={outreachSendStates[candidate.id] === "loading"}
                   />
                 )}
               </div>

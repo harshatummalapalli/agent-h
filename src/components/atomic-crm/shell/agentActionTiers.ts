@@ -22,7 +22,8 @@ export type ConversationTurnKind =
   | "proposal"
   | "refinement"
   | "decision"
-  | "result";
+  | "result"
+  | "candidate_card";
 
 export type ConversationTurnMetadata = {
   kind?: ConversationTurnKind;
@@ -51,6 +52,19 @@ export type ConversationTurnMetadata = {
   undo?: {
     action: string;
     params: Record<string, unknown>;
+  };
+  // TASK-003: candidate card embedded in the transcript after sourcing runs.
+  candidate_card?: {
+    candidate_id: number;
+    deal_id: number;
+    name: string;
+    headline: string | null;
+    linkedin_url: string | null;
+    match_score: number | null;
+    must_haves: Array<{
+      label: string;
+      status: "found" | "inferred" | "missing";
+    }>;
   };
 };
 

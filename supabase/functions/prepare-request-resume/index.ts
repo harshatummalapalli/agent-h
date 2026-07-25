@@ -75,8 +75,9 @@ const prepareRequestResumeHandler = async (req: Request) => {
   if (!candidateEmail) {
     return jsonResponse(
       {
-        error:
-          "This candidate has no email on file yet -- run contact enrichment first.",
+        error: candidate.linkedin_url
+          ? "This candidate has no email — use LinkedIn outreach instead (they have a LinkedIn URL)."
+          : "This candidate has no email on file. Add an email via contact enrichment first, or use LinkedIn outreach if they have a LinkedIn URL.",
       },
       400,
     );

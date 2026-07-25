@@ -50,7 +50,9 @@ import { RoleConversationTranscript } from "../shell/RoleConversationTranscript"
 import { useRoleShellContext } from "../shell/useShellContext";
 import {
   approveTier3Proposal,
+  dispatchJdPasteCommand,
   dispatchRoleAgentCommand,
+  proposeOutreachAfterPipelineAdd,
   refineTier3Proposal,
   stopTier3Proposal,
   type ParseCandidateRef,
@@ -81,6 +83,11 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
   const [sourcingOpen, setSourcingOpen] = useState(false);
   const [commandBusy, setCommandBusy] = useState(false);
   const [approvalBusy, setApprovalBusy] = useState(false);
+  const [linkedInBannerDismissed, setLinkedInBannerDismissed] = useState(
+    () =>
+      typeof sessionStorage !== "undefined" &&
+      sessionStorage.getItem("linkedin_banner_dismissed") === "1",
+  );
   const { data: openDeals } = useGetList<Deal>("deals", {
     pagination: { page: 1, perPage: 20 },
     sort: { field: "updated_at", order: "DESC" },
@@ -99,6 +106,17 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
     queryFn: () => dataProvider.getCandidatesForDeal(dealId),
     enabled: !!dealId,
   });
+
+  const { data: linkedInAccount } = useQuery({
+    queryKey: ["unipile_linkedin_account"],
+    queryFn: () => dataProvider.getUnipileLinkedInAccount(),
+    retry: false,
+    staleTime: 5 * 60 * 1000,
+  });
+  const showLinkedInBanner =
+    !linkedInBannerDismissed &&
+    linkedInAccount !== undefined &&
+    (linkedInAccount as { status?: string }).status !== "connected";
 
   const pipelineCandidates = useMemo<ParseCandidateRef[]>(
     () =>
@@ -149,7 +167,20 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
   const runFreeTextCommand = async (commandText: string) => {
     setCommandBusy(true);
     try {
-      await dispatchRoleAgentCommand(orchestratorDeps, commandText);
+      // JD paste detection: long text (≥200 chars) with JD-like structure
+      // is parsed in-transcript rather than dispatched to the command router
+      // (which would navigate away to /jd-intake). This makes the role
+      // workspace the primary intake path for roles that already exist.
+      const isJdPaste =
+        commandText.length >= 200 &&
+        /responsibilities|requirements|qualifications|experience|skills|about the role|what you.ll do|who you are/i.test(
+          commandText,
+        );
+      if (isJdPaste) {
+        await dispatchJdPasteCommand(orchestratorDeps, commandText);
+      } else {
+        await dispatchRoleAgentCommand(orchestratorDeps, commandText);
+      }
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Couldn't run that command",
@@ -234,6 +265,33 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
           onToggleSourcing={() => setSourcingOpen((v) => !v)}
         />
 
+        {showLinkedInBanner && (
+          <div className="flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50/80 px-3 py-2 text-sm">
+            <span className="flex-1">
+              LinkedIn is not connected —{" "}
+              <button
+                type="button"
+                className="underline text-amber-800 font-medium"
+                onClick={() => navigate("/profile")}
+              >
+                connect on your Profile page
+              </button>{" "}
+              to enable LinkedIn outreach.
+            </span>
+            <button
+              type="button"
+              className="text-xs text-muted-foreground hover:text-foreground leading-none"
+              aria-label="Dismiss LinkedIn banner"
+              onClick={() => {
+                sessionStorage.setItem("linkedin_banner_dismissed", "1");
+                setLinkedInBannerDismissed(true);
+              }}
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
         <RoleConversationTranscript
           dealId={dealId}
           onApprove={handleApproveProposal}
@@ -242,7 +300,16 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
           actionBusy={approvalBusy || commandBusy}
         />
 
-        <SourceCandidatesPage initialRoleBriefId={dealId} />
+        <SourceCandidatesPage
+          initialRoleBriefId={dealId}
+          onCandidateSaved={(candidateId, name) => {
+            void proposeOutreachAfterPipelineAdd(
+              orchestratorDeps,
+              candidateId,
+              name,
+            );
+          }}
+        />
 
         <div className="ah-panel p-6 flex flex-col gap-6">
           <ManualResumeUploadPanel dealId={dealId} />

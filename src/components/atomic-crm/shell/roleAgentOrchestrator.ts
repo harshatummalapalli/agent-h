@@ -98,6 +98,21 @@ async function executeReversibleOrRead(
       result.filteredCount > 0
         ? `, ${result.filteredCount} filtered as not relevant`
         : "";
+    // TASK-003: append candidate cards after sourcing so recruiter sees them inline.
+    if (result.savedCandidates.length > 0) {
+      void appendCandidateCardTurns(
+        deps,
+        result.savedCandidates.map((c) => ({
+          id: c.id,
+          first_name: c.fullName.split(" ")[0] ?? null,
+          last_name: c.fullName.split(" ").slice(1).join(" ") || null,
+          job_title: c.title,
+          job_company_name: c.company,
+          linkedin_url: null,
+          match_score: null,
+        })),
+      );
+    }
     return {
       summary: `Found ${result.foundCount}, saved ${result.savedCount} new candidates${filteredNote}.`,
     };
@@ -220,6 +235,213 @@ async function buildTier3ProposalMetadata(
   }
 
   return base;
+}
+
+// TASK-002: JD paste detection and conversational intake in role transcript.
+// Called when the recruiter pastes a long JD-like text in the role command bar.
+// Parses it with Claude, updates the deal, and asks clarifying questions in transcript.
+export async function dispatchJdPasteCommand(
+  deps: RoleAgentOrchestratorDeps,
+  jdText: string,
+): Promise<void> {
+  // Append the recruiter's text as a command turn (truncated for display).
+  const displayText =
+    jdText.length > 300
+      ? `${jdText.slice(0, 300)}… (${jdText.length - 300} more chars)`
+      : jdText;
+  await appendRecruiterTurn(deps, displayText, { kind: "command" });
+
+  // Parse the JD.
+  let parsed: Awaited<ReturnType<typeof deps.dataProvider.parseJobDescription>>;
+  try {
+    parsed = await deps.dataProvider.parseJobDescription(jdText);
+  } catch (error) {
+    await appendAgentTurn(
+      deps,
+      `Couldn't parse that job description: ${error instanceof Error ? error.message : "unknown error"}. Try shortening it or pasting just the key requirements.`,
+      { kind: "result", status: "executed" },
+    );
+    deps.invalidateTranscript();
+    return;
+  }
+
+  // Update the deal record with parsed structured fields.
+  try {
+    await deps.dataProvider.update("deals", {
+      id: deps.dealId,
+      data: {
+        name: parsed.title ?? deps.deal?.name,
+        seniority: parsed.seniority,
+        location: parsed.location,
+        industry: parsed.industry,
+        years_experience_min: parsed.years_experience_min,
+        years_experience_max: parsed.years_experience_max,
+        required_skills: parsed.required_skills,
+        must_have_keywords: parsed.must_have_keywords,
+        nice_to_have_keywords: parsed.nice_to_have_keywords,
+        preference_tiers: parsed.preference_tiers,
+        clarifying_questions: parsed.clarifying_questions,
+        clarifying_questions_dismissed: false,
+      },
+      previousData: deps.deal ?? {},
+    });
+    deps.queryClient.invalidateQueries({ queryKey: ["deals", deps.dealId] });
+  } catch {
+    // Non-fatal: still show the summary even if the update fails.
+  }
+
+  // Build a readable summary of what was parsed.
+  const skillsSummary =
+    (parsed.required_skills ?? parsed.must_have_keywords ?? [])
+      .slice(0, 5)
+      .join(", ") || "not specified";
+  const expSummary =
+    parsed.years_experience_min != null || parsed.years_experience_max != null
+      ? `${parsed.years_experience_min ?? 0}–${parsed.years_experience_max ?? "∞"} years`
+      : "not specified";
+  const summaryLines = [
+    `**Role:** ${parsed.title || "untitled"}`,
+    `**Seniority:** ${parsed.seniority || "not specified"}`,
+    `**Location:** ${parsed.location || "not specified"}`,
+    `**Experience:** ${expSummary}`,
+    `**Key skills:** ${skillsSummary}`,
+  ].join("\n");
+
+  // Build the agent response with summary + questions.
+  const questionsBlock = parsed.clarifying_questions?.length
+    ? `\n\nA few things I'm less sure about:\n${parsed.clarifying_questions.map((q) => `• ${q}`).join("\n")}\n\nAnswer any of these, or say 'start sourcing' when you're ready.`
+    : "\n\nEverything looks clear. Say 'start sourcing' to begin.";
+
+  const agentContent = `Got it \u2014 here's what I parsed:\n\n${summaryLines}${questionsBlock}`;
+
+  await appendAgentTurn(deps, agentContent, {
+    kind: "result",
+    action: "create_role",
+    status: "executed",
+  });
+  deps.invalidateTranscript();
+}
+
+// TASK-003: After sourcing runs (continue_sourcing), append candidate card
+// turns to the transcript so the recruiter sees fit signals inline.
+export async function appendCandidateCardTurns(
+  deps: RoleAgentOrchestratorDeps,
+  candidates: Array<{
+    id: number;
+    first_name: string | null;
+    last_name: string | null;
+    job_title: string | null;
+    job_company_name: string | null;
+    linkedin_url: string | null;
+    match_score: number | null;
+    must_haves_check?: Array<{
+      label: string;
+      status: "found" | "inferred" | "missing";
+    }>;
+  }>,
+): Promise<void> {
+  const dealId = Number(deps.dealId);
+  const top = candidates.slice(0, 5);
+  for (const c of top) {
+    const name =
+      [c.first_name, c.last_name].filter(Boolean).join(" ") ||
+      `Candidate #${c.id}`;
+    const headline = [c.job_title, c.job_company_name]
+      .filter(Boolean)
+      .join(" at ");
+    await appendAgentTurn(
+      deps,
+      `${name}${headline ? ` — ${headline}` : ""}${c.match_score != null ? ` (match ${Math.round(c.match_score * 100)}%)` : ""}`,
+      {
+        kind: "candidate_card",
+        candidate_card: {
+          candidate_id: c.id,
+          deal_id: dealId,
+          name,
+          headline: headline || null,
+          linkedin_url: c.linkedin_url,
+          match_score: c.match_score,
+          must_haves: (c.must_haves_check ?? []).slice(0, 3),
+        },
+      },
+    );
+  }
+  deps.invalidateTranscript();
+}
+
+// TASK-004: After a candidate is added to the pipeline, propose outreach
+// in the transcript (Tier 3 gate — recruiter must approve before sending).
+export async function proposeOutreachAfterPipelineAdd(
+  deps: RoleAgentOrchestratorDeps,
+  candidateId: number,
+  candidateName: string,
+): Promise<void> {
+  const dealId = Number(deps.dealId);
+
+  let metadata: ConversationTurnMetadata;
+  try {
+    const result = await deps.dataProvider.prepareFirstOutreach(
+      candidateId,
+      dealId,
+    );
+
+    const base: ConversationTurnMetadata = {
+      kind: "proposal",
+      tier: "leaves_platform",
+      action: "send_first_outreach",
+      status: "pending",
+      explanation: `${candidateName} is now in the pipeline. Ready to reach out?`,
+      params: { candidate_id: candidateId, deal_id: dealId },
+    };
+
+    if (
+      (result.channel === "linkedin_connection" ||
+        result.channel === "linkedin_inmail") &&
+      result.message_body &&
+      result.linkedin_provider_id
+    ) {
+      metadata = {
+        ...base,
+        linkedin_preview: {
+          channel: result.channel,
+          message_body: result.message_body,
+          char_count: result.char_count ?? result.message_body.length,
+          is_open_profile: result.is_open_profile ?? false,
+          linkedin_provider_id: result.linkedin_provider_id,
+          cap_remaining: result.cap_remaining ?? undefined,
+          drafted_by: result.drafted_by,
+        } as ConversationTurnMetadata["linkedin_preview"],
+      };
+    } else if (result.channel === "email" && result.email_preview) {
+      metadata = {
+        ...base,
+        email_preview:
+          result.email_preview as ConversationTurnMetadata["email_preview"],
+      };
+    } else {
+      metadata = base;
+    }
+  } catch {
+    // LinkedIn not configured or no contact info — show a softer prompt.
+    await appendAgentTurn(
+      deps,
+      `${candidateName} is now in the pipeline. To reach out, connect LinkedIn on your Profile page, or add an email for this candidate.`,
+      {
+        kind: "result",
+        action: "send_first_outreach",
+        status: "cancelled",
+      },
+    );
+    deps.invalidateTranscript();
+    return;
+  }
+
+  await appendAgentTurn(
+    deps,
+    metadata.explanation ?? `Ready to reach out to ${candidateName}?`,
+    metadata,
+  );
+  deps.invalidateTranscript();
 }
 
 export async function dispatchRoleAgentCommand(

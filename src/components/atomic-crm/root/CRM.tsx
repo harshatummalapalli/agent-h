@@ -18,8 +18,9 @@ import { OAuthConsentPage } from "@/components/supabase/oauth-consent-page";
 import candidates from "../candidates";
 import companies from "../companies";
 import contacts from "../contacts";
-import { InboxPage } from "../inbox/InboxPage";
 import { CanvasPage } from "../canvas/CanvasPage";
+import { HomePage } from "../home/HomePage";
+import { PreferencesPage } from "../preferences/PreferencesPage";
 import deals from "../deals";
 import { Layout } from "../layout/Layout";
 import { SignupPage } from "../login/SignupPage";
@@ -245,7 +246,7 @@ const DesktopAdmin = (
   return (
     <Admin
       layout={props.layout ?? Layout}
-      dashboard={props.dashboard ?? InboxPage}
+      dashboard={props.dashboard ?? HomePage}
       {...props}
     >
       <CustomRoutes noLayout>
@@ -269,6 +270,7 @@ const DesktopAdmin = (
       <CustomRoutes>
         <Route path={ProfilePage.path} element={<ProfilePage />} />
         <Route path={SettingsPage.path} element={<SettingsPage />} />
+        <Route path={PreferencesPage.path} element={<PreferencesPage />} />
         <Route path={ImportPage.path} element={<ImportPage />} />
         <Route path={ChangelogPage.path} element={<ChangelogPage />} />
         <Route path={JdIntakePage.path} element={<JdIntakePage />} />
@@ -336,7 +338,7 @@ const MobileAdmin = (
       <Admin
         queryClient={queryClient}
         layout={props.layout ?? Layout}
-        dashboard={props.dashboard ?? InboxPage}
+        dashboard={props.dashboard ?? HomePage}
         {...props}
       >
         <CustomRoutes noLayout>
@@ -361,6 +363,7 @@ const MobileAdmin = (
             path={SettingsPageMobile.path}
             element={<SettingsPageMobile />}
           />
+          <Route path={PreferencesPage.path} element={<PreferencesPage />} />
           <Route path={ChangelogPage.path} element={<ChangelogPage />} />
           <Route path={ImportPage.path} element={<ImportPage />} />
           <Route path={JdIntakePage.path} element={<JdIntakePage />} />

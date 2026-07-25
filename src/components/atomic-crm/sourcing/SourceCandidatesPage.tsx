@@ -3754,6 +3754,32 @@ export const SourceCandidatesPage = ({
     }
   };
 
+  // Bulk LinkedIn rate-limiting (E): 3-second gap between LinkedIn sends in
+  // a batch to stay well under Unipile's own throttle and avoid triggering
+  // LinkedIn's anti-automation detection. Email sends are not throttled.
+  const LINKEDIN_SEND_INTERVAL_MS = 3000;
+
+   
+  const _handleBulkSendAll = async (
+    queue: Array<{ candidateKey: string; candidate: PdlCandidate }>,
+  ) => {
+    for (let i = 0; i < queue.length; i++) {
+      const { candidateKey, candidate } = queue[i];
+      const prepared = outreachPrepared[candidateKey];
+      if (!prepared) continue;
+      await handleConfirmSendOutreach(candidate);
+      const isLinkedIn =
+        prepared.channel === "linkedin_connection" ||
+        prepared.channel === "linkedin_inmail";
+      if (isLinkedIn && i < queue.length - 1) {
+        // Rate-limit: pause between LinkedIn sends
+        await new Promise((resolve) =>
+          setTimeout(resolve, LINKEDIN_SEND_INTERVAL_MS),
+        );
+      }
+    }
+  };
+
   // Agent H, task 76: re-reads resume_status from public.candidates -- a
   // reply only exists once the candidate actually checks their email.
   const handleCheckForResume = async (candidate: PdlCandidate) => {

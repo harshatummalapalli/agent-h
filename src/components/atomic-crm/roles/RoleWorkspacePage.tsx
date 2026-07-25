@@ -1,23 +1,9 @@
-// Role Workspace (2026-07-19): the "one continuous role screen" Harsha
-// asked for after we looked at how Noon.ai structures its product -- Noon
-// keeps Sourcing/Review & Contact/Coordinator/AI Interviewer under ONE role
-// and ONE URL, with context (JD, must-haves, location) typed once at intake
-// reappearing pre-filled several stages later. Agent H's equivalent stages
-// (Job Intake, Source Candidates, Screening) existed but lived in separate,
-// disconnected routes/tabs that didn't share visible context -- this page
-// is the fix: a single `/roles/:id` URL that shows the role brief itself,
-// the full sourcing/calibration panel (embedded, not linked out to), and
-// every candidate saved into this role's pipeline so far, all in one place.
-//
-// Deliberately NOT a rewrite of SourceCandidatesPage's ~2000 lines of
-// sourcing/calibration/screening logic -- that logic is reused as-is via
-// the `initialRoleBriefId` prop added to it, which auto-selects this role
-// brief on mount and hides its own dropdown/heading (see that file's
-// `embedded` handling). Growing the file count, not the file: this page is
-// a thin composition of already-existing, already-tested pieces
-// (DealCandidatesSection for the pipeline list, deal_notes for notes,
-// SourceCandidatesPage for sourcing) plus a small role-brief header of its
-// own.
+// Role Workspace (2026-07-26): Noon-style staged tabs replacing the old
+// single long vertical stack. Four tabs: Sourcing → Review & Contact →
+// Coordinator → AI Interviewer. Default tab is Sourcing when the
+// pipeline is empty; Review & Contact when candidates already exist.
+// All existing orchestrator / AgentHShell / outreach logic is preserved —
+// only the layout changes.
 import { isValid } from "date-fns";
 import { useMemo, useState } from "react";
 import {
@@ -36,6 +22,8 @@ import { EditButton } from "@/components/admin/edit-button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
 
 import { DealCandidatesSection } from "../deals/DealCandidatesSection";
 import { findDealLabel, formatISODateString } from "../deals/dealUtils";
@@ -44,7 +32,6 @@ import { NotesIterator } from "../notes/NotesIterator";
 import type { CrmDataProvider } from "../providers/types";
 import { useConfigurationContext } from "../root/ConfigurationContext";
 import { SourceCandidatesPage } from "../sourcing/SourceCandidatesPage";
-import { SourcingSidebar } from "../sourcing/SourcingSidebar";
 import { AgentHShell } from "../shell/AgentHShell";
 import { RoleConversationTranscript } from "../shell/RoleConversationTranscript";
 import { useRoleShellContext } from "../shell/useShellContext";
@@ -74,13 +61,14 @@ export const RoleWorkspacePage = () => {
   );
 };
 
+type WorkspaceTab = "sourcing" | "review" | "coordinator" | "interviewer";
+
 const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
   const navigate = useNavigate();
   const dataProvider = useDataProvider<CrmDataProvider>();
   const queryClient = useQueryClient();
   const { dealStages } = useConfigurationContext();
   const deal = useRecordContext<Deal>();
-  const [sourcingOpen, setSourcingOpen] = useState(false);
   const [commandBusy, setCommandBusy] = useState(false);
   const [approvalBusy, setApprovalBusy] = useState(false);
   const [linkedInBannerDismissed, setLinkedInBannerDismissed] = useState(
@@ -167,10 +155,6 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
   const runFreeTextCommand = async (commandText: string) => {
     setCommandBusy(true);
     try {
-      // JD paste detection: long text (≥200 chars) with JD-like structure
-      // is parsed in-transcript rather than dispatched to the command router
-      // (which would navigate away to /jd-intake). This makes the role
-      // workspace the primary intake path for roles that already exist.
       const isJdPaste =
         commandText.length >= 200 &&
         /responsibilities|requirements|qualifications|experience|skills|about the role|what you.ll do|who you are/i.test(
@@ -247,130 +231,180 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
     }
   };
 
+  // Default tab: if candidates exist show Review & Contact, else Sourcing
+  const defaultTab: WorkspaceTab =
+    !pipelinePending && pipelineCount > 0 ? "review" : "sourcing";
+
   return (
     <AgentHShell
       context={shellContext}
       commandBar={{
         placeholder: "Tell Agent H what you need for this role",
-        hint: "Try: “find more candidates like these” or “relax the Python requirement”.",
+        hint: "Try: \u201cfind more candidates like these\u201d or \u201crelax the Python requirement\u201d.",
         slashActions: [
           { cmd: "/relax", label: "Relax a criterion on this role" },
         ],
         onSubmit: runFreeTextCommand,
       }}
     >
-      <div className="flex flex-col gap-8 max-w-3xl mx-auto p-6 pb-8 overflow-y-auto flex-1 min-h-0">
-        <RoleWorkspaceHeader
-          sourcingOpen={sourcingOpen}
-          onToggleSourcing={() => setSourcingOpen((v) => !v)}
-        />
+      <div className="flex flex-col flex-1 min-h-0 overflow-y-auto">
+        {/* Role header — always visible above tabs */}
+        <div className="max-w-4xl mx-auto w-full px-6 pt-6 pb-2">
+          <RoleWorkspaceHeader />
 
-        {showLinkedInBanner && (
-          <div className="flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50/80 px-3 py-2 text-sm">
-            <span className="flex-1">
-              LinkedIn is not connected —{" "}
+          {showLinkedInBanner && (
+            <div className="flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50/80 dark:border-amber-800 dark:bg-amber-950/40 px-3 py-2 text-sm mt-3">
+              <span className="flex-1 text-amber-800 dark:text-amber-300">
+                LinkedIn is not connected —{" "}
+                <button
+                  type="button"
+                  className="underline font-medium"
+                  onClick={() => navigate("/preferences?tab=accounts")}
+                >
+                  connect in Preferences
+                </button>
+              </span>
               <button
                 type="button"
-                className="underline text-amber-800 font-medium"
-                onClick={() => navigate("/profile")}
+                className="text-xs text-muted-foreground hover:text-foreground"
+                aria-label="Dismiss LinkedIn banner"
+                onClick={() => {
+                  sessionStorage.setItem("linkedin_banner_dismissed", "1");
+                  setLinkedInBannerDismissed(true);
+                }}
               >
-                connect on your Profile page
-              </button>{" "}
-              to enable LinkedIn outreach.
-            </span>
-            <button
-              type="button"
-              className="text-xs text-muted-foreground hover:text-foreground leading-none"
-              aria-label="Dismiss LinkedIn banner"
-              onClick={() => {
-                sessionStorage.setItem("linkedin_banner_dismissed", "1");
-                setLinkedInBannerDismissed(true);
-              }}
-            >
-              ✕
-            </button>
+                ✕
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Staged tabs */}
+        <Tabs
+          defaultValue={defaultTab}
+          className="flex-1 flex flex-col min-h-0"
+        >
+          <div className="border-b border-border bg-background sticky top-0 z-10">
+            <div className="max-w-4xl mx-auto px-6">
+              <TabsList className="h-auto gap-0 bg-transparent p-0 rounded-none">
+                {(
+                  [
+                    { value: "sourcing", label: "Sourcing" },
+                    { value: "review", label: "Review & Contact" },
+                    { value: "coordinator", label: "Coordinator" },
+                    { value: "interviewer", label: "AI Interviewer" },
+                  ] as const
+                ).map(({ value, label }) => (
+                  <TabsTrigger
+                    key={value}
+                    value={value}
+                    className="rounded-none border-b-2 border-transparent data-[state=active]:border-[var(--orange-active)] data-[state=active]:text-[var(--orange-active)] data-[state=active]:bg-transparent data-[state=active]:shadow-none px-4 py-3 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    {label}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </div>
           </div>
-        )}
 
-        <RoleConversationTranscript
-          dealId={dealId}
-          onApprove={handleApproveProposal}
-          onStop={handleStopProposal}
-          onRefine={handleRefineProposal}
-          actionBusy={approvalBusy || commandBusy}
-        />
+          {/* Sourcing */}
+          <TabsContent value="sourcing" className="flex-1 mt-0 overflow-y-auto">
+            <div className="max-w-4xl mx-auto px-6 py-6 flex flex-col gap-6">
+              <RoleConversationTranscript
+                dealId={dealId}
+                onApprove={handleApproveProposal}
+                onStop={handleStopProposal}
+                onRefine={handleRefineProposal}
+                actionBusy={approvalBusy || commandBusy}
+              />
 
-        <SourceCandidatesPage
-          initialRoleBriefId={dealId}
-          onCandidateSaved={(candidateId, name) => {
-            void proposeOutreachAfterPipelineAdd(
-              orchestratorDeps,
-              candidateId,
-              name,
-            );
-          }}
-        />
+              <SourceCandidatesPage
+                initialRoleBriefId={dealId}
+                onCandidateSaved={(candidateId, name) => {
+                  void proposeOutreachAfterPipelineAdd(
+                    orchestratorDeps,
+                    candidateId,
+                    name,
+                  );
+                }}
+              />
 
-        <div className="ah-panel p-6 flex flex-col gap-6">
-          <ManualResumeUploadPanel dealId={dealId} />
-          <Separator />
-          <BulkResumeUploadPanel dealId={dealId} />
-        </div>
+              <div className="ah-panel p-6 flex flex-col gap-6">
+                <ManualResumeUploadPanel dealId={dealId} />
+                <Separator />
+                <BulkResumeUploadPanel dealId={dealId} />
+              </div>
+            </div>
+          </TabsContent>
 
-        <div className="ah-panel p-6">
-          <DealCandidatesSection dealId={dealId} />
-        </div>
+          {/* Review & Contact */}
+          <TabsContent value="review" className="flex-1 mt-0 overflow-y-auto">
+            <div className="max-w-4xl mx-auto px-6 py-6 flex flex-col gap-6">
+              <div className="ah-panel p-6">
+                <DealCandidatesSection dealId={dealId} />
+              </div>
 
-        <div className="ah-panel p-6">
-          <h3 className="text-sm font-medium tracking-wide uppercase text-muted-foreground mb-3">
-            Notes
-          </h3>
-          <InfiniteListBase
-            resource="deal_notes"
-            filter={{ deal_id: dealId }}
-            sort={{ field: "date", order: "DESC" }}
-            perPage={25}
-            disableSyncWithLocation
-            storeKey={false}
-            empty={<NoteCreate reference="deals" />}
+              <div className="ah-panel p-6">
+                <h3 className="text-sm font-medium tracking-wide uppercase text-muted-foreground mb-3">
+                  Notes
+                </h3>
+                <InfiniteListBase
+                  resource="deal_notes"
+                  filter={{ deal_id: dealId }}
+                  sort={{ field: "date", order: "DESC" }}
+                  perPage={25}
+                  disableSyncWithLocation
+                  storeKey={false}
+                  empty={<NoteCreate reference="deals" />}
+                >
+                  <NotesIterator reference="deals" />
+                </InfiniteListBase>
+              </div>
+            </div>
+          </TabsContent>
+
+          {/* Coordinator */}
+          <TabsContent
+            value="coordinator"
+            className="flex-1 mt-0 overflow-y-auto"
           >
-            <NotesIterator reference="deals" />
-          </InfiniteListBase>
-        </div>
+            <div className="max-w-2xl mx-auto px-6 py-8">
+              <CoordinatorPlaceholder />
+            </div>
+          </TabsContent>
 
-        <SourcingSidebar
-          open={sourcingOpen}
-          onClose={() => setSourcingOpen(false)}
-          openDeals={openDeals ?? []}
-        />
+          {/* AI Interviewer */}
+          <TabsContent
+            value="interviewer"
+            className="flex-1 mt-0 overflow-y-auto"
+          >
+            <div className="max-w-2xl mx-auto px-6 py-16 text-center flex flex-col items-center gap-4">
+              <div className="text-4xl">🎙</div>
+              <h2 className="text-lg font-semibold text-foreground">
+                AI Interviewer
+              </h2>
+              <p className="text-sm text-muted-foreground max-w-xs">
+                Automated voice interviews and async screening are coming in
+                Phase 2. Set up your Coordinator in the meantime.
+              </p>
+            </div>
+          </TabsContent>
+        </Tabs>
       </div>
     </AgentHShell>
   );
 };
 
-// Deliberately lighter than DealShowContent's header -- this page's
-// SourceCandidatesPage panel below already renders a detailed "Searching
-// for:" summary (title, seniority, location, must-haves/skills), so this
-// header only needs to orient the recruiter (which role, what stage, a way
-// back to the full deal record) without duplicating that detail.
-const RoleWorkspaceHeader = ({
-  sourcingOpen,
-  onToggleSourcing,
-}: {
-  sourcingOpen: boolean;
-  onToggleSourcing: () => void;
-}) => {
+/* ------------------------------------------------------------------ */
+/* Role header                                                          */
+/* ------------------------------------------------------------------ */
+
+const RoleWorkspaceHeader = () => {
   const { dealStages } = useConfigurationContext();
   const record = useRecordContext<Deal>();
   const [linkCopied, setLinkCopied] = useState(false);
   if (!record) return null;
 
-  // Outbound candidate application link (2026-07-19): built client-side
-  // from the deal's own public_application_token (schema 30) -- no API
-  // call needed, the token is already on the record this page loaded.
-  // Shareable anywhere (job boards, email, WhatsApp); the public
-  // /apply/:token page (CandidateApplicationPage) resolves it back to this
-  // exact role via submit-candidate-application.
   const handleCopyApplicationLink = async () => {
     if (!record.public_application_token) return;
     const url = `${window.location.origin}/apply/${record.public_application_token}`;
@@ -378,17 +412,17 @@ const RoleWorkspaceHeader = ({
       await navigator.clipboard.writeText(url);
       setLinkCopied(true);
       setTimeout(() => setLinkCopied(false), 2000);
-    } catch (error) {
-      console.error("Failed to copy application link", error);
+    } catch {
+      // ignore
     }
   };
 
   return (
     <div className="flex items-start justify-between">
       <div>
-        <h1 className="text-2xl font-semibold">{record.name}</h1>
+        <h1 className="text-xl font-semibold tracking-tight">{record.name}</h1>
         <div className="flex items-center gap-2 mt-1 text-sm text-muted-foreground">
-          <Badge variant="outline">
+          <Badge variant="outline" className="text-xs">
             {findDealLabel(dealStages, record.stage)}
           </Badge>
           {record.expected_closing_date &&
@@ -400,15 +434,7 @@ const RoleWorkspaceHeader = ({
             )}
         </div>
       </div>
-      <div className="flex items-center gap-2">
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={onToggleSourcing}
-          className={sourcingOpen ? "border-primary text-primary" : undefined}
-        >
-          ✨ Sourcing
-        </Button>
+      <div className="flex items-center gap-2 shrink-0">
         {record.public_application_token && (
           <Button
             variant="outline"
@@ -424,14 +450,94 @@ const RoleWorkspaceHeader = ({
   );
 };
 
-// Manual resume upload (2026-07-19, task #54): "more of Kharta's features"
-// -- a recruiter who got a resume some other way (job portal, email
-// forward, WhatsApp attachment) adds that person straight into this role's
-// pipeline with the resume attached from the start, via
-// upload-candidate-resume. The resume-first counterpart to sourcing
-// (discovery-vendor-first) and the public application page
-// (candidate-self-service-first) -- three distinct entry points into the
-// same pipeline now.
+/* ------------------------------------------------------------------ */
+/* Coordinator placeholder                                             */
+/* ------------------------------------------------------------------ */
+
+const CoordinatorPlaceholder = () => {
+  const [knowledgeBase, setKnowledgeBase] = useState("");
+  const [calendarLink, setCalendarLink] = useState("");
+  const [mode, setMode] = useState<"draft" | "auto">("draft");
+
+  return (
+    <div className="flex flex-col gap-8">
+      <div>
+        <h2 className="text-lg font-semibold">Coordinator setup</h2>
+        <p className="text-sm text-muted-foreground mt-1">
+          Configure how Agent H handles candidate communication for this role.
+        </p>
+      </div>
+
+      <div className="flex flex-col gap-4">
+        <div className="flex flex-col gap-1.5">
+          <label className="text-sm font-medium" htmlFor="kb">
+            Knowledge base
+          </label>
+          <p className="text-xs text-muted-foreground">
+            Role context Agent H uses when responding to candidates — FAQs,
+            process steps, important details.
+          </p>
+          <Textarea
+            id="kb"
+            placeholder="e.g. This is a full-time remote role. Interview process: recruiter screen → technical → founder chat. Salary: $120k–$150k…"
+            rows={6}
+            value={knowledgeBase}
+            onChange={(e) => setKnowledgeBase(e.target.value)}
+          />
+        </div>
+
+        <div className="flex flex-col gap-1.5">
+          <label className="text-sm font-medium" htmlFor="cal">
+            Calendar link
+          </label>
+          <Input
+            id="cal"
+            type="url"
+            placeholder="https://cal.com/your-link"
+            value={calendarLink}
+            onChange={(e) => setCalendarLink(e.target.value)}
+          />
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <span className="text-sm font-medium">Reply mode</span>
+          <div className="flex gap-3">
+            {(["draft", "auto"] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => setMode(m)}
+                className={`flex-1 rounded-lg border px-4 py-3 text-sm text-left transition-colors ${
+                  mode === m
+                    ? "border-[var(--orange-active)] bg-[var(--orange-active-soft,oklch(0.97_0.04_45))] font-medium"
+                    : "border-border hover:border-muted-foreground/40"
+                }`}
+              >
+                <div className="font-medium">
+                  {m === "draft" ? "Draft for approval" : "Send automatically"}
+                </div>
+                <div className="text-xs text-muted-foreground mt-0.5">
+                  {m === "draft"
+                    ? "Agent H drafts a reply; you approve before it sends."
+                    : "Agent H sends replies without approval (coming soon)."}
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <Button className="self-start" disabled>
+          Save (coming soon)
+        </Button>
+      </div>
+    </div>
+  );
+};
+
+/* ------------------------------------------------------------------ */
+/* Resume upload panels (unchanged logic, moved here)                  */
+/* ------------------------------------------------------------------ */
+
 type UploadState = "idle" | "uploading" | "done" | "error";
 
 const ManualResumeUploadPanel = ({ dealId }: { dealId: string }) => {
@@ -534,16 +640,6 @@ const ManualResumeUploadPanel = ({ dealId }: { dealId: string }) => {
   );
 };
 
-// Bulk resume upload (2026-07-19, tasks #56-59): "more of Kharta's
-// features", part 2 -- Harsha's direct follow-up asking whether bulk
-// upload + auto-parsing existed yet (it didn't; ManualResumeUploadPanel
-// above only ever handled one recruiter-typed candidate at a time). This
-// panel hands a WHOLE BATCH of resumes to bulk-upload-candidate-resumes,
-// which auto-parses each file's name/email/phone from its own resume text
-// via Claude (no typing per file -- that would defeat the point of "bulk"),
-// creates/links a candidate per file, and auto-scores each one. Failures
-// are per-file, not batch-fatal, and are shown inline so a recruiter can
-// see exactly which files need to be added manually instead.
 type BulkUploadState = "idle" | "uploading" | "done" | "error";
 
 type BulkUploadFileResult = {
@@ -600,7 +696,7 @@ const BulkResumeUploadPanel = ({ dealId }: { dealId: string }) => {
       <form onSubmit={handleSubmit} className="flex flex-col gap-3">
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="bulk-resumes">
-            Resume files (PDF, Word, or RTF -- up to 25 at once)
+            Resume files (PDF, Word, or RTF — up to 25 at once)
           </Label>
           <Input
             id="bulk-resumes"
@@ -658,7 +754,7 @@ const BulkResumeUploadPanel = ({ dealId }: { dealId: string }) => {
                   </span>
                 )}
                 {r.error && (
-                  <span className="text-destructive">-- {r.error}</span>
+                  <span className="text-destructive">— {r.error}</span>
                 )}
               </li>
             ))}

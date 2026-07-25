@@ -146,6 +146,10 @@ export type Deal = {
   // shown once as a dismissible advisory in JdIntakePage.
   clarifying_questions?: string[] | null;
   clarifying_questions_dismissed?: boolean;
+  // Agent H, schema 18: discovery scroll-position cache on the role brief.
+  role_brief_last_scroll_token?: string | null;
+  role_brief_last_scroll_query?: string | null;
+  role_brief_last_scroll_updated_at?: string | null;
 } & Pick<RaRecord, "id">;
 
 export type DealNote = {

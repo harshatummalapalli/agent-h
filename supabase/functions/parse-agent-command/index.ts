@@ -82,13 +82,14 @@ const PARSE_COMMAND_TOOL = {
           "continue_sourcing",
           "relax_criterion",
           "request_resume",
+          "send_first_outreach",
           "reject_candidates",
           "show_candidates",
           "show_roles",
           "unknown",
         ],
         description:
-          "create_role: the recruiter wants to START A NEW ROLE/JOB/REQ -- phrases like 'create a new role', 'I need to hire a...', 'let's open a req for...', 'start sourcing for a new position'. Navigates to the role-intake page; does not need deal_id (there's no existing role yet). continue_sourcing: run another sourcing pass for a role. relax_criterion: turn off one active must-have/exclude criterion for a role. request_resume: ask selected candidate(s) to send a resume. reject_candidates: remove selected candidate(s) from a role's pipeline. show_candidates: the recruiter wants to SEE/browse/list the candidates or resumes sourced for one specific role (navigates there, resolve deal_id from open_deals or current_deal_id). show_roles: the recruiter wants to see/browse/list all roles/jobs, not scoped to one role. unknown: none of the above apply.",
+          "create_role: the recruiter wants to START A NEW ROLE/JOB/REQ -- phrases like 'create a new role', 'I need to hire a...', 'let's open a req for...', 'start sourcing for a new position'. Navigates to the role-intake page; does not need deal_id (there's no existing role yet). continue_sourcing: run another sourcing pass for a role. relax_criterion: turn off one active must-have/exclude criterion for a role. request_resume: ask selected candidate(s) to send a resume. send_first_outreach: send the first outreach message to a candidate (LinkedIn connection note/InMail or email) — phrases like 'reach out to', 'send first outreach', 'contact them', 'message on LinkedIn'. reject_candidates: remove selected candidate(s) from a role's pipeline. show_candidates: the recruiter wants to SEE/browse/list the candidates or resumes sourced for one specific role (navigates there, resolve deal_id from open_deals or current_deal_id). show_roles: the recruiter wants to see/browse/list all roles/jobs, not scoped to one role. unknown: none of the above apply.",
       },
       deal_id: {
         type: ["number", "null"],
@@ -103,12 +104,12 @@ const PARSE_COMMAND_TOOL = {
       candidate_id: {
         type: ["number", "null"],
         description:
-          "For request_resume (and future Tier-3 candidate actions): the id of exactly one candidate this command targets. Resolve from selected_candidates when the recruiter means 'these/selected' and exactly one row is selected; from pipeline_candidates when they name someone (e.g. 'ask Alex for their resume'); null if ambiguous, none selected, or the action doesn't need a candidate.",
+          "For request_resume, send_first_outreach, and other Tier-3 candidate actions: the id of exactly one candidate this command targets. Resolve from selected_candidates when the recruiter means 'these/selected' and exactly one row is selected; from pipeline_candidates when they name someone (e.g. 'ask Alex for their resume', 'reach out to Priya'); null if ambiguous, none selected, or the action doesn't need a candidate.",
       },
       use_selected_candidates: {
         type: "boolean",
         description:
-          "For request_resume/reject_candidates: true if the command refers to 'selected'/'these' candidates in the table rather than naming someone specific. When exactly one candidate is selected, also set candidate_id to that candidate's id.",
+          "For request_resume/send_first_outreach/reject_candidates: true if the command refers to 'selected'/'these' candidates in the table rather than naming someone specific. When exactly one candidate is selected, also set candidate_id to that candidate's id.",
       },
       explanation: {
         type: "string",
@@ -146,7 +147,9 @@ Context:
 
 Classify this into exactly one supported action using submit_parsed_command. Resolve role names (e.g. "the AI Engineer role") against open_deals by meaning, not exact string match. If the recruiter clearly means "the role I'm currently looking at" and current_deal_id is set, use that instead of guessing from open_deals.
 
-For request_resume: set candidate_id when you can identify exactly one person — from selected_candidates when they say "these/selected" and one row is checked, or from pipeline_candidates when they name someone (first name, full name, or close match). Set use_selected_candidates true when they mean the current table selection. Leave candidate_id null only when no single candidate can be resolved.
+For request_resume and send_first_outreach: set candidate_id when you can identify exactly one person — from selected_candidates when they say "these/selected" and one row is checked, or from pipeline_candidates when they name someone (first name, full name, or close match). Set use_selected_candidates true when they mean the current table selection. Leave candidate_id null only when no single candidate can be resolved.
+
+For send_first_outreach: use when the recruiter wants to initiate first contact with a candidate (LinkedIn or email outreach), not when they only want to browse candidates or request a resume.
 `.trim();
 
 const parseCommandHandler = async (req: Request) => {

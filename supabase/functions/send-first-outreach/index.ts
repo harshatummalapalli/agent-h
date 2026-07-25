@@ -16,6 +16,8 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { getUserSaleFromRequest } from "../_shared/getUserSale.ts";
 import {
   checkDailyCap,
+  extractLinkedInSlug,
+  fetchUnipileUserProfile,
   isUnipileConfigured,
   sendUnipileConnectionInvite,
   sendUnipileInMail,
@@ -78,11 +80,6 @@ const handler = async (req: Request) => {
         { error: "message_body is required for LinkedIn outreach" },
         400,
       );
-    if (!linkedinProviderId)
-      return jsonResponse(
-        { error: "linkedin_provider_id is required for LinkedIn outreach" },
-        400,
-      );
     if (channel === "linkedin_connection" && messagebody.length > 300) {
       return jsonResponse(
         { error: "Connection note exceeds 300-character LinkedIn limit" },
@@ -99,6 +96,53 @@ const handler = async (req: Request) => {
             "No LinkedIn account connected — connect via your Profile page first.",
         },
         400,
+      );
+    }
+
+    const candidateRes = await restFetch(
+      `candidates?id=eq.${candidateId}&select=id,linkedin_url`,
+      authHeader,
+    );
+    if (!candidateRes.ok)
+      return jsonResponse({ error: "Failed to load candidate" }, 502);
+    const candidate = (await candidateRes.json())?.[0];
+    if (!candidate) return jsonResponse({ error: "Candidate not found" }, 404);
+
+    const linkedInUrl: string | null = candidate.linkedin_url ?? null;
+    if (!linkedInUrl) {
+      return jsonResponse(
+        { error: "This candidate has no LinkedIn URL on file" },
+        400,
+      );
+    }
+
+    const slug = extractLinkedInSlug(linkedInUrl);
+    if (!slug) {
+      return jsonResponse(
+        { error: "Could not parse LinkedIn profile URL for this candidate" },
+        400,
+      );
+    }
+
+    try {
+      const profile = await fetchUnipileUserProfile(
+        sale.unipile_account_id as string,
+        slug,
+      );
+      linkedinProviderId = profile.provider_id;
+    } catch (err) {
+      console.error(
+        "send-first-outreach: failed to resolve LinkedIn provider_id",
+        err,
+      );
+      return jsonResponse(
+        {
+          error:
+            err instanceof Error
+              ? err.message
+              : "Failed to resolve LinkedIn profile for this candidate",
+        },
+        502,
       );
     }
 

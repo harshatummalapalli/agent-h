@@ -724,6 +724,11 @@ type OutreachPrepared = {
   } | null;
   linkedin_provider_id: string | null;
   cap_remaining: number | null;
+  // Dual-channel (B3): true when prepare-first-outreach also drafted an email
+  // alongside the LinkedIn draft — recruiter can approve both in one shot.
+  dual_channel?: boolean;
+  // Whether recruiter opted in to also send email in a dual-channel outreach
+  send_email_too?: boolean;
 };
 
 // Draft state for the inline "compose an offer" form -- amounts kept as
@@ -2105,6 +2110,61 @@ function OutreachPreviewPanel({
               {prepared.cap_remaining} sends remaining today
             </p>
           )}
+          {/* Dual-channel (B3): show email opt-in when email is also available */}
+          {prepared.dual_channel && prepared.email_preview && (
+            <div className="border-t pt-2 flex flex-col gap-2">
+              <label className="flex items-center gap-2 text-xs cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={Boolean(prepared.send_email_too)}
+                  onChange={(e) =>
+                    onPreparedChange({
+                      ...prepared,
+                      send_email_too: e.target.checked,
+                    })
+                  }
+                />
+                Also send email to {prepared.email_preview.to}
+              </label>
+              {prepared.send_email_too && (
+                <>
+                  <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+                    Subject
+                    <input
+                      className={inputClass}
+                      value={prepared.email_preview.subject}
+                      onChange={(e) =>
+                        onPreparedChange({
+                          ...prepared,
+                          email_preview: {
+                            ...prepared.email_preview!,
+                            subject: e.target.value,
+                          },
+                        })
+                      }
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+                    Email body
+                    <textarea
+                      className={inputClass}
+                      rows={4}
+                      value={prepared.email_preview.html}
+                      onChange={(e) =>
+                        onPreparedChange({
+                          ...prepared,
+                          email_preview: {
+                            ...prepared.email_preview!,
+                            html: e.target.value,
+                          },
+                        })
+                      }
+                    />
+                  </label>
+                </>
+              )}
+            </div>
+          )}
         </>
       ) : prepared.email_preview ? (
         <>
@@ -2224,6 +2284,13 @@ export const SourceCandidatesPage = ({
   const [previewLoading, setPreviewLoading] = useState(false);
   const [fetchLoading, setFetchLoading] = useState(false);
   const [wideningLoading, setWideningLoading] = useState(false);
+  // Bulk outreach selection (B): candidate PDL ids selected for batch outreach
+  const [bulkSelected, setBulkSelected] = useState<Set<string>>(new Set());
+  const [bulkPreparing, setBulkPreparing] = useState(false);
+  const [_bulkQueue, setBulkQueue] = useState<
+    Array<{ candidateKey: string; prepared: OutreachPrepared }>
+  >([]);
+  const [_bulkQueueIdx, setBulkQueueIdx] = useState(0);
   const [restoreLoading, setRestoreLoading] = useState(false);
 
   const [roleBriefTitle, setRoleBriefTitle] = useState<string | null>(null);
@@ -3589,12 +3656,30 @@ export const SourceCandidatesPage = ({
     if (!candidateId || !selectedId || !prepared) return;
     setOutreachSendStates((prev) => ({ ...prev, [candidate.id]: "loading" }));
     try {
+      // Dual-channel (B3): pass email fields when recruiter opted in
+      const isDualChannel =
+        prepared.dual_channel &&
+        prepared.send_email_too &&
+        prepared.email_preview;
       await dataProvider.sendFirstOutreach(candidateId, Number(selectedId), {
         channel: prepared.channel,
         message_body: prepared.message_body ?? undefined,
         linkedin_provider_id: prepared.linkedin_provider_id ?? undefined,
-        subject: prepared.email_preview?.subject,
-        html: prepared.email_preview?.html,
+        subject:
+          prepared.channel === "email"
+            ? prepared.email_preview?.subject
+            : undefined,
+        html:
+          prepared.channel === "email"
+            ? prepared.email_preview?.html
+            : undefined,
+        // dual-channel extras
+        also_send_email: isDualChannel ? true : undefined,
+        email_to: isDualChannel ? prepared.email_preview?.to : undefined,
+        email_subject: isDualChannel
+          ? prepared.email_preview?.subject
+          : undefined,
+        email_html: isDualChannel ? prepared.email_preview?.html : undefined,
       });
       setOutreachSendStates((prev) => ({ ...prev, [candidate.id]: "done" }));
       setOutreachPrepared((prev) => {
@@ -3602,10 +3687,70 @@ export const SourceCandidatesPage = ({
         delete next[candidate.id];
         return next;
       });
-      notify("Outreach sent", { type: "success" });
+      notify(
+        isDualChannel ? "Outreach sent via LinkedIn + email" : "Outreach sent",
+        { type: "success" },
+      );
     } catch (error: any) {
       setOutreachSendStates((prev) => ({ ...prev, [candidate.id]: "idle" }));
       notify(error?.message || "Failed to send outreach", { type: "error" });
+    }
+  };
+
+  // Bulk outreach (B): prepare outreach for all selected candidates one by
+  // one, building a queue the recruiter works through with approval panels.
+  // Saves any unsaved candidates first (same save-then-prepare pattern as
+  // handleOutreachFromSearch).
+  const handleBulkPrepareOutreach = async () => {
+    if (!selectedId || bulkSelected.size === 0) return;
+    setBulkPreparing(true);
+    const selected = candidates.filter((c) => bulkSelected.has(c.id));
+    const queue: Array<{ candidateKey: string; prepared: OutreachPrepared }> =
+      [];
+    for (const candidate of selected) {
+      let cId = candidateDbIds[candidate.id];
+      if (!cId) {
+        try {
+          const outcome = await dataProvider.saveSourcedCandidate(
+            Number(selectedId),
+            candidate,
+          );
+          if (outcome.candidate_id) {
+            cId = outcome.candidate_id;
+            setCandidateDbIds((prev) => ({ ...prev, [candidate.id]: cId! }));
+            setSaveStates((prev) => ({ ...prev, [candidate.id]: "saved" }));
+          }
+        } catch {
+          continue;
+        }
+      }
+      if (!cId) continue;
+      try {
+        const result = await dataProvider.prepareFirstOutreach(
+          cId,
+          Number(selectedId),
+        );
+        queue.push({
+          candidateKey: candidate.id,
+          prepared: result as OutreachPrepared,
+        });
+        setOutreachPrepared((prev) => ({
+          ...prev,
+          [candidate.id]: result as OutreachPrepared,
+        }));
+      } catch {
+        // skip this candidate, continue with others
+      }
+    }
+    setBulkQueue(queue);
+    setBulkQueueIdx(0);
+    setBulkPreparing(false);
+    setBulkSelected(new Set());
+    if (queue.length > 0) {
+      notify(
+        `${queue.length} outreach draft(s) ready — review each before sending`,
+        { type: "info" },
+      );
     }
   };
 
@@ -5272,16 +5417,40 @@ export const SourceCandidatesPage = ({
             </div>
           )}
           {stage === "fetched" && candidates.length > 0 && (
-            <p className="text-xs text-muted-foreground -mt-2">
-              {candidates.some((c) => typeof c._match_score === "number")
-                ? "Sorted by match score (highest first)."
-                : "Candidates shown in discovery order."}{" "}
-              {backgroundSaving && (
-                <span className="text-muted-foreground">
-                  Saving {candidates.length} candidates to your pipeline…
-                </span>
+            <div className="flex items-center justify-between gap-3 -mt-2">
+              <p className="text-xs text-muted-foreground">
+                {candidates.some((c) => typeof c._match_score === "number")
+                  ? "Sorted by match score (highest first)."
+                  : "Candidates shown in discovery order."}{" "}
+                {backgroundSaving && (
+                  <span>Saving {candidates.length} candidates…</span>
+                )}
+              </p>
+              {/* Bulk outreach toolbar (B) */}
+              {bulkSelected.size > 0 && (
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground">
+                    {bulkSelected.size} selected
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setBulkSelected(new Set())}
+                  >
+                    Clear
+                  </Button>
+                  <Button
+                    size="sm"
+                    disabled={bulkPreparing}
+                    onClick={handleBulkPrepareOutreach}
+                  >
+                    {bulkPreparing
+                      ? "Preparing..."
+                      : `Prepare outreach (${bulkSelected.size})`}
+                  </Button>
+                </div>
               )}
-            </p>
+            </div>
           )}
 
           {candidates.slice(0, visibleCount).map((candidate) => {
@@ -5316,13 +5485,33 @@ export const SourceCandidatesPage = ({
                 key={candidate.id}
                 className="border rounded-md p-3 flex flex-col gap-3"
               >
-                <CandidateQuickActionBar
-                  emails={candidate.emails}
-                  linkedInUrl={candidate.linkedin_url}
-                  isLinkedInSource={Boolean(candidate.linkedin_url)}
-                  outreachState={outreachStates[candidate.id] ?? "idle"}
-                  onLinkedInOutreach={() => handleOutreachFromSearch(candidate)}
-                />
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    aria-label={`Select ${candidate.full_name ?? candidate.id} for bulk outreach`}
+                    checked={bulkSelected.has(candidate.id)}
+                    onChange={(e) => {
+                      setBulkSelected((prev) => {
+                        const next = new Set(prev);
+                        if (e.target.checked) next.add(candidate.id);
+                        else next.delete(candidate.id);
+                        return next;
+                      });
+                    }}
+                    className="w-4 h-4 shrink-0"
+                  />
+                  <div className="flex-1">
+                    <CandidateQuickActionBar
+                      emails={candidate.emails}
+                      linkedInUrl={candidate.linkedin_url}
+                      isLinkedInSource={Boolean(candidate.linkedin_url)}
+                      outreachState={outreachStates[candidate.id] ?? "idle"}
+                      onLinkedInOutreach={() =>
+                        handleOutreachFromSearch(candidate)
+                      }
+                    />
+                  </div>
+                </div>
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex gap-3">
                     <div

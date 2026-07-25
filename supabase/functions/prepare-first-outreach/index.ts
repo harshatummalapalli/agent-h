@@ -335,6 +335,21 @@ const handler = async (req: Request) => {
             maxChars,
           );
 
+          // Dual-channel (B3): also draft email when candidate has one —
+          // recruiter can approve sending both LinkedIn + email in parallel.
+          let emailDraft: { subject: string; html: string } | null = null;
+          if (candidateEmail && RESEND_RECEIVING_DOMAIN) {
+            try {
+              emailDraft = await draftEmailFallback(
+                candidateName,
+                dealName,
+                evidenceLines,
+              );
+            } catch {
+              // non-blocking — LinkedIn draft is already ready
+            }
+          }
+
           return jsonResponse({
             channel,
             linkedin_provider_id: profile.provider_id,
@@ -343,7 +358,15 @@ const handler = async (req: Request) => {
             is_open_profile: profile.is_open_profile ?? false,
             cap_remaining: capInfo.cap_remaining,
             drafted_by: draft.drafted_by,
-            email_preview: null,
+            email_preview: emailDraft
+              ? {
+                  to: candidateEmail,
+                  subject: emailDraft.subject,
+                  html: emailDraft.html,
+                }
+              : null,
+            // dual_channel signals the UI to show both LinkedIn + email panels
+            dual_channel: emailDraft !== null,
           });
         } catch (err) {
           // Profile fetch failure → fall through to email path with a note

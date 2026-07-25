@@ -44,6 +44,12 @@ const handler = async (req: Request) => {
   let linkedinProviderId: string | undefined;
   let approvedSubject: string | undefined;
   let approvedHtml: string | undefined;
+  // Dual-channel (B3): if also_send_email=true AND email fields present,
+  // send email in parallel with the LinkedIn send.
+  let alsoSendEmail = false;
+  let emailTo: string | undefined;
+  let emailSubject: string | undefined;
+  let emailHtml: string | undefined;
   try {
     const body = await req.json();
     candidateId = body?.candidate_id;
@@ -53,6 +59,10 @@ const handler = async (req: Request) => {
     linkedinProviderId = body?.linkedin_provider_id;
     approvedSubject = body?.subject;
     approvedHtml = body?.html;
+    alsoSendEmail = Boolean(body?.also_send_email);
+    emailTo = body?.email_to;
+    emailSubject = body?.email_subject;
+    emailHtml = body?.email_html;
   } catch {
     return jsonResponse({ error: "Invalid JSON body" }, 400);
   }
@@ -258,12 +268,34 @@ const handler = async (req: Request) => {
       );
     }
 
+    // Dual-channel (B3): also send email when recruiter approved both
+    let emailSent = false;
+    if (
+      alsoSendEmail &&
+      emailTo &&
+      emailSubject &&
+      emailHtml &&
+      RESEND_RECEIVING_DOMAIN
+    ) {
+      try {
+        await sendResendEmail(emailTo, emailSubject, emailHtml);
+        emailSent = true;
+      } catch (err) {
+        // Non-blocking — LinkedIn was already sent; log and continue
+        console.warn(
+          "send-first-outreach: dual-channel email send failed",
+          err,
+        );
+      }
+    }
+
     return jsonResponse({
       sent: true,
       channel,
       linkedin_provider_id: linkedinProviderId,
       response_status: "sent",
       cap_remaining: Math.max(0, capInfo.cap_remaining - 1),
+      email_sent: emailSent,
     });
   }
 

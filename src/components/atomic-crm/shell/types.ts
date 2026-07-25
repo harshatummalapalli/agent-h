@@ -1,7 +1,7 @@
 import type { SlashAction } from "../inbox/CommandBar";
 
 export type ShellContext = {
-  mode: "inbox" | "role";
+  mode: "inbox" | "role" | "intake";
   title: string;
   blockers: string[];
   lastAction?: string;

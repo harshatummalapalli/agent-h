@@ -80,3 +80,57 @@ export function useRoleShellContext({
     };
   }, [deal, dealStages, isPending, pipelineCount]);
 }
+
+type JdIntakeShellContextInput = {
+  parsedTitle: string | undefined;
+  hasJdText: boolean;
+  isParsing: boolean;
+  isSaving: boolean;
+};
+
+export function useJdIntakeShellContext({
+  parsedTitle,
+  hasJdText,
+  isParsing,
+  isSaving,
+}: JdIntakeShellContextInput): ShellContext {
+  return useMemo(() => {
+    if (isParsing) {
+      return {
+        mode: "intake",
+        title: parsedTitle ?? "New role",
+        blockers: ["Parsing job description…"],
+      };
+    }
+
+    if (isSaving) {
+      return {
+        mode: "intake",
+        title: parsedTitle ?? "New role",
+        blockers: ["Saving role brief…"],
+      };
+    }
+
+    if (parsedTitle) {
+      return {
+        mode: "intake",
+        title: parsedTitle,
+        blockers: ["Review extracted fields before saving"],
+      };
+    }
+
+    if (hasJdText) {
+      return {
+        mode: "intake",
+        title: "New role",
+        blockers: ["Ready to parse — click Parse with AI or ask below"],
+      };
+    }
+
+    return {
+      mode: "intake",
+      title: "New role",
+      blockers: ["Paste a job description to start"],
+    };
+  }, [hasJdText, isParsing, isSaving, parsedTitle]);
+}

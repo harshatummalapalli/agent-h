@@ -1259,6 +1259,11 @@ function CandidateActionsPanel({
   resumeInfo,
   onRequestResume,
   onCheckForResume,
+  resumeEmailPreview,
+  onResumePreviewChange,
+  onConfirmSendResume,
+  onCancelResumePreview,
+  resumeSendState,
   offerState,
   offerInfo,
   offerFormIsOpen,
@@ -1305,6 +1310,11 @@ function CandidateActionsPanel({
   resumeInfo: ResumeInfo | undefined;
   onRequestResume: () => void;
   onCheckForResume: () => void;
+  resumeEmailPreview?: EmailPreview;
+  onResumePreviewChange?: (next: EmailPreview) => void;
+  onConfirmSendResume?: () => void;
+  onCancelResumePreview?: () => void;
+  resumeSendState?: EnrichState;
   offerState: EnrichState;
   offerInfo: OfferInfo | undefined;
   offerFormIsOpen: boolean;
@@ -1406,7 +1416,7 @@ function CandidateActionsPanel({
           onClick={onRequestResume}
         >
           {resumeState === "loading"
-            ? "Sending..."
+            ? "Preparing..."
             : resumeInfo
               ? "Re-request resume"
               : "Request resume"}
@@ -1594,6 +1604,20 @@ function CandidateActionsPanel({
         )}
 
       {resumeInfo && <ResumePanel info={resumeInfo} />}
+
+      {resumeEmailPreview &&
+        onResumePreviewChange &&
+        onConfirmSendResume &&
+        onCancelResumePreview && (
+          <EmailPreviewApprovalPanel
+            preview={resumeEmailPreview}
+            onPreviewChange={onResumePreviewChange}
+            onConfirm={onConfirmSendResume}
+            onCancel={onCancelResumePreview}
+            confirming={resumeSendState === "loading"}
+            confirmLabel="Send resume request"
+          />
+        )}
 
       {offerFormIsOpen && (
         <OfferForm
@@ -2041,6 +2065,12 @@ export const SourceCandidatesPage = ({
   const [resumeInfos, setResumeInfos] = useState<Record<string, ResumeInfo>>(
     {},
   );
+  const [resumeEmailPreviews, setResumeEmailPreviews] = useState<
+    Record<string, EmailPreview>
+  >({});
+  const [resumeSendStates, setResumeSendStates] = useState<
+    Record<string, EnrichState>
+  >({});
 
   // Agent H Stage 6: per-candidate offer state. offerFormOpen/offerDrafts
   // back the inline compose form; offerStates/offerInfos mirror the
@@ -2959,26 +2989,61 @@ export const SourceCandidatesPage = ({
     });
   };
 
-  // Agent H, task 76: sends the one-off "please send your resume" email.
-  const handleRequestResume = async (candidate: PdlCandidate) => {
+  // Agent H, task 76: prepare resume-request email preview, then send only
+  // after explicit recruiter approval in EmailPreviewApprovalPanel.
+  const handlePrepareResumeRequest = async (candidate: PdlCandidate) => {
     const candidateId = candidateDbIds[candidate.id];
     if (!candidateId || !selectedId) return;
     setResumeStates((prev) => ({ ...prev, [candidate.id]: "loading" }));
+    setResumeEmailPreviews((prev) => {
+      const next = { ...prev };
+      delete next[candidate.id];
+      return next;
+    });
+    try {
+      const result = await dataProvider.prepareRequestResume(
+        candidateId,
+        Number(selectedId),
+      );
+      setResumeEmailPreviews((prev) => ({
+        ...prev,
+        [candidate.id]: result.email_preview as EmailPreview,
+      }));
+      setResumeStates((prev) => ({ ...prev, [candidate.id]: "done" }));
+      notify("Review the resume request email below before sending", {
+        type: "info",
+      });
+    } catch (error: any) {
+      setResumeStates((prev) => ({ ...prev, [candidate.id]: "idle" }));
+      notify(error?.message || "Failed to prepare resume request", {
+        type: "error",
+      });
+    }
+  };
+
+  const handleConfirmSendResumeRequest = async (candidate: PdlCandidate) => {
+    const candidateId = candidateDbIds[candidate.id];
+    const preview = resumeEmailPreviews[candidate.id];
+    if (!candidateId || !selectedId || !preview) return;
+    setResumeSendStates((prev) => ({ ...prev, [candidate.id]: "loading" }));
     try {
       const result = await dataProvider.requestCandidateResume(
         candidateId,
         Number(selectedId),
+        { subject: preview.subject, html: preview.html },
       );
-      setResumeStates((prev) => ({ ...prev, [candidate.id]: "done" }));
+      setResumeSendStates((prev) => ({ ...prev, [candidate.id]: "done" }));
+      setResumeEmailPreviews((prev) => {
+        const next = { ...prev };
+        delete next[candidate.id];
+        return next;
+      });
       notify(
         result.resume_status === "received"
           ? "Already have a resume on file -- sent another request anyway"
           : "Resume request sent",
         { type: "success" },
       );
-      // Reflect the send immediately without waiting for a "Check for
-      // resume" click -- the reply itself may take a while, but the
-      // "requested" state should show right away.
       const current = resumeInfos[candidate.id];
       setResumeInfos((prev) => ({
         ...prev,
@@ -2990,10 +3055,23 @@ export const SourceCandidatesPage = ({
         },
       }));
     } catch (error: any) {
-      setResumeStates((prev) => ({ ...prev, [candidate.id]: "idle" }));
-      notify(error?.message || "Failed to request resume", { type: "error" });
+      setResumeSendStates((prev) => ({ ...prev, [candidate.id]: "idle" }));
+      notify(error?.message || "Failed to send resume request", {
+        type: "error",
+      });
     }
   };
+
+  const handleCancelResumePreview = (candidateId: string) => {
+    setResumeEmailPreviews((prev) => {
+      const next = { ...prev };
+      delete next[candidateId];
+      return next;
+    });
+  };
+
+  // Agent H, task 76: legacy name kept for prop wiring — now prepares preview.
+  const handleRequestResume = handlePrepareResumeRequest;
 
   // Agent H, task 76: re-reads resume_status from public.candidates -- a
   // reply only exists once the candidate actually checks their email.
@@ -4209,6 +4287,22 @@ export const SourceCandidatesPage = ({
                         resumeInfo={resumeInfo}
                         onRequestResume={() => handleRequestResume(candidate)}
                         onCheckForResume={() => handleCheckForResume(candidate)}
+                        resumeEmailPreview={resumeEmailPreviews[candidate.id]}
+                        onResumePreviewChange={(next) =>
+                          setResumeEmailPreviews((prev) => ({
+                            ...prev,
+                            [candidate.id]: next,
+                          }))
+                        }
+                        onConfirmSendResume={() =>
+                          handleConfirmSendResumeRequest(candidate)
+                        }
+                        onCancelResumePreview={() =>
+                          handleCancelResumePreview(String(candidate.id))
+                        }
+                        resumeSendState={
+                          resumeSendStates[candidate.id] ?? "idle"
+                        }
                         offerState={offerState}
                         offerInfo={offerInfo}
                         offerFormIsOpen={offerFormIsOpen}
@@ -4833,6 +4927,20 @@ export const SourceCandidatesPage = ({
                     resumeInfo={resumeInfo}
                     onRequestResume={() => handleRequestResume(candidate)}
                     onCheckForResume={() => handleCheckForResume(candidate)}
+                    resumeEmailPreview={resumeEmailPreviews[candidate.id]}
+                    onResumePreviewChange={(next) =>
+                      setResumeEmailPreviews((prev) => ({
+                        ...prev,
+                        [candidate.id]: next,
+                      }))
+                    }
+                    onConfirmSendResume={() =>
+                      handleConfirmSendResumeRequest(candidate)
+                    }
+                    onCancelResumePreview={() =>
+                      handleCancelResumePreview(String(candidate.id))
+                    }
+                    resumeSendState={resumeSendStates[candidate.id] ?? "idle"}
                     offerState={offerState}
                     offerInfo={offerInfo}
                     offerFormIsOpen={offerFormIsOpen}

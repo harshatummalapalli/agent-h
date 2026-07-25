@@ -28,7 +28,7 @@ import {
   useRecordContext,
 } from "ra-core";
 import { useNavigate, useParams } from "react-router";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -53,6 +53,7 @@ import {
   dispatchRoleAgentCommand,
   refineTier3Proposal,
   stopTier3Proposal,
+  type ParseCandidateRef,
   type RoleAgentOrchestratorDeps,
 } from "../shell/roleAgentOrchestrator";
 import type { ConversationTurnMetadata } from "../shell/agentActionTiers";
@@ -93,6 +94,24 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
     },
   );
 
+  const { data: pipelineRows } = useQuery({
+    queryKey: ["deal_candidates_for_deal", dealId],
+    queryFn: () => dataProvider.getCandidatesForDeal(dealId),
+    enabled: !!dealId,
+  });
+
+  const pipelineCandidates = useMemo<ParseCandidateRef[]>(
+    () =>
+      (pipelineRows ?? []).map(({ candidate }) => {
+        const name =
+          [candidate.first_name, candidate.last_name]
+            .filter(Boolean)
+            .join(" ") || `Candidate #${candidate.id}`;
+        return { id: Number(candidate.id), name };
+      }),
+    [pipelineRows],
+  );
+
   const shellContext = useRoleShellContext({
     deal,
     dealStages,
@@ -108,13 +127,23 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
       dataProvider,
       queryClient,
       navigate,
+      pipelineCandidates,
+      selectedCandidates: [],
       invalidateTranscript: () => {
         queryClient.invalidateQueries({
           queryKey: ["role_conversation_turns"],
         });
       },
     }),
-    [deal, dealId, dataProvider, navigate, openDeals, queryClient],
+    [
+      deal,
+      dealId,
+      dataProvider,
+      navigate,
+      openDeals,
+      pipelineCandidates,
+      queryClient,
+    ],
   );
 
   const runFreeTextCommand = async (commandText: string) => {

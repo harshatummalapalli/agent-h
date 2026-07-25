@@ -569,28 +569,39 @@ type CriteriaImpact = {
   }>;
 };
 
-// Agent H Stage 5: Scheduling -- result shape returned by
-// dataProvider.createBookingLink (create-booking-link edge function).
-// Booking itself happens on a self-hosted Cal.com instance; this app never
-// talks calendar OAuth directly (see that function's header comment).
+// Agent H Stage 5: Scheduling -- result shape returned by prepare/send
+// booking-link edge functions. Resend only fires from send-booking-link
+// after explicit recruiter approval.
+type EmailPreview = {
+  to: string;
+  reply_to?: string;
+  subject: string;
+  html: string;
+};
+
 type InterviewResult = {
   already_booked: boolean;
+  prepared?: boolean;
   interview_id?: number | null;
-  status:
+  status?:
     | "link_sent"
     | "booked"
     | "rescheduled"
     | "cancelled"
     | "completed"
     | "no_show";
-  booking_link_url: string;
+  booking_link_url?: string;
   scheduled_at?: string | null;
   scheduled_end_at?: string | null;
   candidate_email?: string | null;
+  email_preview?: EmailPreview | null;
   email_sent?: boolean;
 };
 
-const INTERVIEW_STATUS_LABELS: Record<InterviewResult["status"], string> = {
+const INTERVIEW_STATUS_LABELS: Record<
+  NonNullable<InterviewResult["status"]>,
+  string
+> = {
   link_sent: "Booking link sent",
   booked: "Interview booked",
   rescheduled: "Interview rescheduled",
@@ -599,7 +610,10 @@ const INTERVIEW_STATUS_LABELS: Record<InterviewResult["status"], string> = {
   no_show: "Candidate no-showed",
 };
 
-const INTERVIEW_STATUS_COLORS: Record<InterviewResult["status"], string> = {
+const INTERVIEW_STATUS_COLORS: Record<
+  NonNullable<InterviewResult["status"]>,
+  string
+> = {
   link_sent: "bg-blue-100 text-blue-800 border-blue-300",
   booked: "bg-green-100 text-green-800 border-green-300",
   rescheduled: "bg-amber-100 text-amber-800 border-amber-300",
@@ -1235,6 +1249,12 @@ function CandidateActionsPanel({
   interviewState,
   interviewResult,
   onCreateBookingLink,
+  bookingAwaitingConfirm,
+  bookingEmailPreview,
+  onBookingPreviewChange,
+  onConfirmSendBookingLink,
+  onCancelBookingPreview,
+  bookingSendState,
   resumeState,
   resumeInfo,
   onRequestResume,
@@ -1246,6 +1266,11 @@ function CandidateActionsPanel({
   onToggleOfferForm,
   onOfferDraftChange,
   onSendOffer,
+  offerEmailPreview,
+  onOfferPreviewChange,
+  onConfirmSendOffer,
+  onCancelOfferPreview,
+  offerSendState,
   onCheckOffer,
   onMarkOfferStatus,
 }: {
@@ -1270,6 +1295,12 @@ function CandidateActionsPanel({
   interviewState: EnrichState;
   interviewResult: InterviewResult | undefined;
   onCreateBookingLink: () => void;
+  bookingAwaitingConfirm?: boolean;
+  bookingEmailPreview?: EmailPreview | null;
+  onBookingPreviewChange?: (next: EmailPreview) => void;
+  onConfirmSendBookingLink?: () => void;
+  onCancelBookingPreview?: () => void;
+  bookingSendState?: EnrichState;
   resumeState: EnrichState;
   resumeInfo: ResumeInfo | undefined;
   onRequestResume: () => void;
@@ -1281,6 +1312,11 @@ function CandidateActionsPanel({
   onToggleOfferForm: () => void;
   onOfferDraftChange: (field: keyof OfferDraft, value: string) => void;
   onSendOffer: () => void;
+  offerEmailPreview?: EmailPreview;
+  onOfferPreviewChange?: (next: EmailPreview) => void;
+  onConfirmSendOffer?: () => void;
+  onCancelOfferPreview?: () => void;
+  offerSendState?: EnrichState;
   onCheckOffer: () => void;
   onMarkOfferStatus: (status: "accepted" | "declined" | "negotiating") => void;
 }) {
@@ -1358,8 +1394,8 @@ function CandidateActionsPanel({
           onClick={onCreateBookingLink}
         >
           {interviewState === "loading"
-            ? "Generating link..."
-            : interviewResult
+            ? "Preparing link..."
+            : interviewResult?.status
               ? "Refresh booking status"
               : "Schedule interview"}
         </Button>
@@ -1511,6 +1547,52 @@ function CandidateActionsPanel({
 
       {interviewResult && <InterviewPanel result={interviewResult} />}
 
+      {bookingAwaitingConfirm &&
+        bookingEmailPreview &&
+        onBookingPreviewChange &&
+        onConfirmSendBookingLink &&
+        onCancelBookingPreview && (
+          <EmailPreviewApprovalPanel
+            preview={bookingEmailPreview}
+            onPreviewChange={onBookingPreviewChange}
+            onConfirm={onConfirmSendBookingLink}
+            onCancel={onCancelBookingPreview}
+            confirming={bookingSendState === "loading"}
+            confirmLabel="Send booking link"
+          />
+        )}
+
+      {bookingAwaitingConfirm &&
+        bookingEmailPreview === null &&
+        onConfirmSendBookingLink &&
+        onCancelBookingPreview && (
+          <div className="border rounded-md p-3 bg-amber-50/80 border-amber-200 flex flex-col gap-2 text-sm">
+            <p className="text-xs text-amber-900">
+              No email on file — confirm to save this booking link for manual
+              sharing.
+            </p>
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                disabled={bookingSendState === "loading"}
+                onClick={onConfirmSendBookingLink}
+              >
+                {bookingSendState === "loading"
+                  ? "Saving..."
+                  : "Save booking link"}
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={bookingSendState === "loading"}
+                onClick={onCancelBookingPreview}
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
+        )}
+
       {resumeInfo && <ResumePanel info={resumeInfo} />}
 
       {offerFormIsOpen && (
@@ -1522,6 +1604,19 @@ function CandidateActionsPanel({
           submitting={offerState === "loading"}
         />
       )}
+      {offerEmailPreview &&
+        onOfferPreviewChange &&
+        onConfirmSendOffer &&
+        onCancelOfferPreview && (
+          <EmailPreviewApprovalPanel
+            preview={offerEmailPreview}
+            onPreviewChange={onOfferPreviewChange}
+            onConfirm={onConfirmSendOffer}
+            onCancel={onCancelOfferPreview}
+            confirming={offerSendState === "loading"}
+            confirmLabel="Send offer"
+          />
+        )}
       {!offerFormIsOpen && offerInfo && <OfferPanel info={offerInfo} />}
     </div>
   );
@@ -1535,20 +1630,27 @@ function CandidateActionsPanel({
 function InterviewPanel({ result }: { result: InterviewResult }) {
   return (
     <div className="border rounded-md p-3 bg-muted/30 flex flex-col gap-2 text-sm">
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <span
-          className={`text-xs font-medium border rounded px-2 py-0.5 ${INTERVIEW_STATUS_COLORS[result.status]}`}
-        >
-          {INTERVIEW_STATUS_LABELS[result.status]}
-        </span>
-        {result.email_sent === false && !result.already_booked && (
-          <span className="text-xs text-amber-700">
-            {result.candidate_email
-              ? "Link saved, but the email didn't send -- share it manually."
-              : "No email on file -- share this link with the candidate manually."}
+      {result.status ? (
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <span
+            className={`text-xs font-medium border rounded px-2 py-0.5 ${INTERVIEW_STATUS_COLORS[result.status]}`}
+          >
+            {INTERVIEW_STATUS_LABELS[result.status]}
           </span>
-        )}
-      </div>
+          {result.email_sent === false && !result.already_booked && (
+            <span className="text-xs text-amber-700">
+              {result.candidate_email
+                ? "Link saved, but the email didn't send -- share it manually."
+                : "No email on file -- share this link with the candidate manually."}
+            </span>
+          )}
+        </div>
+      ) : result.prepared ? (
+        <p className="text-xs text-muted-foreground">
+          Booking link prepared — review the email below and confirm before
+          sending.
+        </p>
+      ) : null}
 
       {result.scheduled_at && (
         <p className="text-xs">
@@ -1556,14 +1658,16 @@ function InterviewPanel({ result }: { result: InterviewResult }) {
         </p>
       )}
 
-      <a
-        href={result.booking_link_url}
-        target="_blank"
-        rel="noreferrer"
-        className="text-xs text-blue-700 underline break-all"
-      >
-        {result.booking_link_url}
-      </a>
+      {result.booking_link_url && (
+        <a
+          href={result.booking_link_url}
+          target="_blank"
+          rel="noreferrer"
+          className="text-xs text-blue-700 underline break-all"
+        >
+          {result.booking_link_url}
+        </a>
+      )}
     </div>
   );
 }
@@ -1724,12 +1828,72 @@ function OfferForm({
           }
           onClick={onSubmit}
         >
-          {submitting ? "Sending..." : "Send offer"}
+          {submitting ? "Preparing..." : "Prepare offer email"}
         </Button>
         <Button
           size="sm"
           variant="outline"
           disabled={submitting}
+          onClick={onCancel}
+        >
+          Cancel
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function EmailPreviewApprovalPanel({
+  preview,
+  onPreviewChange,
+  onConfirm,
+  onCancel,
+  confirming,
+  confirmLabel,
+}: {
+  preview: EmailPreview;
+  onPreviewChange: (next: EmailPreview) => void;
+  onConfirm: () => void;
+  onCancel: () => void;
+  confirming: boolean;
+  confirmLabel: string;
+}) {
+  const inputClass =
+    "border border-input bg-background text-foreground rounded px-2 py-1 text-xs w-full";
+  return (
+    <div className="border rounded-md p-3 bg-amber-50/80 border-amber-200 flex flex-col gap-2 text-sm">
+      <p className="text-xs font-medium text-amber-900">
+        Review before sending to {preview.to}
+      </p>
+      <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+        Subject
+        <input
+          className={inputClass}
+          value={preview.subject}
+          onChange={(e) =>
+            onPreviewChange({ ...preview, subject: e.target.value })
+          }
+        />
+      </label>
+      <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+        Email body (HTML)
+        <textarea
+          className={inputClass}
+          rows={6}
+          value={preview.html}
+          onChange={(e) =>
+            onPreviewChange({ ...preview, html: e.target.value })
+          }
+        />
+      </label>
+      <div className="flex gap-2">
+        <Button size="sm" disabled={confirming} onClick={onConfirm}>
+          {confirming ? "Sending..." : confirmLabel}
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={confirming}
           onClick={onCancel}
         >
           Cancel
@@ -1891,6 +2055,21 @@ export const SourceCandidatesPage = ({
   const [offerDrafts, setOfferDrafts] = useState<Record<string, OfferDraft>>(
     {},
   );
+  const [offerEmailPreviews, setOfferEmailPreviews] = useState<
+    Record<string, EmailPreview>
+  >({});
+  const [offerSendStates, setOfferSendStates] = useState<
+    Record<string, EnrichState>
+  >({});
+  const [bookingPrepared, setBookingPrepared] = useState<
+    Record<
+      string,
+      { booking_link_url: string; email_preview: EmailPreview | null }
+    >
+  >({});
+  const [bookingSendStates, setBookingSendStates] = useState<
+    Record<string, EnrichState>
+  >({});
 
   // Calibration loop state.
   const [calibrationLoading, setCalibrationLoading] = useState(false);
@@ -2676,34 +2855,108 @@ export const SourceCandidatesPage = ({
     }
   };
 
-  // Agent H Stage 5: Scheduling -- generates (or fetches, if the candidate
-  // already has a live booking) a self-service Cal.com booking link for
-  // this candidate against the selected role brief.
-  const handleCreateBookingLink = async (candidate: PdlCandidate) => {
+  // Agent H Stage 5: prepare booking link + optional email preview; send
+  // only after recruiter confirms in EmailPreviewApprovalPanel.
+  const handlePrepareBookingLink = async (candidate: PdlCandidate) => {
     const candidateId = candidateDbIds[candidate.id];
     if (!candidateId || !selectedId) return;
     setInterviewStates((prev) => ({ ...prev, [candidate.id]: "loading" }));
+    setBookingPrepared((prev) => {
+      const next = { ...prev };
+      delete next[candidate.id];
+      return next;
+    });
     try {
-      const result = (await dataProvider.createBookingLink(
+      const result = (await dataProvider.prepareBookingLink(
         candidateId,
         Number(selectedId),
       )) as InterviewResult;
-      setInterviewResults((prev) => ({ ...prev, [candidate.id]: result }));
+
+      if (result.already_booked) {
+        setInterviewResults((prev) => ({ ...prev, [candidate.id]: result }));
+        notify(INTERVIEW_STATUS_LABELS[result.status!], { type: "info" });
+      } else if (result.prepared && result.booking_link_url) {
+        setInterviewResults((prev) => ({
+          ...prev,
+          [candidate.id]: {
+            already_booked: false,
+            prepared: true,
+            booking_link_url: result.booking_link_url,
+            candidate_email: result.candidate_email,
+            email_sent: false,
+          },
+        }));
+        setBookingPrepared((prev) => ({
+          ...prev,
+          [candidate.id]: {
+            booking_link_url: result.booking_link_url!,
+            email_preview: result.email_preview ?? null,
+          },
+        }));
+        notify(
+          result.email_preview
+            ? "Review the booking email below before sending"
+            : "Review the booking link below before saving",
+          { type: "info" },
+        );
+      }
       setInterviewStates((prev) => ({ ...prev, [candidate.id]: "done" }));
-      notify(
-        result.already_booked
-          ? INTERVIEW_STATUS_LABELS[result.status]
-          : result.email_sent
-            ? "Booking link created and emailed to the candidate"
-            : "Booking link created -- share it with the candidate manually",
-        { type: "success" },
-      );
     } catch (error: any) {
       setInterviewStates((prev) => ({ ...prev, [candidate.id]: "idle" }));
-      notify(error?.message || "Failed to create booking link", {
+      notify(error?.message || "Failed to prepare booking link", {
         type: "error",
       });
     }
+  };
+
+  const handleConfirmSendBookingLink = async (candidate: PdlCandidate) => {
+    const candidateId = candidateDbIds[candidate.id];
+    const prepared = bookingPrepared[candidate.id];
+    if (!candidateId || !selectedId || !prepared) return;
+    setBookingSendStates((prev) => ({ ...prev, [candidate.id]: "loading" }));
+    try {
+      const preview = prepared.email_preview;
+      const result = (await dataProvider.sendBookingLink(
+        candidateId,
+        Number(selectedId),
+        {
+          booking_link_url: prepared.booking_link_url,
+          subject: preview?.subject,
+          html: preview?.html,
+        },
+      )) as InterviewResult;
+      setInterviewResults((prev) => ({ ...prev, [candidate.id]: result }));
+      setBookingPrepared((prev) => {
+        const next = { ...prev };
+        delete next[candidate.id];
+        return next;
+      });
+      notify(
+        result.email_sent
+          ? "Booking link saved and emailed to the candidate"
+          : "Booking link saved — share it with the candidate manually",
+        { type: "success" },
+      );
+      setBookingSendStates((prev) => ({ ...prev, [candidate.id]: "done" }));
+    } catch (error: any) {
+      setBookingSendStates((prev) => ({ ...prev, [candidate.id]: "idle" }));
+      notify(error?.message || "Failed to send booking link", {
+        type: "error",
+      });
+    }
+  };
+
+  const handleCancelBookingPrepared = (candidateId: string) => {
+    setBookingPrepared((prev) => {
+      const next = { ...prev };
+      delete next[candidateId];
+      return next;
+    });
+    setInterviewResults((prev) => {
+      const next = { ...prev };
+      delete next[candidateId];
+      return next;
+    });
   };
 
   // Agent H, task 76: sends the one-off "please send your resume" email.
@@ -2792,15 +3045,20 @@ export const SourceCandidatesPage = ({
     }));
   };
 
-  // Agent H Stage 6: composes + sends the offer email in one step (no
-  // separate "save draft" in v1 -- see send-offer/index.ts header comment).
-  const handleSendOffer = async (candidate: PdlCandidate) => {
+  // Agent H Stage 6: prepare offer email preview, then send only after
+  // explicit recruiter approval in EmailPreviewApprovalPanel.
+  const handlePrepareOffer = async (candidate: PdlCandidate) => {
     const candidateId = candidateDbIds[candidate.id];
     const draft = offerDrafts[candidate.id];
     if (!candidateId || !selectedId || !draft) return;
     setOfferStates((prev) => ({ ...prev, [candidate.id]: "loading" }));
+    setOfferEmailPreviews((prev) => {
+      const next = { ...prev };
+      delete next[candidate.id];
+      return next;
+    });
     try {
-      const result = await dataProvider.sendOffer(
+      const result = await dataProvider.prepareOffer(
         candidateId,
         Number(selectedId),
         {
@@ -2819,13 +3077,53 @@ export const SourceCandidatesPage = ({
         ...prev,
         [candidate.id]: result.offer as OfferInfo,
       }));
+      setOfferEmailPreviews((prev) => ({
+        ...prev,
+        [candidate.id]: result.email_preview as EmailPreview,
+      }));
+      setOfferStates((prev) => ({ ...prev, [candidate.id]: "done" }));
+      notify("Review the offer email below before sending", { type: "info" });
+    } catch (error: any) {
+      setOfferStates((prev) => ({ ...prev, [candidate.id]: "idle" }));
+      notify(error?.message || "Failed to prepare offer", { type: "error" });
+    }
+  };
+
+  const handleConfirmSendOffer = async (candidate: PdlCandidate) => {
+    const candidateId = candidateDbIds[candidate.id];
+    const preview = offerEmailPreviews[candidate.id];
+    if (!candidateId || !selectedId || !preview) return;
+    setOfferSendStates((prev) => ({ ...prev, [candidate.id]: "loading" }));
+    try {
+      const result = await dataProvider.sendOffer(
+        candidateId,
+        Number(selectedId),
+        { subject: preview.subject, html: preview.html },
+      );
+      setOfferInfos((prev) => ({
+        ...prev,
+        [candidate.id]: result.offer as OfferInfo,
+      }));
+      setOfferEmailPreviews((prev) => {
+        const next = { ...prev };
+        delete next[candidate.id];
+        return next;
+      });
       setOfferStates((prev) => ({ ...prev, [candidate.id]: "done" }));
       setOfferFormOpen((prev) => ({ ...prev, [candidate.id]: false }));
       notify("Offer sent", { type: "success" });
     } catch (error: any) {
-      setOfferStates((prev) => ({ ...prev, [candidate.id]: "idle" }));
+      setOfferSendStates((prev) => ({ ...prev, [candidate.id]: "idle" }));
       notify(error?.message || "Failed to send offer", { type: "error" });
     }
+  };
+
+  const handleCancelOfferPreview = (candidateId: string) => {
+    setOfferEmailPreviews((prev) => {
+      const next = { ...prev };
+      delete next[candidateId];
+      return next;
+    });
   };
 
   // Re-reads offers straight from the table -- a reply only exists once the
@@ -3877,7 +4175,35 @@ export const SourceCandidatesPage = ({
                         interviewState={interviewState}
                         interviewResult={interviewResult}
                         onCreateBookingLink={() =>
-                          handleCreateBookingLink(candidate)
+                          handlePrepareBookingLink(candidate)
+                        }
+                        bookingAwaitingConfirm={!!bookingPrepared[candidate.id]}
+                        bookingEmailPreview={
+                          bookingPrepared[candidate.id]
+                            ? bookingPrepared[candidate.id]!.email_preview
+                            : undefined
+                        }
+                        onBookingPreviewChange={(next) =>
+                          setBookingPrepared((prev) => {
+                            const current = prev[candidate.id];
+                            if (!current) return prev;
+                            return {
+                              ...prev,
+                              [candidate.id]: {
+                                ...current,
+                                email_preview: next,
+                              },
+                            };
+                          })
+                        }
+                        onConfirmSendBookingLink={() =>
+                          handleConfirmSendBookingLink(candidate)
+                        }
+                        onCancelBookingPreview={() =>
+                          handleCancelBookingPrepared(String(candidate.id))
+                        }
+                        bookingSendState={
+                          bookingSendStates[candidate.id] ?? "idle"
                         }
                         resumeState={resumeState}
                         resumeInfo={resumeInfo}
@@ -3897,7 +4223,21 @@ export const SourceCandidatesPage = ({
                             value,
                           )
                         }
-                        onSendOffer={() => handleSendOffer(candidate)}
+                        onSendOffer={() => handlePrepareOffer(candidate)}
+                        offerEmailPreview={offerEmailPreviews[candidate.id]}
+                        onOfferPreviewChange={(next) =>
+                          setOfferEmailPreviews((prev) => ({
+                            ...prev,
+                            [candidate.id]: next,
+                          }))
+                        }
+                        onConfirmSendOffer={() =>
+                          handleConfirmSendOffer(candidate)
+                        }
+                        onCancelOfferPreview={() =>
+                          handleCancelOfferPreview(String(candidate.id))
+                        }
+                        offerSendState={offerSendStates[candidate.id] ?? "idle"}
                         onCheckOffer={() => handleCheckOffer(candidate)}
                         onMarkOfferStatus={(status) =>
                           handleMarkOfferStatus(candidate, status)
@@ -4464,8 +4804,31 @@ export const SourceCandidatesPage = ({
                     interviewState={interviewState}
                     interviewResult={interviewResult}
                     onCreateBookingLink={() =>
-                      handleCreateBookingLink(candidate)
+                      handlePrepareBookingLink(candidate)
                     }
+                    bookingAwaitingConfirm={!!bookingPrepared[candidate.id]}
+                    bookingEmailPreview={
+                      bookingPrepared[candidate.id]
+                        ? bookingPrepared[candidate.id]!.email_preview
+                        : undefined
+                    }
+                    onBookingPreviewChange={(next) =>
+                      setBookingPrepared((prev) => {
+                        const current = prev[candidate.id];
+                        if (!current) return prev;
+                        return {
+                          ...prev,
+                          [candidate.id]: { ...current, email_preview: next },
+                        };
+                      })
+                    }
+                    onConfirmSendBookingLink={() =>
+                      handleConfirmSendBookingLink(candidate)
+                    }
+                    onCancelBookingPreview={() =>
+                      handleCancelBookingPrepared(String(candidate.id))
+                    }
+                    bookingSendState={bookingSendStates[candidate.id] ?? "idle"}
                     resumeState={resumeState}
                     resumeInfo={resumeInfo}
                     onRequestResume={() => handleRequestResume(candidate)}
@@ -4478,7 +4841,19 @@ export const SourceCandidatesPage = ({
                     onOfferDraftChange={(field, value) =>
                       handleOfferDraftChange(String(candidate.id), field, value)
                     }
-                    onSendOffer={() => handleSendOffer(candidate)}
+                    onSendOffer={() => handlePrepareOffer(candidate)}
+                    offerEmailPreview={offerEmailPreviews[candidate.id]}
+                    onOfferPreviewChange={(next) =>
+                      setOfferEmailPreviews((prev) => ({
+                        ...prev,
+                        [candidate.id]: next,
+                      }))
+                    }
+                    onConfirmSendOffer={() => handleConfirmSendOffer(candidate)}
+                    onCancelOfferPreview={() =>
+                      handleCancelOfferPreview(String(candidate.id))
+                    }
+                    offerSendState={offerSendStates[candidate.id] ?? "idle"}
                     onCheckOffer={() => handleCheckOffer(candidate)}
                     onMarkOfferStatus={(status) =>
                       handleMarkOfferStatus(candidate, status)

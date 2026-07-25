@@ -1262,12 +1262,78 @@ const getDataProviderWithCustomMethods = () => {
       );
       return (data as any[])?.[0] ?? null;
     },
-    // Agent H Stage 5: Scheduling -- generate (or fetch, if one already
-    // exists) a self-service booking link for a candidate against a role
-    // brief. Calls create-booking-link, which builds a personalized link
-    // into a self-hosted Cal.com instance (open source -- Agent H does not
-    // implement Google/Outlook OAuth itself) and emails it to the candidate
-    // via Resend if an email is on file.
+    // Agent H Stage 5: Scheduling -- draft a booking link + email preview
+    // (no Resend call, no interviews upsert). Recruiter approves, then
+    // sendBookingLink fires the actual email.
+    async prepareBookingLink(candidateId: Identifier, dealId: Identifier) {
+      const { data, error } = await getSupabaseClient().functions.invoke(
+        "prepare-booking-link",
+        {
+          method: "POST",
+          body: { candidate_id: Number(candidateId), deal_id: Number(dealId) },
+        },
+      );
+
+      if (!data || error) {
+        console.error("prepareBookingLink.error", error);
+        const errorDetails = await (async () => {
+          try {
+            return (await error?.context?.json()) ?? {};
+          } catch {
+            return {};
+          }
+        })();
+        throw new Error(
+          errorDetails?.message ||
+            errorDetails?.error ||
+            "Failed to prepare booking link",
+        );
+      }
+
+      return data;
+    },
+    async sendBookingLink(
+      candidateId: Identifier,
+      dealId: Identifier,
+      payload: {
+        booking_link_url: string;
+        subject?: string;
+        html?: string;
+      },
+    ) {
+      const { data, error } = await getSupabaseClient().functions.invoke(
+        "send-booking-link",
+        {
+          method: "POST",
+          body: {
+            candidate_id: Number(candidateId),
+            deal_id: Number(dealId),
+            booking_link_url: payload.booking_link_url,
+            subject: payload.subject,
+            html: payload.html,
+          },
+        },
+      );
+
+      if (!data || error) {
+        console.error("sendBookingLink.error", error);
+        const errorDetails = await (async () => {
+          try {
+            return (await error?.context?.json()) ?? {};
+          } catch {
+            return {};
+          }
+        })();
+        throw new Error(
+          errorDetails?.message ||
+            errorDetails?.error ||
+            "Failed to send booking link",
+        );
+      }
+
+      return data;
+    },
+    /** @deprecated Use prepareBookingLink + sendBookingLink after recruiter approval. */
     async createBookingLink(candidateId: Identifier, dealId: Identifier) {
       const { data, error } = await getSupabaseClient().functions.invoke(
         "create-booking-link",
@@ -1390,12 +1456,9 @@ const getDataProviderWithCustomMethods = () => {
 
       return data;
     },
-    // Agent H Stage 6: Offer -- create + send in one step. Calls send-offer,
-    // which composes a templated offer email (Resend) and upserts the
-    // current offer state onto public.offers (same "current state, not
-    // history" convention as candidate_scores/interviews -- re-sending
-    // updates the same row). See send-offer/index.ts for the full design.
-    async sendOffer(
+    // Agent H Stage 6: Offer -- draft email preview + offers row (status
+    // draft). sendOffer sends via Resend only after recruiter approval.
+    async prepareOffer(
       candidateId: Identifier,
       dealId: Identifier,
       terms: {
@@ -1409,13 +1472,49 @@ const getDataProviderWithCustomMethods = () => {
       },
     ) {
       const { data, error } = await getSupabaseClient().functions.invoke(
-        "send-offer",
+        "prepare-offer",
         {
           method: "POST",
           body: {
             candidate_id: Number(candidateId),
             deal_id: Number(dealId),
             ...terms,
+          },
+        },
+      );
+
+      if (!data || error) {
+        console.error("prepareOffer.error", error);
+        const errorDetails = await (async () => {
+          try {
+            return (await error?.context?.json()) ?? {};
+          } catch {
+            return {};
+          }
+        })();
+        throw new Error(
+          errorDetails?.message ||
+            errorDetails?.error ||
+            "Failed to prepare offer",
+        );
+      }
+
+      return data;
+    },
+    async sendOffer(
+      candidateId: Identifier,
+      dealId: Identifier,
+      approvedEmail: { subject: string; html: string },
+    ) {
+      const { data, error } = await getSupabaseClient().functions.invoke(
+        "send-offer",
+        {
+          method: "POST",
+          body: {
+            candidate_id: Number(candidateId),
+            deal_id: Number(dealId),
+            subject: approvedEmail.subject,
+            html: approvedEmail.html,
           },
         },
       );

@@ -13,11 +13,12 @@ import { toast } from "sonner";
 import type { CrmDataProvider } from "../providers/types";
 import type { Deal } from "../types";
 import { useInboxDecisions, type InboxDecision } from "./useInboxDecisions";
-import { CommandBar } from "./CommandBar";
 import { ShortcutsModal } from "./ShortcutsModal";
 import { ActivityPanel } from "./ActivityPanel";
 import { addActivityEntry, updateActivityEntry } from "./agentActivityStore";
 import { SourcingSidebar } from "../sourcing/SourcingSidebar";
+import { AgentHShell } from "../shell/AgentHShell";
+import { useInboxShellContext } from "../shell/useShellContext";
 import "./agent-h-theme.css";
 
 const GROUP_LABEL: Record<InboxDecision["priority"], string> = {
@@ -214,262 +215,271 @@ export const InboxPage = () => {
   }, [visible, focusIdx, shortcutsOpen]);
 
   const groups: InboxDecision["priority"][] = ["high", "med", "low"];
+  const shellContext = useInboxShellContext({
+    pendingDecisionCount: visible.length,
+    isPending,
+  });
 
   return (
-    <div
-      className="ah-scope"
-      style={{ display: "grid", gridTemplateRows: "auto 1fr auto" }}
+    <AgentHShell
+      context={shellContext}
+      commandBar={{
+        placeholder: "Tell Agent H what you need",
+        hint: "Try: “start a new role for a backend engineer” or “find more candidates for the designer role”.",
+        slashActions: [
+          { cmd: "/open", label: "Open the focused decision" },
+          { cmd: "/relax", label: "Relax a criterion on a role" },
+        ],
+        onSubmit: runFreeTextCommand,
+      }}
     >
       <div
         style={{
           display: "flex",
-          alignItems: "center",
-          gap: 10,
-          padding: "14px 22px",
-          borderBottom: "1px solid var(--ah-border)",
+          flexDirection: "column",
+          flex: 1,
+          minHeight: 0,
         }}
       >
         <div
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 8,
-            fontWeight: 700,
-            fontSize: 14,
+            gap: 10,
+            padding: "14px 22px",
+            borderBottom: "1px solid var(--ah-border)",
+            flexShrink: 0,
           }}
         >
           <div
             style={{
-              width: 24,
-              height: 24,
-              borderRadius: 7,
-              background: "var(--ah-accent-grad)",
-            }}
-          />
-          Agent H
-        </div>
-        {showLearningPill && (
-          <div
-            className="ah-chip"
-            style={{
-              background: "var(--ah-accent-soft)",
-              borderColor: "var(--ah-accent-soft-border)",
-              color: "var(--ah-accent-text)",
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              fontWeight: 700,
+              fontSize: 14,
             }}
           >
-            <div className="ah-pulse-dot" />
-            Agent H is adapting to your feedback
+            <div
+              style={{
+                width: 24,
+                height: 24,
+                borderRadius: 7,
+                background: "var(--ah-accent-grad)",
+              }}
+            />
+            Agent H
           </div>
-        )}
-        <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-          {/* Recruiter-persona redesign (2026-07-24): starting a new role
+          {showLearningPill && (
+            <div
+              className="ah-chip"
+              style={{
+                background: "var(--ah-accent-soft)",
+                borderColor: "var(--ah-accent-soft-border)",
+                color: "var(--ah-accent-text)",
+              }}
+            >
+              <div className="ah-pulse-dot" />
+              Agent H is adapting to your feedback
+            </div>
+          )}
+          <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+            {/* Recruiter-persona redesign (2026-07-24): starting a new role
               is the single most common thing a recruiter does here, so it
               gets a real, always-visible button -- not something that only
               works if you type the right words into the command bar (see
               /jd-intake's own header comment: it was previously a fully-
               built page with no link pointing to it anywhere in the UI). */}
-          <button
-            className="ah-btn-primary"
-            onClick={() => navigate("/jd-intake")}
-            style={{
-              height: 32,
-              padding: "0 14px",
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
-              fontSize: 12.5,
-            }}
-          >
-            + New role
-          </button>
-          <button
-            className="ah-btn-ghost"
-            onClick={() => setSourcingOpen((v) => !v)}
-            style={{
-              height: 32,
-              padding: "0 14px",
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
-              fontSize: 12.5,
-              borderColor: sourcingOpen ? "var(--ah-accent)" : undefined,
-              color: sourcingOpen ? "var(--ah-accent)" : undefined,
-            }}
-          >
-            &#10024; Sourcing
-          </button>
-          <button
-            className="ah-btn-ghost"
-            onClick={() => setActivityOpen((v) => !v)}
-            style={{
-              width: 32,
-              height: 32,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              borderColor: activityOpen ? "var(--ah-accent)" : undefined,
-              color: activityOpen ? "var(--ah-accent)" : undefined,
-            }}
-            aria-label="Agent H activity"
-          >
-            &#128337;
-          </button>
-          <button
-            className="ah-btn-ghost"
-            onClick={() => setShortcutsOpen(true)}
-            style={{
-              width: 32,
-              height: 32,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-            aria-label="Keyboard shortcuts"
-          >
-            ?
-          </button>
-        </div>
-      </div>
-
-      <ActivityPanel
-        open={activityOpen}
-        onClose={() => setActivityOpen(false)}
-      />
-
-      <div style={{ overflowY: "auto", padding: "20px 22px 90px" }}>
-        <h1
-          style={{
-            fontFamily: "var(--ah-serif)",
-            fontWeight: 400,
-            fontSize: 24,
-            margin: "0 0 4px",
-          }}
-        >
-          Good day, Harsha
-        </h1>
-        <div
-          style={{ fontSize: 13, color: "var(--ah-text-2)", marginBottom: 18 }}
-        >
-          {isPending
-            ? "Checking on your roles…"
-            : visible.length === 0
-              ? "Nothing needs you right now."
-              : `${visible.length} decision${visible.length === 1 ? "" : "s"} need you · `}
-          {!isPending && visible.length > 0 && (
-            <>
-              use <span className="ah-kbd">j</span>{" "}
-              <span className="ah-kbd">k</span> to move,{" "}
-              <span className="ah-kbd">↵</span> to open,{" "}
-              <span className="ah-kbd">a</span> to approve,{" "}
-              <span className="ah-kbd">x</span> to dismiss
-            </>
-          )}
+            <button
+              className="ah-btn-primary"
+              onClick={() => navigate("/jd-intake")}
+              style={{
+                height: 32,
+                padding: "0 14px",
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                fontSize: 12.5,
+              }}
+            >
+              + New role
+            </button>
+            <button
+              className="ah-btn-ghost"
+              onClick={() => setSourcingOpen((v) => !v)}
+              style={{
+                height: 32,
+                padding: "0 14px",
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                fontSize: 12.5,
+                borderColor: sourcingOpen ? "var(--ah-accent)" : undefined,
+                color: sourcingOpen ? "var(--ah-accent)" : undefined,
+              }}
+            >
+              &#10024; Sourcing
+            </button>
+            <button
+              className="ah-btn-ghost"
+              onClick={() => setActivityOpen((v) => !v)}
+              style={{
+                width: 32,
+                height: 32,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                borderColor: activityOpen ? "var(--ah-accent)" : undefined,
+                color: activityOpen ? "var(--ah-accent)" : undefined,
+              }}
+              aria-label="Agent H activity"
+            >
+              &#128337;
+            </button>
+            <button
+              className="ah-btn-ghost"
+              onClick={() => setShortcutsOpen(true)}
+              style={{
+                width: 32,
+                height: 32,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+              aria-label="Keyboard shortcuts"
+            >
+              ?
+            </button>
+          </div>
         </div>
 
-        {groups.map((group) => {
-          const rows = visible.filter((d) => d.priority === group);
-          if (rows.length === 0) return null;
-          return (
-            <div key={group}>
-              <div
-                style={{
-                  fontSize: 11,
-                  color: "var(--ah-text-3)",
-                  textTransform: "uppercase",
-                  letterSpacing: ".05em",
-                  margin: "18px 0 8px",
-                }}
-              >
-                {GROUP_LABEL[group]}
-              </div>
-              {rows.map((decision) => {
-                const idx = visible.indexOf(decision);
-                const focused = idx === focusIdx;
-                return (
-                  <div
-                    key={decision.id}
-                    onClick={() => openDecision(decision)}
-                    className="ah-glass-card"
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 14,
-                      padding: "13px 14px",
-                      marginBottom: 7,
-                      cursor: "pointer",
-                      borderColor: focused ? "var(--ah-accent)" : undefined,
-                      background: focused ? "var(--ah-accent-row)" : undefined,
-                      boxShadow: focused
-                        ? "var(--ah-accent-focus-ring)"
-                        : undefined,
-                    }}
-                  >
+        <ActivityPanel
+          open={activityOpen}
+          onClose={() => setActivityOpen(false)}
+        />
+
+        <div style={{ flex: 1, overflowY: "auto", padding: "20px 22px 24px" }}>
+          <h1
+            style={{
+              fontFamily: "var(--ah-serif)",
+              fontWeight: 400,
+              fontSize: 24,
+              margin: "0 0 4px",
+            }}
+          >
+            Good day, Harsha
+          </h1>
+          <div
+            style={{
+              fontSize: 13,
+              color: "var(--ah-text-2)",
+              marginBottom: 18,
+            }}
+          >
+            {isPending
+              ? "Checking on your roles…"
+              : visible.length === 0
+                ? "Nothing needs you right now."
+                : `${visible.length} decision${visible.length === 1 ? "" : "s"} need you · `}
+            {!isPending && visible.length > 0 && (
+              <>
+                use <span className="ah-kbd">j</span>{" "}
+                <span className="ah-kbd">k</span> to move,{" "}
+                <span className="ah-kbd">↵</span> to open,{" "}
+                <span className="ah-kbd">a</span> to approve,{" "}
+                <span className="ah-kbd">x</span> to dismiss
+              </>
+            )}
+          </div>
+
+          {groups.map((group) => {
+            const rows = visible.filter((d) => d.priority === group);
+            if (rows.length === 0) return null;
+            return (
+              <div key={group}>
+                <div
+                  style={{
+                    fontSize: 11,
+                    color: "var(--ah-text-3)",
+                    textTransform: "uppercase",
+                    letterSpacing: ".05em",
+                    margin: "18px 0 8px",
+                  }}
+                >
+                  {GROUP_LABEL[group]}
+                </div>
+                {rows.map((decision) => {
+                  const idx = visible.indexOf(decision);
+                  const focused = idx === focusIdx;
+                  return (
                     <div
+                      key={decision.id}
+                      onClick={() => openDecision(decision)}
+                      className="ah-glass-card"
                       style={{
-                        width: 6,
-                        height: 6,
-                        borderRadius: "50%",
-                        flexShrink: 0,
-                        background: PRIORITY_DOT_COLOR[decision.priority],
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 14,
+                        padding: "13px 14px",
+                        marginBottom: 7,
+                        cursor: "pointer",
+                        borderColor: focused ? "var(--ah-accent)" : undefined,
+                        background: focused
+                          ? "var(--ah-accent-row)"
+                          : undefined,
+                        boxShadow: focused
+                          ? "var(--ah-accent-focus-ring)"
+                          : undefined,
                       }}
-                    />
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 13.5, fontWeight: 600 }}>
-                        {decision.title}
-                      </div>
+                    >
                       <div
                         style={{
-                          fontSize: 12,
-                          color: "var(--ah-text-3)",
-                          marginTop: 2,
+                          width: 6,
+                          height: 6,
+                          borderRadius: "50%",
+                          flexShrink: 0,
+                          background: PRIORITY_DOT_COLOR[decision.priority],
                         }}
-                      >
-                        {decision.subtitle}
+                      />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13.5, fontWeight: 600 }}>
+                          {decision.title}
+                        </div>
+                        <div
+                          style={{
+                            fontSize: 12,
+                            color: "var(--ah-text-3)",
+                            marginTop: 2,
+                          }}
+                        >
+                          {decision.subtitle}
+                        </div>
                       </div>
+                      {focused && (
+                        <div style={{ display: "flex", gap: 5, flexShrink: 0 }}>
+                          <span className="ah-kbd">A</span>
+                          <span className="ah-kbd">↵</span>
+                        </div>
+                      )}
                     </div>
-                    {focused && (
-                      <div style={{ display: "flex", gap: 5, flexShrink: 0 }}>
-                        <span className="ah-kbd">A</span>
-                        <span className="ah-kbd">↵</span>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          );
-        })}
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+
+        <ShortcutsModal
+          open={shortcutsOpen}
+          onClose={() => setShortcutsOpen(false)}
+        />
+
+        <SourcingSidebar
+          open={sourcingOpen}
+          onClose={() => setSourcingOpen(false)}
+          openDeals={openDeals ?? []}
+        />
       </div>
-
-      {/* Recruiter-persona redesign (2026-07-24): plain English is the
-          ONLY thing advertised here now -- the old placeholder ("Type /
-          for quick actions, or just tell Agent H what to do") taught
-          recruiters they needed to learn a command syntax before this box
-          worked. Slash commands still work (see slashActions below,
-          CommandBar itself is unchanged) -- they're just no longer the
-          first thing anyone reads. j/k/a/x keyboard shortcuts are a power-
-          user affordance, not something a recruiter should need to know
-          to get started, so they're dropped from the default hint too. */}
-      <CommandBar
-        placeholder="Tell Agent H what you need"
-        hint="Try: “start a new role for a backend engineer” or “find more candidates for the designer role”."
-        slashActions={[
-          { cmd: "/open", label: "Open the focused decision" },
-          { cmd: "/relax", label: "Relax a criterion on a role" },
-        ]}
-        onSubmit={runFreeTextCommand}
-      />
-
-      <ShortcutsModal
-        open={shortcutsOpen}
-        onClose={() => setShortcutsOpen(false)}
-      />
-
-      <SourcingSidebar
-        open={sourcingOpen}
-        onClose={() => setSourcingOpen(false)}
-        openDeals={openDeals ?? []}
-      />
-    </div>
+    </AgentHShell>
   );
 };

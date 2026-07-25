@@ -1374,17 +1374,50 @@ const getDataProviderWithCustomMethods = () => {
       });
       return (data as any[])?.[0] ?? null;
     },
-    // Agent H, task 76: candidate outreach -- send a single "please send
-    // your resume" email. Deliberately not a messaging system (PRD Section 3
-    // defers messaging-as-a-first-class-entity) -- one templated email,
-    // recruiter-initiated, correlated back via a reply_to address rather
-    // than a thread/inbox model.
-    async requestCandidateResume(candidateId: Identifier, dealId: Identifier) {
+    // Agent H, task 76: draft resume-request email preview (no send).
+    async prepareRequestResume(candidateId: Identifier, dealId: Identifier) {
+      const { data, error } = await getSupabaseClient().functions.invoke(
+        "prepare-request-resume",
+        {
+          method: "POST",
+          body: { candidate_id: Number(candidateId), deal_id: Number(dealId) },
+        },
+      );
+
+      if (!data || error) {
+        console.error("prepareRequestResume.error", error);
+        const errorDetails = await (async () => {
+          try {
+            return (await error?.context?.json()) ?? {};
+          } catch {
+            return {};
+          }
+        })();
+        throw new Error(
+          errorDetails?.message ||
+            errorDetails?.error ||
+            "Failed to prepare resume request",
+        );
+      }
+
+      return data;
+    },
+    // Agent H, task 76: send resume request after recruiter approves preview.
+    async requestCandidateResume(
+      candidateId: Identifier,
+      dealId: Identifier,
+      approvedEmail: { subject: string; html: string },
+    ) {
       const { data, error } = await getSupabaseClient().functions.invoke(
         "request-candidate-resume",
         {
           method: "POST",
-          body: { candidate_id: Number(candidateId), deal_id: Number(dealId) },
+          body: {
+            candidate_id: Number(candidateId),
+            deal_id: Number(dealId),
+            subject: approvedEmail.subject,
+            html: approvedEmail.html,
+          },
         },
       );
 
@@ -1634,6 +1667,8 @@ const getDataProviderWithCustomMethods = () => {
         current_deal_id?: Identifier | null;
         active_criteria?: Array<{ id: Identifier; label: string }>;
         selected_candidate_count?: number;
+        selected_candidates?: Array<{ id: Identifier; name: string }>;
+        pipeline_candidates?: Array<{ id: Identifier; name: string }>;
       },
     ) {
       const { data, error } = await getSupabaseClient().functions.invoke<{
@@ -1648,6 +1683,7 @@ const getDataProviderWithCustomMethods = () => {
           | "unknown";
         deal_id: number | null;
         criterion_id: number | null;
+        candidate_id: number | null;
         use_selected_candidates: boolean;
         explanation: string;
       }>("parse-agent-command", {

@@ -12,6 +12,8 @@ import {
 
 type ParsedCommand = Awaited<ReturnType<CrmDataProvider["parseAgentCommand"]>>;
 
+export type ParseCandidateRef = { id: number; name: string };
+
 export type RoleAgentOrchestratorDeps = {
   dealId: string;
   deal: Deal | undefined;
@@ -20,10 +22,23 @@ export type RoleAgentOrchestratorDeps = {
   queryClient: QueryClient;
   navigate: (path: string) => void;
   invalidateTranscript: () => void;
+  pipelineCandidates?: ParseCandidateRef[];
+  selectedCandidates?: ParseCandidateRef[];
 };
 
 function turnIdempotencyKey(dealId: string, suffix: string) {
   return `${dealId}:${suffix}:${crypto.randomUUID()}`;
+}
+
+function resolveCandidateId(
+  parsed: ParsedCommand,
+  selectedCandidates: ParseCandidateRef[],
+): number | null {
+  if (parsed.candidate_id != null) return parsed.candidate_id;
+  if (parsed.use_selected_candidates && selectedCandidates.length === 1) {
+    return selectedCandidates[0].id;
+  }
+  return null;
 }
 
 async function appendRecruiterTurn(
@@ -114,20 +129,56 @@ async function executeReversibleOrRead(
 }
 
 async function buildTier3ProposalMetadata(
+  deps: RoleAgentOrchestratorDeps,
   parsed: ParsedCommand,
 ): Promise<ConversationTurnMetadata> {
-  return {
+  const selectedCandidates = deps.selectedCandidates ?? [];
+  const candidateId = resolveCandidateId(parsed, selectedCandidates);
+  const dealId = (parsed.deal_id as number | undefined) ?? Number(deps.dealId);
+
+  const params: Record<string, unknown> = {
+    deal_id: dealId,
+    criterion_id: parsed.criterion_id,
+    use_selected_candidates: parsed.use_selected_candidates,
+    candidate_id: candidateId,
+  };
+
+  const base: ConversationTurnMetadata = {
     kind: "proposal",
     tier: "leaves_platform",
     action: parsed.action,
     status: "pending",
     explanation: parsed.explanation,
-    params: {
-      deal_id: parsed.deal_id,
-      criterion_id: parsed.criterion_id,
-      use_selected_candidates: parsed.use_selected_candidates,
-    },
+    params,
   };
+
+  if (parsed.action === "request_resume" && candidateId && dealId) {
+    try {
+      const result = await deps.dataProvider.prepareRequestResume(
+        candidateId,
+        dealId,
+      );
+      return {
+        ...base,
+        email_preview:
+          result.email_preview as ConversationTurnMetadata["email_preview"],
+      };
+    } catch (error) {
+      return {
+        ...base,
+        explanation: `${parsed.explanation} (${error instanceof Error ? error.message : "Couldn't prepare the email preview"})`,
+      };
+    }
+  }
+
+  if (isLeavesPlatformAction(parsed.action) && !candidateId) {
+    return {
+      ...base,
+      explanation: `${parsed.explanation} (Select a candidate in the table or name someone from the pipeline so I know who to contact.)`,
+    };
+  }
+
+  return base;
 }
 
 export async function dispatchRoleAgentCommand(
@@ -135,6 +186,8 @@ export async function dispatchRoleAgentCommand(
   commandText: string,
 ): Promise<void> {
   const dealIdNum = Number(deps.dealId);
+  const selectedCandidates = deps.selectedCandidates ?? [];
+  const pipelineCandidates = deps.pipelineCandidates ?? [];
 
   await appendRecruiterTurn(deps, commandText, { kind: "command" });
 
@@ -142,14 +195,26 @@ export async function dispatchRoleAgentCommand(
     view: "canvas",
     open_deals: deps.openDeals.map((d) => ({ id: d.id, name: d.name })),
     current_deal_id: Number.isFinite(dealIdNum) ? dealIdNum : null,
+    selected_candidates: selectedCandidates.map((c) => ({
+      id: c.id,
+      name: c.name,
+    })),
+    pipeline_candidates: pipelineCandidates.map((c) => ({
+      id: c.id,
+      name: c.name,
+    })),
   });
 
   const tier = getActionTier(parsed.action);
   const proposalContent = parsed.explanation;
 
   if (isLeavesPlatformAction(parsed.action)) {
-    const metadata = await buildTier3ProposalMetadata(parsed);
-    await appendAgentTurn(deps, proposalContent, metadata);
+    const metadata = await buildTier3ProposalMetadata(deps, parsed);
+    await appendAgentTurn(
+      deps,
+      metadata.explanation ?? proposalContent,
+      metadata,
+    );
     deps.invalidateTranscript();
     return;
   }
@@ -163,6 +228,7 @@ export async function dispatchRoleAgentCommand(
     params: {
       deal_id: parsed.deal_id,
       criterion_id: parsed.criterion_id,
+      candidate_id: resolveCandidateId(parsed, selectedCandidates),
     },
   });
 
@@ -225,9 +291,12 @@ export async function approveTier3Proposal(
       html: approvedPreview?.html,
     });
     resultSummary = "Booking link saved and email sent.";
-  } else if (action === "request_resume" && candidateId) {
-    await deps.dataProvider.requestCandidateResume(candidateId, dealId);
-    resultSummary = "Resume request email sent.";
+  } else if (action === "request_resume" && candidateId && approvedPreview) {
+    await deps.dataProvider.requestCandidateResume(candidateId, dealId, {
+      subject: approvedPreview.subject,
+      html: approvedPreview.html,
+    });
+    resultSummary = `Resume request sent to ${approvedPreview.to}.`;
   } else if (action === "send_first_outreach" && candidateId) {
     await deps.dataProvider.sendFirstOutreach(candidateId, dealId);
     resultSummary = "Outreach email sent.";

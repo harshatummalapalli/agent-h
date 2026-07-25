@@ -100,10 +100,15 @@ const PARSE_COMMAND_TOOL = {
         description:
           "For relax_criterion only: the id of the matching criterion from the active_criteria list in context, matched by meaning not exact wording. Null otherwise or if no confident match exists.",
       },
+      candidate_id: {
+        type: ["number", "null"],
+        description:
+          "For request_resume (and future Tier-3 candidate actions): the id of exactly one candidate this command targets. Resolve from selected_candidates when the recruiter means 'these/selected' and exactly one row is selected; from pipeline_candidates when they name someone (e.g. 'ask Alex for their resume'); null if ambiguous, none selected, or the action doesn't need a candidate.",
+      },
       use_selected_candidates: {
         type: "boolean",
         description:
-          "For request_resume/reject_candidates: true if the command refers to 'selected'/'these' candidates (use the selected_candidate_ids from context) rather than naming someone specific.",
+          "For request_resume/reject_candidates: true if the command refers to 'selected'/'these' candidates in the table rather than naming someone specific. When exactly one candidate is selected, also set candidate_id to that candidate's id.",
       },
       explanation: {
         type: "string",
@@ -115,12 +120,16 @@ const PARSE_COMMAND_TOOL = {
   },
 };
 
+type CandidateRef = { id: number; name: string };
+
 type CommandContext = {
   view: "inbox" | "canvas";
   open_deals: Array<{ id: number; name: string }>;
   current_deal_id?: number | null;
   active_criteria?: Array<{ id: number; label: string }>;
   selected_candidate_count?: number;
+  selected_candidates?: CandidateRef[];
+  pipeline_candidates?: CandidateRef[];
 };
 
 const buildPrompt = (commandText: string, context: CommandContext) =>
@@ -132,9 +141,12 @@ Context:
 - Currently open role (if any): ${context.current_deal_id ?? "none -- recruiter is on the Inbox, not scoped to one role"}
 - Open roles available to reference by name: ${JSON.stringify(context.open_deals)}
 - Active criteria on the currently open role (if any): ${JSON.stringify(context.active_criteria ?? [])}
-- Candidates currently selected in the table (if any): ${context.selected_candidate_count ?? 0}
+- Candidates currently selected in the table (if any): ${JSON.stringify(context.selected_candidates ?? [])}
+- All candidates in this role's pipeline (for name matching): ${JSON.stringify(context.pipeline_candidates ?? [])}
 
 Classify this into exactly one supported action using submit_parsed_command. Resolve role names (e.g. "the AI Engineer role") against open_deals by meaning, not exact string match. If the recruiter clearly means "the role I'm currently looking at" and current_deal_id is set, use that instead of guessing from open_deals.
+
+For request_resume: set candidate_id when you can identify exactly one person — from selected_candidates when they say "these/selected" and one row is checked, or from pipeline_candidates when they name someone (first name, full name, or close match). Set use_selected_candidates true when they mean the current table selection. Leave candidate_id null only when no single candidate can be resolved.
 `.trim();
 
 const parseCommandHandler = async (req: Request) => {

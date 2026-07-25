@@ -67,6 +67,22 @@ export const CanvasPage = () => {
 
   const list = rows ?? [];
 
+  const pipelineCandidates = list.map(({ candidate }) => {
+    const name =
+      [candidate.first_name, candidate.last_name].filter(Boolean).join(" ") ||
+      `Candidate #${candidate.id}`;
+    return { id: Number(candidate.id), name };
+  });
+
+  const selectedCandidates = list
+    .filter((r) => selected.has(r.dealCandidate.id))
+    .map(({ candidate }) => {
+      const name =
+        [candidate.first_name, candidate.last_name].filter(Boolean).join(" ") ||
+        `Candidate #${candidate.id}`;
+      return { id: Number(candidate.id), name };
+    });
+
   const toggleSelect = (id: string | number) => {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -127,11 +143,17 @@ export const CanvasPage = () => {
   };
 
   const requestResumeForRows = async (candidateIds: (string | number)[]) => {
-    await Promise.all(
-      candidateIds.map((id) =>
-        dataProvider.requestCandidateResume(id, dealId!),
-      ),
-    );
+    for (const id of candidateIds) {
+      const prepared = await dataProvider.prepareRequestResume(id, dealId!);
+      const preview = prepared.email_preview as {
+        subject: string;
+        html: string;
+      };
+      await dataProvider.requestCandidateResume(id, dealId!, {
+        subject: preview.subject,
+        html: preview.html,
+      });
+    }
     setSelected(new Set());
     toast.success(
       `Requested resume from ${candidateIds.length} candidate${candidateIds.length === 1 ? "" : "s"}`,
@@ -184,6 +206,8 @@ export const CanvasPage = () => {
           .filter((c: any) => c.status === "active")
           .map((c: any) => ({ id: c.id, label: c.label })),
         selected_candidate_count: selected.size,
+        selected_candidates: selectedCandidates,
+        pipeline_candidates: pipelineCandidates,
       });
 
       if (parsed.action === "create_role") {
@@ -225,12 +249,15 @@ export const CanvasPage = () => {
         });
       } else if (
         parsed.action === "request_resume" &&
-        parsed.use_selected_candidates &&
-        selected.size > 0
+        (parsed.candidate_id != null ||
+          (parsed.use_selected_candidates && selected.size > 0))
       ) {
-        const candidateIds = list
-          .filter((r) => selected.has(r.dealCandidate.id))
-          .map((r) => r.candidate.id);
+        const candidateIds =
+          parsed.candidate_id != null
+            ? [parsed.candidate_id]
+            : list
+                .filter((r) => selected.has(r.dealCandidate.id))
+                .map((r) => r.candidate.id);
         await requestResumeForRows(candidateIds);
         updateActivityEntry(logId, {
           status: "success",

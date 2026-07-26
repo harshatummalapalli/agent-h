@@ -42,6 +42,10 @@
           "type": "registry:component"
         },
         {
+          "path": "src/components/atomic-crm/templates/TemplatesPage.tsx",
+          "type": "registry:component"
+        },
+        {
           "path": "src/components/atomic-crm/tasks/tasksPredicate.ts",
           "type": "registry:component"
         },
@@ -134,7 +138,51 @@
           "type": "registry:component"
         },
         {
+          "path": "src/components/atomic-crm/sourcing/useSourcingPagination.ts",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/sourcing/useOutreachActions.ts",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/sourcing/useInterviewResumeOfferActions.ts",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/sourcing/useFreePortalAndXraySearch.ts",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/sourcing/useDiscoverySearch.ts",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/sourcing/useCandidateSourcing.ts",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/sourcing/useCandidateEnrichmentActions.ts",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/sourcing/useCalibrationFlow.ts",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/sourcing/useAddToPipeline.ts",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/sourcing/sourcingTypes.ts",
+          "type": "registry:component"
+        },
+        {
           "path": "src/components/atomic-crm/sourcing/sourcingThreadTypes.ts",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/sourcing/sourcingSessionSnapshot.ts",
           "type": "registry:component"
         },
         {
@@ -142,11 +190,47 @@
           "type": "registry:component"
         },
         {
+          "path": "src/components/atomic-crm/sourcing/candidatePanels.tsx",
+          "type": "registry:component"
+        },
+        {
           "path": "src/components/atomic-crm/sourcing/SourcingSidebar.tsx",
           "type": "registry:component"
         },
         {
+          "path": "src/components/atomic-crm/sourcing/SourcingPanels.tsx",
+          "type": "registry:component"
+        },
+        {
           "path": "src/components/atomic-crm/sourcing/SourceCandidatesPage.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/sourcing/OutreachPreviewPanel.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/sourcing/MainCandidateList.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/sourcing/FreePortalCandidateList.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/sourcing/CandidateResultsList.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/sourcing/CandidateQuickActionBar.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/sourcing/CandidateActionsPanel.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/sourcing/CalibrationFeedbackWidget.tsx",
           "type": "registry:component"
         },
         {
@@ -410,6 +494,14 @@
           "type": "registry:component"
         },
         {
+          "path": "src/components/atomic-crm/preferences/SalesListForPreferences.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/preferences/PreferencesPage.tsx",
+          "type": "registry:component"
+        },
+        {
           "path": "src/components/atomic-crm/notes/utils.ts",
           "type": "registry:component"
         },
@@ -610,6 +702,10 @@
           "type": "registry:component"
         },
         {
+          "path": "src/components/atomic-crm/layout/AppShell.tsx",
+          "type": "registry:component"
+        },
+        {
           "path": "src/components/atomic-crm/jd-intake/JdIntakePage.tsx",
           "type": "registry:component"
         },
@@ -635,6 +731,10 @@
         },
         {
           "path": "src/components/atomic-crm/inbox/ActivityPanel.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/home/HomePage.tsx",
           "type": "registry:component"
         },
         {
@@ -703,6 +803,10 @@
         },
         {
           "path": "src/components/atomic-crm/deals/ContactList.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/deals/CandidateReviewTable.tsx",
           "type": "registry:component"
         },
         {
@@ -923,6 +1027,10 @@
         },
         {
           "path": "src/components/atomic-crm/apply/CandidateApplicationPage.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/analytics/AnalyticsPage.tsx",
           "type": "registry:component"
         },
         {

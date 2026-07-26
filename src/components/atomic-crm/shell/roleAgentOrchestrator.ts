@@ -141,7 +141,7 @@ async function executeReversibleOrRead(
   }
 
   if (parsed.action === "show_roles") {
-    deps.navigate("/deals");
+    deps.navigate("/");
     return { summary: parsed.explanation };
   }
 
@@ -557,6 +557,8 @@ export async function proposeOutreachAfterPipelineAdd(
 
 // Called when the recruiter answers the "What didn't fit?" calibration question.
 // Bypasses parse-agent-command — the context makes intent unambiguous.
+// Best-effort: after reranking, tries to promote the reason into
+// role_brief_learned_criteria so the NEXT paid search also benefits.
 export async function dispatchCalibrationRerank(
   deps: RoleAgentOrchestratorDeps,
   reason: string,
@@ -580,6 +582,24 @@ export async function dispatchCalibrationRerank(
     void appendCalibrationCardTurns(deps, batch);
   }
   deps.invalidateTranscript();
+  // Non-blocking: promote applicable reason to a learned criterion so the next
+  // search uses it, not just in-pool rerank. Errors are silently swallowed.
+  void (async () => {
+    try {
+      const result = await deps.dataProvider.contextualizeCalibrationFeedback(
+        deps.dealId,
+        reason,
+      );
+      if (result.applicable && result.criterion) {
+        await deps.dataProvider.applyLearnedCriterion(
+          deps.dealId,
+          result.criterion,
+        );
+      }
+    } catch {
+      // non-fatal
+    }
+  })();
 }
 
 export async function dispatchRoleAgentCommand(

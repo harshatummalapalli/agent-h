@@ -281,6 +281,7 @@ const DesktopAdmin = (
         <Route path={AnalyticsPage.path} element={<AnalyticsPage />} />
         <Route path={TemplatesPage.path} element={<TemplatesPage />} />
         <Route path="/deals" element={<RedirectToHome />} />
+        <Route path="/source-candidates" element={<RedirectToHome />} />
       </CustomRoutes>
       <Resource name="deals" {...deals} />
       <Resource name="contacts" {...contacts} />
@@ -380,6 +381,7 @@ const MobileAdmin = (
           <Route path={AnalyticsPage.path} element={<AnalyticsPage />} />
           <Route path={TemplatesPage.path} element={<TemplatesPage />} />
           <Route path="/deals" element={<RedirectToHome />} />
+          <Route path="/source-candidates" element={<RedirectToHome />} />
         </CustomRoutes>
         <Resource name="deals" {...deals} />
         <Resource name="candidates" {...candidates} />

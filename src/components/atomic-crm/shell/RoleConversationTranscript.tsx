@@ -7,6 +7,7 @@ import {
   isPendingTier3Proposal,
 } from "./agentActionTiers";
 import { PendingApprovalCard } from "./PendingApprovalCard";
+import { normalizeLinkedinUrl } from "../misc/normalizeLinkedinUrl";
 
 // Loop B calibration: inline candidate card with Yes/No quick actions.
 function CandidateCardTurn({
@@ -40,9 +41,9 @@ function CandidateCardTurn({
           {metadata.why_fit}
         </div>
       )}
-      {metadata.linkedin_url && (
+      {normalizeLinkedinUrl(metadata.linkedin_url) && (
         <a
-          href={`https://${metadata.linkedin_url}`}
+          href={normalizeLinkedinUrl(metadata.linkedin_url)!}
           target="_blank"
           rel="noreferrer"
           className="text-xs text-blue-700 underline"

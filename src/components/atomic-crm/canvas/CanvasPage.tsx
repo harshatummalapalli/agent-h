@@ -215,7 +215,7 @@ export const CanvasPage = () => {
           status: "success",
           summary: parsed.explanation,
         });
-        navigate("/jd-intake");
+        navigate("/");
       } else if (
         parsed.action === "continue_sourcing" &&
         parsed.deal_id != null

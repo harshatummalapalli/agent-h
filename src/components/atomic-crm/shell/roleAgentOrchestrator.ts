@@ -74,7 +74,7 @@ async function executeReversibleOrRead(
   parsed: ParsedCommand,
 ): Promise<{ summary: string; undo?: ConversationTurnMetadata["undo"] }> {
   if (parsed.action === "create_role") {
-    deps.navigate("/jd-intake");
+    deps.navigate("/");
     return { summary: parsed.explanation };
   }
 

@@ -136,10 +136,10 @@ function RailTop({
         active={currentPath === "/"}
       />
       <RailIcon
-        to="/jd-intake"
+        to="/"
         icon={<Plus className="h-4 w-4" />}
         label="New role"
-        active={currentPath.startsWith("/jd-intake")}
+        active={false}
       />
     </>
   );
@@ -295,7 +295,7 @@ function RolesSidebar({ onClose }: { onClose: () => void }) {
           size="sm"
           className="w-full justify-start gap-2"
           onClick={() => {
-            navigate("/jd-intake");
+            navigate("/");
             onClose();
           }}
         >

@@ -8,7 +8,14 @@ import globals from "globals";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist"] },
+  {
+    ignores: [
+      "dist",
+      // Generated MCP paste-bundle (self-contained Deno edge entry; not app source).
+      "**/supabase/functions/**/index.mcp.bundle.ts",
+      "**/supabase/functions/**/index.mcp.bundle.part*.ts",
+    ],
+  },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ["**/*.{ts,tsx,mjs}"],

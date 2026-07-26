@@ -117,7 +117,11 @@ async function fetchRoleBrief(
     headers: { apikey: SUPABASE_ANON_KEY ?? "", Authorization: authHeader },
   });
   if (!response.ok) {
-    console.error("fetchRoleBrief failed", response.status, await response.text());
+    console.error(
+      "fetchRoleBrief failed",
+      response.status,
+      await response.text(),
+    );
     return null;
   }
   const rows = await response.json();
@@ -199,24 +203,56 @@ type ExaCriteria = {
 // Exa's people-search highlights commonly include as their second line.
 // Not a structured field -- best-effort only, absent (null) if no line
 // matches.
-function extractLocationFromHighlight(highlight: string | undefined): string | null {
+function extractLocationFromHighlight(
+  highlight: string | undefined,
+): string | null {
   if (!highlight) return null;
   const lines = highlight.split("\n").map((l) => l.trim());
   for (const line of lines) {
-    if (/^[A-Za-z .'-]+,\s*[A-Za-z .'-]+(,\s*[A-Za-z .'-]+)?(\s*\([A-Z]{2,3}\))?$/.test(line)) {
+    if (
+      /^[A-Za-z .'-]+,\s*[A-Za-z .'-]+(,\s*[A-Za-z .'-]+)?(\s*\([A-Z]{2,3}\))?$/.test(
+        line,
+      )
+    ) {
       return line;
     }
   }
   return null;
 }
 
+/** Extract geographic place from a location string (e.g. "Remote, India" → "India"). */
+function parsePlace(location: string): string | null {
+  const REMOTE_ONLY =
+    /^(remote[\s-]*(only|ok|friendly|first|work)?|work\s+remote(ly)?)$/i;
+  if (REMOTE_ONLY.test(location.trim())) return null;
+  const withoutParens = location.replace(/\(\s*remote[^)]*\)/gi, "");
+  const place = withoutParens
+    .replace(
+      /\b(remote[\s-]*(only|ok|friendly|first|work)?|work\s+remote(ly)?|remote\s+people\s+based\s+in|based\s+in|remote)\b[,\s-]*/gi,
+      " ",
+    )
+    .replace(/[,\s-]+$/, "")
+    .replace(/^[,\s-]+/, "")
+    .trim();
+  return place || null;
+}
+
 function buildExaQuery(criteria: ExaCriteria): string {
-  const skills = [...(criteria.requiredSkills ?? []), ...(criteria.niceToHaveKeywords ?? [])].slice(0, 6);
-  const parts = [criteria.title, skills.length > 0 ? `with ${skills.join(", ")} experience` : null];
-  if (criteria.location && !/remote/i.test(criteria.location)) {
-    parts.push(`based in ${criteria.location}`);
+  const skills = [
+    ...(criteria.requiredSkills ?? []),
+    ...(criteria.niceToHaveKeywords ?? []),
+  ].slice(0, 6);
+  const parts = [
+    criteria.title,
+    skills.length > 0 ? `with ${skills.join(", ")} experience` : null,
+  ];
+  if (criteria.location) {
+    const place = parsePlace(criteria.location);
+    if (place) parts.push(`based in ${place}`);
   }
-  return parts.filter((p): p is string => typeof p === "string" && p.length > 0).join(" ");
+  return parts
+    .filter((p): p is string => typeof p === "string" && p.length > 0)
+    .join(" ");
 }
 
 async function searchExa(
@@ -234,7 +270,12 @@ async function searchExa(
 
   const query = buildExaQuery(criteria);
   if (!query) {
-    return { candidates: [], notes: ["Exa: role brief has no title/skills to build a query from -- skipped."] };
+    return {
+      candidates: [],
+      notes: [
+        "Exa: role brief has no title/skills to build a query from -- skipped.",
+      ],
+    };
   }
 
   const numResults = Math.min(Math.max(size, 1), 25);
@@ -254,14 +295,24 @@ async function searchExa(
     throw new Error(`Exa API error (${response.status}): ${body}`);
   }
   const result = await response.json();
-  const items: Array<{ id: string; title: string; url: string; highlights?: string[] }> = result?.results ?? [];
+  const items: Array<{
+    id: string;
+    title: string;
+    url: string;
+    highlights?: string[];
+  }> = result?.results ?? [];
 
-  const skillHaystack = [...(criteria.requiredSkills ?? []), ...(criteria.niceToHaveKeywords ?? [])];
+  const skillHaystack = [
+    ...(criteria.requiredSkills ?? []),
+    ...(criteria.niceToHaveKeywords ?? []),
+  ];
   const candidates: ExaCandidate[] = items.map((item) => {
     const highlight = item.highlights?.[0];
     const headline = highlight?.split("\n")[0]?.trim() ?? null;
     const fullText = (highlight ?? "").toLowerCase();
-    const matchedSkills = skillHaystack.filter((s) => fullText.includes(s.toLowerCase()));
+    const matchedSkills = skillHaystack.filter((s) =>
+      fullText.includes(s.toLowerCase()),
+    );
     return {
       id: `exa:${encodeURIComponent(item.url)}`,
       full_name: item.title || null,
@@ -297,7 +348,9 @@ function applyLearnedCriteria(
     .filter((c) => c.criterionType === "exclude_keyword" && c.value.keyword)
     .map((c) => c.value.keyword!.toLowerCase());
   const yearsCriteria = learnedCriteria.filter(
-    (c) => c.criterionType === "years_experience_min" || c.criterionType === "years_experience_max",
+    (c) =>
+      c.criterionType === "years_experience_min" ||
+      c.criterionType === "years_experience_max",
   );
 
   const notes: string[] = [];
@@ -312,7 +365,11 @@ function applyLearnedCriteria(
   }
 
   const filtered = candidates.filter((candidate) => {
-    const text = [candidate.full_name, candidate.job_title, ...(candidate.skills ?? [])]
+    const text = [
+      candidate.full_name,
+      candidate.job_title,
+      ...(candidate.skills ?? []),
+    ]
       .filter((v): v is string => typeof v === "string")
       .join(" ")
       .toLowerCase();
@@ -339,9 +396,12 @@ async function annotateAlreadySaved(
       headers: { apikey: SUPABASE_ANON_KEY ?? "", Authorization: authHeader },
     });
     if (!response.ok) return;
-    const rows: Array<{ id: number; source_id: string }> = await response.json();
+    const rows: Array<{ id: number; source_id: string }> =
+      await response.json();
     const savedBySourceId = new Map(rows.map((r) => [r.source_id, r.id]));
-    for (const candidate of candidates as unknown as Array<Record<string, unknown>>) {
+    for (const candidate of candidates as unknown as Array<
+      Record<string, unknown>
+    >) {
       const savedId = savedBySourceId.get(candidate.id as string);
       candidate._already_saved = savedId !== undefined;
       candidate._candidate_id = savedId ?? null;
@@ -373,14 +433,23 @@ Deno.serve(async (req: Request) => {
   if (!roleBriefId || typeof roleBriefId !== "number") {
     return jsonResponse({ error: "role_brief_id is required" }, 400);
   }
-  const size = typeof body?.size === "number" ? Math.max(1, Math.min(25, Math.floor(body.size))) : 10;
+  const size =
+    typeof body?.size === "number"
+      ? Math.max(1, Math.min(25, Math.floor(body.size)))
+      : 10;
 
   const roleBrief = await fetchRoleBrief(roleBriefId, authHeader);
   if (!roleBrief) {
-    return jsonResponse({ error: "Role brief not found (or you don't have access to it)" }, 404);
+    return jsonResponse(
+      { error: "Role brief not found (or you don't have access to it)" },
+      404,
+    );
   }
 
-  const learnedCriteria = await fetchActiveLearnedCriteria(roleBriefId, authHeader);
+  const learnedCriteria = await fetchActiveLearnedCriteria(
+    roleBriefId,
+    authHeader,
+  );
   const criteria: ExaCriteria = {
     title: roleBrief.name,
     location: roleBrief.location,
@@ -390,12 +459,20 @@ Deno.serve(async (req: Request) => {
 
   try {
     const { candidates, notes: searchNotes } = await searchExa(criteria, size);
-    const { filtered, notes: filterNotes } = applyLearnedCriteria(candidates, learnedCriteria);
+    const { filtered, notes: filterNotes } = applyLearnedCriteria(
+      candidates,
+      learnedCriteria,
+    );
     await annotateAlreadySaved(filtered, authHeader);
-    return jsonResponse({ candidates: filtered, notes: [...searchNotes, ...filterNotes], total: filtered.length });
+    return jsonResponse({
+      candidates: filtered,
+      notes: [...searchNotes, ...filterNotes],
+      total: filtered.length,
+    });
   } catch (error) {
     console.error("source-candidates-exa failed", error);
-    const detail = error instanceof Error ? error.message : "Failed to search Exa";
+    const detail =
+      error instanceof Error ? error.message : "Failed to search Exa";
     return jsonResponse({ error: detail }, 502);
   }
 });

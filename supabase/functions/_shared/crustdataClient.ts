@@ -49,6 +49,55 @@ const SENIORITY_TERMS: Record<string, string | null> = {
   executive: "VP",
 };
 
+// ── Location parsing ─────────────────────────────────────────────────────
+
+// Tokens that, on their own, mean "remote-only" — no geographic place.
+const REMOTE_ONLY_RE =
+  /^(remote[\s-]*(only|ok|friendly|first|work)?|work\s+remote(ly)?)$/i;
+
+// Tokens to strip before extracting the geographic place.
+// Order matters: more specific multi-word phrases must precede bare "remote".
+const REMOTE_STRIP_RE =
+  /\b(remote\s+people\s+based\s+in|remote[\s-]*(only|ok|friendly|first|work)?|work\s+remote(ly)?|based\s+in|remote)\b[,\s-]*/gi;
+
+/**
+ * Split a free-text location into an optional geographic place and a boolean
+ * indicating whether "remote" was mentioned.
+ *
+ * Examples:
+ *   "Remote, India"          → { place: "India", remoteOnly: false }
+ *   "Remote - India"         → { place: "India", remoteOnly: false }
+ *   "India (Remote)"         → { place: "India", remoteOnly: false }
+ *   "Remote people based in India" → { place: "India", remoteOnly: false }
+ *   "based in India, remote OK"    → { place: "India", remoteOnly: false }
+ *   "Remote"                 → { place: null, remoteOnly: true }
+ *   "Remote only"            → { place: null, remoteOnly: true }
+ *   "Bangalore"              → { place: "Bangalore", remoteOnly: false }
+ */
+export function parseLocationForFilter(location: string): {
+  place: string | null;
+  remoteOnly: boolean;
+} {
+  const trimmed = location.trim();
+  if (!trimmed) return { place: null, remoteOnly: false };
+
+  const hasRemote = /remote/i.test(trimmed);
+
+  if (REMOTE_ONLY_RE.test(trimmed)) {
+    return { place: null, remoteOnly: true };
+  }
+
+  // Strip parenthetical remote markers like "(Remote)" or "(remote ok)"
+  const withoutParens = trimmed.replace(/\(\s*remote[^)]*\)/gi, "");
+  const place = withoutParens
+    .replace(REMOTE_STRIP_RE, " ")
+    .replace(/[,\s-]+$/, "")
+    .replace(/^[,\s-]+/, "")
+    .trim();
+
+  return { place: place || null, remoteOnly: hasRemote && !place };
+}
+
 // ── Role-brief → filters ─────────────────────────────────────────────────
 
 export type CalibrationRoleBrief = {
@@ -75,14 +124,17 @@ export function buildCalibrationFilters(
     conditions.push({ field: F.currentTitle, type: "(.)", value: title });
   }
 
-  // Location
+  // Location — extract the geographic place even when "remote" is mentioned.
   const location =
     typeof brief.location === "string" ? brief.location.trim() : null;
-  if (location && !/remote/i.test(location)) {
+  const { place } = location
+    ? parseLocationForFilter(location)
+    : { place: null };
+  if (place) {
     conditions.push({
       field: F.locationCity,
       type: "(.)",
-      value: location,
+      value: place,
     });
   }
 

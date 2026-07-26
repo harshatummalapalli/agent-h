@@ -31,12 +31,12 @@ import { NoteCreate } from "../notes/NoteCreate";
 import { NotesIterator } from "../notes/NotesIterator";
 import type { CrmDataProvider } from "../providers/types";
 import { useConfigurationContext } from "../root/ConfigurationContext";
-import { SourceCandidatesPage } from "../sourcing/SourceCandidatesPage";
 import { AgentHShell } from "../shell/AgentHShell";
 import { RoleConversationTranscript } from "../shell/RoleConversationTranscript";
 import { useRoleShellContext } from "../shell/useShellContext";
 import {
   approveTier3Proposal,
+  dispatchCalibrationRerank,
   dispatchJdPasteCommand,
   dispatchRoleAgentCommand,
   proposeOutreachAfterPipelineAdd,
@@ -61,7 +61,7 @@ export const RoleWorkspacePage = () => {
   );
 };
 
-type WorkspaceTab = "sourcing" | "review" | "coordinator" | "interviewer";
+type WorkspaceTab = "sourcing" | "review";
 
 const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
   const navigate = useNavigate();
@@ -71,6 +71,9 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
   const deal = useRecordContext<Deal>();
   const [commandBusy, setCommandBusy] = useState(false);
   const [approvalBusy, setApprovalBusy] = useState(false);
+  // Loop B: when calibration_no fires the agent asks "What didn't fit?";
+  // the next free-text command goes to calibrationRerank instead of parse-agent-command.
+  const [pendingCalibrationQuestion, setPendingCalibrationQuestion] = useState(false);
   const [linkedInBannerDismissed, setLinkedInBannerDismissed] = useState(
     () =>
       typeof sessionStorage !== "undefined" &&
@@ -155,6 +158,11 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
   const runFreeTextCommand = async (commandText: string) => {
     setCommandBusy(true);
     try {
+      if (pendingCalibrationQuestion) {
+        setPendingCalibrationQuestion(false);
+        await dispatchCalibrationRerank(orchestratorDeps, commandText);
+        return;
+      }
       const isJdPaste =
         commandText.length >= 200 &&
         /responsibilities|requirements|qualifications|experience|skills|about the role|what you.ll do|who you are/i.test(
@@ -172,6 +180,15 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
     } finally {
       setCommandBusy(false);
     }
+  };
+
+  const handleCalibrationYes = () => {
+    void runFreeTextCommand("calibration_yes");
+  };
+
+  const handleCalibrationNo = () => {
+    setPendingCalibrationQuestion(true);
+    void runFreeTextCommand("calibration_no");
   };
 
   const handleApproveProposal = async (
@@ -231,7 +248,6 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
     }
   };
 
-  // Default tab: if candidates exist show Review & Contact, else Sourcing
   const defaultTab: WorkspaceTab =
     !pipelinePending && pipelineCount > 0 ? "review" : "sourcing";
 
@@ -279,7 +295,7 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
           )}
         </div>
 
-        {/* Staged tabs */}
+        {/* Two-tab spine: Sourcing (conversation) + Review & Contact */}
         <Tabs
           defaultValue={defaultTab}
           className="flex-1 flex flex-col min-h-0"
@@ -291,8 +307,6 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
                   [
                     { value: "sourcing", label: "Sourcing" },
                     { value: "review", label: "Review & Contact" },
-                    { value: "coordinator", label: "Coordinator" },
-                    { value: "interviewer", label: "AI Interviewer" },
                   ] as const
                 ).map(({ value, label }) => (
                   <TabsTrigger
@@ -307,7 +321,7 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
             </div>
           </div>
 
-          {/* Sourcing */}
+          {/* Sourcing — conversation is the primary spine */}
           <TabsContent value="sourcing" className="flex-1 mt-0 overflow-y-auto">
             <div className="max-w-4xl mx-auto px-6 py-6 flex flex-col gap-6">
               <RoleConversationTranscript
@@ -316,25 +330,18 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
                 onStop={handleStopProposal}
                 onRefine={handleRefineProposal}
                 actionBusy={approvalBusy || commandBusy}
-              />
-
-              <SourceCandidatesPage
-                initialRoleBriefId={dealId}
-                simplified
-                onCandidateSaved={(candidateId, name) => {
-                  void proposeOutreachAfterPipelineAdd(
-                    orchestratorDeps,
-                    candidateId,
-                    name,
-                  );
-                }}
+                onCalibrationYes={handleCalibrationYes}
+                onCalibrationNo={handleCalibrationNo}
               />
 
               <AddCandidatesPanel dealId={dealId} />
+
+              {/* Coordinator setup — parked as a collapsed panel out of the primary tab bar */}
+              <CoordinatorSetupPanel dealId={dealId} />
             </div>
           </TabsContent>
 
-          {/* Review & Contact */}
+          {/* Review & Contact — pipeline candidates + notes */}
           <TabsContent value="review" className="flex-1 mt-0 overflow-y-auto">
             <div className="max-w-4xl mx-auto px-6 py-6 flex flex-col gap-6">
               <div className="ah-panel p-6">
@@ -368,36 +375,36 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
               </div>
             </div>
           </TabsContent>
-
-          {/* Coordinator */}
-          <TabsContent
-            value="coordinator"
-            className="flex-1 mt-0 overflow-y-auto"
-          >
-            <div className="max-w-2xl mx-auto px-6 py-8">
-              <CoordinatorSettings dealId={dealId} />
-            </div>
-          </TabsContent>
-
-          {/* AI Interviewer */}
-          <TabsContent
-            value="interviewer"
-            className="flex-1 mt-0 overflow-y-auto"
-          >
-            <div className="max-w-2xl mx-auto px-6 py-16 text-center flex flex-col items-center gap-4">
-              <div className="text-4xl">🎙</div>
-              <h2 className="text-lg font-semibold text-foreground">
-                AI Interviewer
-              </h2>
-              <p className="text-sm text-muted-foreground max-w-xs">
-                Automated voice interviews and async screening are coming in
-                Phase 2. Set up your Coordinator in the meantime.
-              </p>
-            </div>
-          </TabsContent>
         </Tabs>
       </div>
     </AgentHShell>
+  );
+};
+
+/* ------------------------------------------------------------------ */
+/* Coordinator setup panel — collapsed by default, parked in Sourcing  */
+/* tab instead of a dedicated top-level tab so the tab bar stays clean */
+/* ------------------------------------------------------------------ */
+
+const CoordinatorSetupPanel = ({ dealId }: { dealId: string }) => {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="ah-panel overflow-hidden">
+      <button
+        type="button"
+        className="w-full flex items-center justify-between px-6 py-3 text-sm text-muted-foreground hover:text-foreground transition-colors"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="font-medium">Coordinator setup (beta)</span>
+        <span>{open ? "▲" : "▼"}</span>
+      </button>
+      {open && (
+        <div className="border-t px-6 py-6">
+          <CoordinatorSettings dealId={dealId} />
+        </div>
+      )}
+    </div>
   );
 };
 

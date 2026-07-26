@@ -78,7 +78,7 @@ export const OpenRolesSummary = () => {
           <Card>
             <CardContent className="py-6 text-sm text-muted-foreground">
               No open roles yet.{" "}
-              <Link to="/jd-intake" className="underline">
+              <Link to="/" className="underline">
                 Create one from a job description
               </Link>
               .

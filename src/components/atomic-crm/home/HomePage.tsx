@@ -5,7 +5,7 @@
 // The roles list and integrations strip remain for quick access to existing roles.
 import { useRef, useState } from "react";
 import { useNavigate, Link } from "react-router";
-import { Plus, Search, Linkedin, Mail, ChevronRight, Send } from "lucide-react";
+import { Search, Linkedin, Mail, ChevronRight, Send } from "lucide-react";
 import {
   useGetIdentity,
   useGetList,
@@ -93,7 +93,12 @@ export const HomePage = () => {
     addTurn({ role: "user", text });
     setBusy(true);
     try {
-      const result = await dataProvider.parseJobDescription(text);
+      // Multi-turn merge: when a prior brief exists, prefix it so the
+      // LLM can update specific fields rather than re-parse from scratch.
+      const inputForParse = parsed
+        ? `[Existing role brief — update only the fields affected by the hiring manager's follow-up, keep all other fields as-is]\n${JSON.stringify(parsed)}\n\nHiring manager follow-up: ${text}`
+        : text;
+      const result = await dataProvider.parseJobDescription(inputForParse);
       setParsed(result as ParsedBrief);
       const skillsSummary =
         (
@@ -200,20 +205,7 @@ export const HomePage = () => {
             </p>
           </div>
 
-          {/* Secondary CTA — visible only when no conversation yet */}
-          {!hasConversation && (
-            <div className="flex gap-3">
-              <Button
-                variant="outline"
-                size="sm"
-                className="gap-2"
-                onClick={() => navigate("/jd-intake")}
-              >
-                <Plus className="h-3.5 w-3.5" />
-                Paste full JD
-              </Button>
-            </div>
-          )}
+          {/* Secondary "paste full JD" lives in the command bar footer hint below */}
 
           {/* Conversation transcript */}
           {hasConversation && (

@@ -6,7 +6,12 @@ export type ActionTier = "read" | "reversible" | "leaves_platform";
 
 export type ParsedAgentAction =
   | "create_role"
+  | "start_sourcing"
   | "continue_sourcing"
+  | "calibration_yes"
+  | "calibration_no"
+  | "show_more_like_this"
+  | "relax_and_research"
   | "relax_criterion"
   | "request_resume"
   | "reject_candidates"
@@ -23,7 +28,8 @@ export type ConversationTurnKind =
   | "refinement"
   | "decision"
   | "result"
-  | "candidate_card";
+  | "candidate_card"
+  | "calibration_question";
 
 export type ConversationTurnMetadata = {
   kind?: ConversationTurnKind;
@@ -65,6 +71,9 @@ export type ConversationTurnMetadata = {
       label: string;
       status: "found" | "inferred" | "missing";
     }>;
+    // Loop B calibration cards: external vendor id (not yet saved to pipeline).
+    calibration_external_id?: string;
+    why_fit?: string;
   };
 };
 
@@ -73,7 +82,12 @@ const ACTION_TIERS: Record<ParsedAgentAction, ActionTier> = {
   show_candidates: "read",
   unknown: "read",
   create_role: "reversible",
+  start_sourcing: "reversible",
   continue_sourcing: "reversible",
+  calibration_yes: "reversible",
+  calibration_no: "reversible",
+  show_more_like_this: "reversible",
+  relax_and_research: "reversible",
   relax_criterion: "reversible",
   reject_candidates: "reversible",
   request_resume: "leaves_platform",

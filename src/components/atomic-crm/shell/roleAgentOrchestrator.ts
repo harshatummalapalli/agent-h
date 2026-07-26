@@ -74,8 +74,47 @@ async function executeReversibleOrRead(
   parsed: ParsedCommand,
 ): Promise<{ summary: string; undo?: ConversationTurnMetadata["undo"] }> {
   if (parsed.action === "create_role") {
-    deps.navigate("/jd-intake");
+    deps.navigate("/");
     return { summary: parsed.explanation };
+  }
+
+  if (parsed.action === "start_sourcing") {
+    const batch = await deps.dataProvider.startCalibrationSourcing(deps.dealId);
+    if (batch.candidates.length === 0) {
+      return { summary: "I couldn't find candidates to show right now. Try relaxing the criteria or searching again." };
+    }
+    void appendCalibrationCardTurns(deps, batch);
+    return {
+      summary: `Searching… found ${batch.pool_size} candidates. Here are the top ${batch.candidates.length}:`,
+    };
+  }
+
+  if (parsed.action === "calibration_yes" || parsed.action === "show_more_like_this") {
+    const batch = await deps.dataProvider.calibrationNextBatch(deps.dealId);
+    if (batch.pool_exhausted && batch.candidates.length === 0) {
+      return { summary: "I've shown everyone in the current pool. Say 'relax and search again' to widen the criteria, or 'start sourcing' to pull a fresh batch." };
+    }
+    void appendCalibrationCardTurns(deps, batch);
+    return { summary: batch.pool_exhausted ? `Last ${batch.candidates.length} from the current pool:` : `Here are the next ${batch.candidates.length}:` };
+  }
+
+  if (parsed.action === "calibration_no") {
+    await appendAgentTurn(
+      deps,
+      "Got it — what didn't fit? (e.g. seniority, location, company size, tech stack)",
+      { kind: "calibration_question" },
+    );
+    deps.invalidateTranscript();
+    return { summary: "" };
+  }
+
+  if (parsed.action === "relax_and_research") {
+    const batch = await deps.dataProvider.startCalibrationSourcing(deps.dealId);
+    if (batch.candidates.length === 0) {
+      return { summary: "Searched with wider criteria but still found no new candidates. Try adjusting the role requirements." };
+    }
+    void appendCalibrationCardTurns(deps, batch);
+    return { summary: `Searching with wider criteria… here are the top ${batch.candidates.length} from a fresh pull:` };
   }
 
   if (parsed.action === "show_roles") {
@@ -369,6 +408,37 @@ export async function appendCandidateCardTurns(
   deps.invalidateTranscript();
 }
 
+// Loop B calibration: append candidate cards from a CalibrationBatch.
+// Uses external_id (vendor id) as the card identifier since these candidates
+// are not yet saved to deal_candidates (cache ≠ pipeline).
+async function appendCalibrationCardTurns(
+  deps: RoleAgentOrchestratorDeps,
+  batch: Awaited<ReturnType<typeof deps.dataProvider.calibrationNextBatch>>,
+): Promise<void> {
+  const dealId = Number(deps.dealId);
+  for (const c of batch.candidates) {
+    await appendAgentTurn(
+      deps,
+      `${c.name}${c.headline ? ` — ${c.headline}` : ""}${c.why_fit ? `\n${c.why_fit}` : ""}`,
+      {
+        kind: "candidate_card",
+        candidate_card: {
+          candidate_id: 0,
+          deal_id: dealId,
+          name: c.name,
+          headline: c.headline,
+          linkedin_url: c.linkedin_url ?? null,
+          match_score: c.match_score,
+          must_haves: [],
+          calibration_external_id: c.external_id,
+          why_fit: c.why_fit,
+        },
+      },
+    );
+  }
+  deps.invalidateTranscript();
+}
+
 // TASK-004: After a candidate is added to the pipeline, propose outreach
 // in the transcript (Tier 3 gate — recruiter must approve before sending).
 export async function proposeOutreachAfterPipelineAdd(
@@ -453,6 +523,31 @@ export async function proposeOutreachAfterPipelineAdd(
   } catch {
     // Non-fatal — outreach was prepared, transcript write failed.
   }
+}
+
+// Called when the recruiter answers the "What didn't fit?" calibration question.
+// Bypasses parse-agent-command — the context makes intent unambiguous.
+export async function dispatchCalibrationRerank(
+  deps: RoleAgentOrchestratorDeps,
+  reason: string,
+): Promise<void> {
+  await appendRecruiterTurn(deps, reason, { kind: "command" });
+  const batch = await deps.dataProvider.calibrationRerank(deps.dealId, reason).catch(() => null);
+  if (!batch || batch.candidates.length === 0) {
+    await appendAgentTurn(
+      deps,
+      "I've adjusted the search based on that feedback — but the current pool doesn't have more candidates to show. Say 'relax and search again' to pull fresh results.",
+      { kind: "result", action: "calibration_no", status: "executed" },
+    );
+  } else {
+    await appendAgentTurn(
+      deps,
+      `Got it — re-ranked based on that. Here are ${batch.candidates.length} better-fitting candidates:`,
+      { kind: "result", action: "calibration_no", status: "executed" },
+    );
+    void appendCalibrationCardTurns(deps, batch);
+  }
+  deps.invalidateTranscript();
 }
 
 export async function dispatchRoleAgentCommand(

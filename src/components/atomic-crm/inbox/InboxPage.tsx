@@ -103,7 +103,7 @@ export const InboxPage = () => {
           status: "success",
           summary: parsed.explanation,
         });
-        navigate("/jd-intake");
+        navigate("/");
       } else if (
         parsed.action === "continue_sourcing" &&
         parsed.deal_id != null
@@ -292,7 +292,7 @@ export const InboxPage = () => {
               built page with no link pointing to it anywhere in the UI). */}
             <button
               className="ah-btn-primary"
-              onClick={() => navigate("/jd-intake")}
+              onClick={() => navigate("/")}
               style={{
                 height: 32,
                 padding: "0 14px",

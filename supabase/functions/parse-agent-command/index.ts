@@ -79,7 +79,12 @@ const PARSE_COMMAND_TOOL = {
         type: "string",
         enum: [
           "create_role",
+          "start_sourcing",
           "continue_sourcing",
+          "calibration_yes",
+          "calibration_no",
+          "show_more_like_this",
+          "relax_and_research",
           "relax_criterion",
           "request_resume",
           "send_first_outreach",
@@ -89,7 +94,7 @@ const PARSE_COMMAND_TOOL = {
           "unknown",
         ],
         description:
-          "create_role: the recruiter wants to START A NEW ROLE/JOB/REQ -- phrases like 'create a new role', 'I need to hire a...', 'let's open a req for...', 'start sourcing for a new position'. Navigates to the role-intake page; does not need deal_id (there's no existing role yet). continue_sourcing: run another sourcing pass for a role. relax_criterion: turn off one active must-have/exclude criterion for a role. request_resume: ask selected candidate(s) to send a resume. send_first_outreach: send the first outreach message to a candidate (LinkedIn connection note/InMail or email) — phrases like 'reach out to', 'send first outreach', 'contact them', 'message on LinkedIn'. reject_candidates: remove selected candidate(s) from a role's pipeline. show_candidates: the recruiter wants to SEE/browse/list the candidates or resumes sourced for one specific role (navigates there, resolve deal_id from open_deals or current_deal_id). show_roles: the recruiter wants to see/browse/list all roles/jobs, not scoped to one role. unknown: none of the above apply.",
+          "create_role: recruiter wants to START A NEW ROLE/JOB/REQ -- phrases like 'create a new role', 'I need to hire a...', 'start sourcing for a new position'. Navigates home; no deal_id needed. start_sourcing: recruiter signals they are done with intake and wants to search NOW for the current role -- phrases like 'start sourcing', 'find candidates', 'search now', 'that\\'s enough', 'go ahead', 'begin'. Triggers the calibration pull for current_deal_id. continue_sourcing: run another sourcing pass for a role (legacy, kept for backward compat). calibration_yes: recruiter signals the shown candidates look good -- 'yes', 'looks good', 'good fit', 'they look right', 'approved'. Show the next batch from the ranked cache. calibration_no: recruiter signals the shown candidates are NOT a fit -- 'no', 'not a fit', 'wrong profile', 'pass', 'none of these'. Will prompt for a reason then rerank. show_more_like_this: recruiter wants more candidates similar to the ones already shown positively -- 'show more like this', 'more of these', 'keep going'. relax_and_research: recruiter wants to loosen a criterion and run a fresh search -- 'relax [criterion] and search again', 'widen the search', 'broaden the criteria'. relax_criterion: turn off one active must-have/exclude criterion for a role. request_resume: ask selected candidate(s) to send a resume. send_first_outreach: send first contact to a candidate (LinkedIn/email). reject_candidates: remove selected candidate(s) from pipeline. show_candidates: SEE/browse candidates for a specific role. show_roles: see all roles/jobs. unknown: none of the above.",
       },
       deal_id: {
         type: ["number", "null"],

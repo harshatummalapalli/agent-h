@@ -23,8 +23,17 @@ export type FreePortalSearchDeps = {
   setCandidateDbIds: SetState<Record<string, number>>;
 };
 
+// Temporary: mirrors dataProvider.ts kill-switch — set to true to re-enable.
+const FREE_PORTALS_ENABLED = false;
+
 export function createFreePortalAndXrayHandlers(d: FreePortalSearchDeps) {
   const handleSearchFreePortals = async () => {
+    if (!FREE_PORTALS_ENABLED) {
+      d.notify("Free portals temporarily disabled (Crustdata E2E testing)", {
+        type: "info",
+      });
+      return;
+    }
     if (!d.selectedId) return;
     d.setFreePortalLoading(true);
     try {

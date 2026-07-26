@@ -46,6 +46,10 @@ const BATCH_SIZE = 5;
 // before presenting thinly-sourced results to the recruiter.
 const CRUSTDATA_POOL_FLOOR = BATCH_SIZE * 3;
 
+// Temporary: Crustdata E2E testing flag.
+// Set FORCE_CRUSTDATA_ONLY = false to re-enable bench + normal pool gating.
+const FORCE_CRUSTDATA_ONLY = true;
+
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
@@ -308,11 +312,16 @@ Deno.serve(async (req: Request) => {
     const rawCandidates = body.raw_candidates ?? [];
     const roleBrief = body.role_brief ?? {};
 
-    // Talent Bench: pull non-expired candidates from other deals in tenant.
-    const benchCandidates = await fetchBenchCandidates(deal_id, authHeader);
+    // Talent Bench: skipped when FORCE_CRUSTDATA_ONLY is on so bench alone
+    // can't satisfy the CRUSTDATA_POOL_FLOOR gate and prevent Crustdata from running.
+    const benchCandidates = FORCE_CRUSTDATA_ONLY
+      ? []
+      : await fetchBenchCandidates(deal_id, authHeader);
 
     // Merge bench + cheap (free-portal + Exa) candidates passed by the client,
     // deduping by linkedin_url then id.
+    // When FORCE_CRUSTDATA_ONLY is on, rawCandidates is also [] (client skips
+    // free portals + Exa), so merged starts empty and Crustdata always runs.
     const seen = new Set<string>();
     const merged: RawCandidate[] = [];
     for (const c of [...benchCandidates, ...rawCandidates]) {
@@ -322,10 +331,12 @@ Deno.serve(async (req: Request) => {
       merged.push(c);
     }
 
-    // Crustdata gate: if bench + cheap pool is thin, call Crustdata server-side.
-    // This keeps Crustdata off the client (no key exposure) and off cheap searches
-    // where we already have enough candidates for calibration.
-    if (merged.length < CRUSTDATA_POOL_FLOOR && CRUSTDATA_API_KEY) {
+    // Crustdata gate: always run when FORCE_CRUSTDATA_ONLY is on (Crustdata E2E);
+    // otherwise only run when the pool is below the floor to avoid redundant calls.
+    if (
+      (FORCE_CRUSTDATA_ONLY || merged.length < CRUSTDATA_POOL_FLOOR) &&
+      CRUSTDATA_API_KEY
+    ) {
       const crustdataCandidates = await searchCrustdataForRoleBrief(
         roleBrief,
         // Request enough to fill the gap; cap at 30 to stay within API budget.

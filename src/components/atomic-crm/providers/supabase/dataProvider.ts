@@ -34,6 +34,10 @@ export type CalibrationCandidate = {
   linkedin_url?: string | null;
   location_name?: string | null;
   from_bench?: boolean;
+  must_haves?: Array<{
+    label: string;
+    status: "found" | "inferred" | "missing";
+  }>;
 };
 
 export type CalibrationBatch = {
@@ -1888,7 +1892,7 @@ const getDataProviderWithCustomMethods = () => {
       return data;
     },
 
-    // Return the next 3-5 candidates from the server-side pool.
+    // Return the next 3 candidates from the server-side pool (BATCH_SIZE=3).
     async calibrationNextBatch(dealId: Identifier): Promise<CalibrationBatch> {
       const { data, error } =
         await getSupabaseClient().functions.invoke<CalibrationBatch>(

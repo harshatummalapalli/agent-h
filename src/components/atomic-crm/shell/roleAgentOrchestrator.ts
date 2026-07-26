@@ -473,7 +473,7 @@ async function appendCalibrationCardTurns(
           linkedin_url: c.linkedin_url ?? null,
           location_name: c.location_name ?? null,
           match_score: c.match_score,
-          must_haves: [],
+          must_haves: (c.must_haves ?? []).slice(0, 5),
           calibration_external_id: c.external_id,
           why_fit: c.why_fit,
         },

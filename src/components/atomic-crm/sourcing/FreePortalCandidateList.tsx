@@ -1,9 +1,5 @@
 import { Button } from "@/components/ui/button";
-import {
-  AH_CALLOUT_WARN,
-  EMPTY_OFFER_DRAFT,
-  type PdlCandidate,
-} from "./sourcingTypes";
+import { AH_CALLOUT_WARN, type PdlCandidate } from "./sourcingTypes";
 import type { useCandidateSourcing } from "./useCandidateSourcing";
 import { CalibrationFeedbackWidget } from "./CalibrationFeedbackWidget";
 import { CandidateActionsPanel } from "./CandidateActionsPanel";
@@ -25,22 +21,14 @@ export function FreePortalCandidateList({
       {s.freePortalCandidates.map((candidate) => {
         const saveState = s.saveStates[candidate.id] ?? "idle";
         const candidateId = s.candidateDbIds[candidate.id];
-        const fitState = s.fitStates[candidate.id] ?? "idle";
-        const fitResult = s.fitResults[candidate.id];
         const contactState = s.contactEnrichStates[candidate.id] ?? "idle";
         const contactResult = s.contactEnrichResults[candidate.id];
         const devSignalState = s.devSignalEnrichStates[candidate.id] ?? "idle";
         const devSignalResult = s.devSignalEnrichResults[candidate.id];
-        const scoreState = s.scoreStates[candidate.id] ?? "idle";
-        const scoreResult = s.scoreResults[candidate.id];
         const interviewState = s.interviewStates[candidate.id] ?? "idle";
         const interviewResult = s.interviewResults[candidate.id];
         const resumeState = s.resumeStates[candidate.id] ?? "idle";
         const resumeInfo = s.resumeInfos[candidate.id];
-        const offerState = s.offerStates[candidate.id] ?? "idle";
-        const offerInfo = s.offerInfos[candidate.id];
-        const offerFormIsOpen = Boolean(s.offerFormOpen[candidate.id]);
-        const offerDraft = s.offerDrafts[candidate.id] ?? EMPTY_OFFER_DRAFT;
         const calibEntryState =
           s.calibrationEntryStates[candidate.id] ?? "idle";
         const calibSubmitted = calibEntryState === "submitted";
@@ -159,12 +147,6 @@ export function FreePortalCandidateList({
                 fullProfile={undefined}
                 fullProfileIsOpen={false}
                 onViewFullProfile={() => {}}
-                scoreState={scoreState}
-                scoreResult={scoreResult}
-                onScoreCandidate={() => s.handleScoreCandidate(candidate)}
-                fitState={fitState}
-                fitResult={fitResult}
-                onAssessFit={() => s.handleAssessFit(candidate)}
                 interviewState={interviewState}
                 interviewResult={interviewResult}
                 onCreateBookingLink={() =>
@@ -211,31 +193,6 @@ export function FreePortalCandidateList({
                   s.handleCancelResumePreview(String(candidate.id))
                 }
                 resumeSendState={s.resumeSendStates[candidate.id] ?? "idle"}
-                offerState={offerState}
-                offerInfo={offerInfo}
-                offerFormIsOpen={offerFormIsOpen}
-                offerDraft={offerDraft}
-                onToggleOfferForm={() => s.handleToggleOfferForm(candidate)}
-                onOfferDraftChange={(field, value) =>
-                  s.handleOfferDraftChange(String(candidate.id), field, value)
-                }
-                onSendOffer={() => s.handlePrepareOffer(candidate)}
-                offerEmailPreview={s.offerEmailPreviews[candidate.id]}
-                onOfferPreviewChange={(next) =>
-                  s.setOfferEmailPreviews((prev) => ({
-                    ...prev,
-                    [candidate.id]: next,
-                  }))
-                }
-                onConfirmSendOffer={() => s.handleConfirmSendOffer(candidate)}
-                onCancelOfferPreview={() =>
-                  s.handleCancelOfferPreview(String(candidate.id))
-                }
-                offerSendState={s.offerSendStates[candidate.id] ?? "idle"}
-                onCheckOffer={() => s.handleCheckOffer(candidate)}
-                onMarkOfferStatus={(status) =>
-                  s.handleMarkOfferStatus(candidate, status)
-                }
                 hasEmail={
                   Boolean(candidate.emails?.length) ||
                   Boolean(s.contactEnrichResults[candidate.id]?.email)

@@ -2,13 +2,9 @@
 // importers keep working without path changes.
 export {
   EmailPreviewApprovalPanel,
-  FitAssessmentPanel,
   FullProfilePanel,
   InterviewPanel,
-  OfferForm,
-  OfferPanel,
   ResumePanel,
-  ScorePanel,
 } from "./candidatePanels";
 export { CalibrationFeedbackWidget } from "./CalibrationFeedbackWidget";
 export { CandidateActionsPanel } from "./CandidateActionsPanel";

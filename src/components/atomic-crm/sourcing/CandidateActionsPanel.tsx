@@ -1,13 +1,9 @@
 import { Button } from "@/components/ui/button";
 import {
   EmailPreviewApprovalPanel,
-  FitAssessmentPanel,
   FullProfilePanel,
   InterviewPanel,
-  OfferForm,
-  OfferPanel,
   ResumePanel,
-  ScorePanel,
 } from "./candidatePanels";
 import {
   AH_CALLOUT_WARN,
@@ -15,14 +11,10 @@ import {
   type DevSignalEnrichResult,
   type EmailPreview,
   type EnrichState,
-  type FitAssessmentResult,
   type FullProfileData,
   type InterviewResult,
-  type OfferDraft,
-  type OfferInfo,
   type PdlCandidate,
   type ResumeInfo,
-  type ScoreResult,
 } from "./sourcingTypes";
 
 export function CandidateActionsPanel({
@@ -38,12 +30,6 @@ export function CandidateActionsPanel({
   fullProfile,
   fullProfileIsOpen,
   onViewFullProfile,
-  scoreState,
-  scoreResult,
-  onScoreCandidate,
-  fitState,
-  fitResult,
-  onAssessFit,
   interviewState,
   interviewResult,
   onCreateBookingLink,
@@ -62,20 +48,6 @@ export function CandidateActionsPanel({
   onConfirmSendResume,
   onCancelResumePreview,
   resumeSendState,
-  offerState,
-  offerInfo,
-  offerFormIsOpen,
-  offerDraft,
-  onToggleOfferForm,
-  onOfferDraftChange,
-  onSendOffer,
-  offerEmailPreview,
-  onOfferPreviewChange,
-  onConfirmSendOffer,
-  onCancelOfferPreview,
-  offerSendState,
-  onCheckOffer,
-  onMarkOfferStatus,
   hasEmail = true,
   candidateLinkedInUrl,
   onPrepareOutreach,
@@ -93,12 +65,6 @@ export function CandidateActionsPanel({
   fullProfile: FullProfileData | undefined;
   fullProfileIsOpen: boolean;
   onViewFullProfile: () => void;
-  scoreState: EnrichState;
-  scoreResult: ScoreResult | undefined;
-  onScoreCandidate: () => void;
-  fitState: EnrichState;
-  fitResult: FitAssessmentResult | undefined;
-  onAssessFit: () => void;
   interviewState: EnrichState;
   interviewResult: InterviewResult | undefined;
   onCreateBookingLink: () => void;
@@ -117,20 +83,6 @@ export function CandidateActionsPanel({
   onConfirmSendResume?: () => void;
   onCancelResumePreview?: () => void;
   resumeSendState?: EnrichState;
-  offerState: EnrichState;
-  offerInfo: OfferInfo | undefined;
-  offerFormIsOpen: boolean;
-  offerDraft: OfferDraft;
-  onToggleOfferForm: () => void;
-  onOfferDraftChange: (field: keyof OfferDraft, value: string) => void;
-  onSendOffer: () => void;
-  offerEmailPreview?: EmailPreview;
-  onOfferPreviewChange?: (next: EmailPreview) => void;
-  onConfirmSendOffer?: () => void;
-  onCancelOfferPreview?: () => void;
-  offerSendState?: EnrichState;
-  onCheckOffer: () => void;
-  onMarkOfferStatus: (status: "accepted" | "declined" | "negotiating") => void;
   hasEmail?: boolean;
   candidateLinkedInUrl?: string | null;
   onPrepareOutreach?: () => void;
@@ -179,30 +131,6 @@ export function CandidateActionsPanel({
                 : "View full profile"}
           </Button>
         )}
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={scoreState === "loading"}
-          onClick={onScoreCandidate}
-        >
-          {scoreState === "loading"
-            ? "Scoring..."
-            : scoreResult
-              ? "Re-score"
-              : "Score candidate"}
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={fitState === "loading"}
-          onClick={onAssessFit}
-        >
-          {fitState === "loading"
-            ? "Assessing..."
-            : fitResult
-              ? "Re-assess"
-              : "Assess fit"}
-        </Button>
         <Button
           variant="outline"
           size="sm"
@@ -265,51 +193,6 @@ export function CandidateActionsPanel({
               : "Reach out on LinkedIn"}
           </Button>
         )}
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={offerState === "loading"}
-          onClick={onToggleOfferForm}
-        >
-          {offerInfo ? "Re-send offer" : "Send offer"}
-        </Button>
-        {offerInfo &&
-          (offerInfo.status === "sent" || offerInfo.status === "responded") && (
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={offerState === "loading"}
-              onClick={onCheckOffer}
-            >
-              Check for reply
-            </Button>
-          )}
-        {offerInfo &&
-          (offerInfo.status === "sent" ||
-            offerInfo.status === "responded" ||
-            offerInfo.status === "negotiating") && (
-            <>
-              <Button size="sm" onClick={() => onMarkOfferStatus("accepted")}>
-                Mark accepted
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => onMarkOfferStatus("declined")}
-              >
-                Mark declined
-              </Button>
-              {offerInfo.status !== "negotiating" && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => onMarkOfferStatus("negotiating")}
-                >
-                  Mark negotiating
-                </Button>
-              )}
-            </>
-          )}
       </div>
 
       {contactResult && (
@@ -384,8 +267,6 @@ export function CandidateActionsPanel({
       {showFullProfile && fullProfileIsOpen && fullProfile && (
         <FullProfilePanel profile={fullProfile} />
       )}
-      {scoreResult && <ScorePanel result={scoreResult} />}
-      {fitResult && <FitAssessmentPanel result={fitResult} />}
       {interviewResult && <InterviewPanel result={interviewResult} />}
 
       {bookingAwaitingConfirm &&
@@ -449,30 +330,6 @@ export function CandidateActionsPanel({
             confirmLabel="Send resume request"
           />
         )}
-
-      {offerFormIsOpen && (
-        <OfferForm
-          draft={offerDraft}
-          onChange={onOfferDraftChange}
-          onSubmit={onSendOffer}
-          onCancel={onToggleOfferForm}
-          submitting={offerState === "loading"}
-        />
-      )}
-      {offerEmailPreview &&
-        onOfferPreviewChange &&
-        onConfirmSendOffer &&
-        onCancelOfferPreview && (
-          <EmailPreviewApprovalPanel
-            preview={offerEmailPreview}
-            onPreviewChange={onOfferPreviewChange}
-            onConfirm={onConfirmSendOffer}
-            onCancel={onCancelOfferPreview}
-            confirming={offerSendState === "loading"}
-            confirmLabel="Send offer"
-          />
-        )}
-      {!offerFormIsOpen && offerInfo && <OfferPanel info={offerInfo} />}
     </div>
   );
 }

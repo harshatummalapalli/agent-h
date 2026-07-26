@@ -330,11 +330,7 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
                 }}
               />
 
-              <div className="ah-panel p-6 flex flex-col gap-6">
-                <ManualResumeUploadPanel dealId={dealId} />
-                <Separator />
-                <BulkResumeUploadPanel dealId={dealId} />
-              </div>
+              <AddCandidatesPanel dealId={dealId} />
             </div>
           </TabsContent>
 
@@ -816,6 +812,53 @@ const BulkResumeUploadPanel = ({ dealId }: { dealId: string }) => {
             ))}
           </ul>
         </div>
+      )}
+    </div>
+  );
+};
+
+/* ------------------------------------------------------------------ */
+/* AddCandidatesPanel — unified "Add candidates" entry point           */
+/* Wraps ManualResumeUploadPanel and BulkResumeUploadPanel into one    */
+/* button + mode switcher so the Sourcing tab stays uncluttered.       */
+/* ------------------------------------------------------------------ */
+
+const AddCandidatesPanel = ({ dealId }: { dealId: string }) => {
+  const [mode, setMode] = useState<"hidden" | "one" | "bulk">("hidden");
+
+  return (
+    <div className="ah-panel p-6 flex flex-col gap-4">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-medium tracking-wide uppercase text-muted-foreground">
+          Add candidates
+        </h3>
+        {mode === "hidden" ? (
+          <div className="flex gap-2">
+            <Button size="sm" variant="outline" onClick={() => setMode("one")}>
+              One person
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => setMode("bulk")}>
+              Bulk upload
+            </Button>
+          </div>
+        ) : (
+          <Button size="sm" variant="ghost" onClick={() => setMode("hidden")}>
+            ✕ Close
+          </Button>
+        )}
+      </div>
+
+      {mode === "one" && (
+        <>
+          <Separator />
+          <ManualResumeUploadPanel dealId={dealId} />
+        </>
+      )}
+      {mode === "bulk" && (
+        <>
+          <Separator />
+          <BulkResumeUploadPanel dealId={dealId} />
+        </>
       )}
     </div>
   );

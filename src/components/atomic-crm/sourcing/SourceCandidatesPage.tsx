@@ -21,7 +21,7 @@ import {
 import "../inbox/agent-h-theme.css";
 
 // `initialRoleBriefId` is passed so this component behaves as a "sourcing
-// panel" for one already-chosen role brief -- no dropdown, no NL-search
+// panel" for one already-chosen role brief — no dropdown, no NL-search
 // toggle, no page-level heading (the workspace page owns that). Standalone
 // use at `/source-candidates` (no prop) keeps working exactly as before.
 export const SourceCandidatesPage = ({
@@ -59,7 +59,7 @@ export const SourceCandidatesPage = ({
     <div
       className={
         embedded
-          ? "flex flex-col gap-6"
+          ? "flex flex-col gap-4"
           : "flex flex-col gap-6 max-w-3xl mx-auto p-6"
       }
     >
@@ -67,12 +67,8 @@ export const SourceCandidatesPage = ({
         <div>
           <h1 className="text-2xl font-semibold">Source Candidates</h1>
           <p className="text-muted-foreground text-sm">
-            Pick a role brief and preview how many people match before pulling
-            any real candidate records -- previewing costs almost nothing.
-            Results are sorted by match score (best first), but nothing is ever
-            hidden -- every candidate returned stays visible and reviewable.
-            Click "Add to pipeline" on anyone worth tracking; nothing is saved
-            just for showing up in a search result.
+            Pick a role brief and source the best matches. Results are sorted by
+            fit score. Click "Add to pipeline" on anyone worth tracking.
           </p>
         </div>
       )}
@@ -116,8 +112,10 @@ export const SourceCandidatesPage = ({
         </div>
       )}
 
+      {/* Compact role brief chip — collapses to one line, expands on click */}
       <RoleBriefPanel s={s} embedded={embedded} />
 
+      {/* One-click "Source candidates" for embedded/simplified view */}
       {simplified && s.selectedId && s.stage === "idle" && (
         <div className="flex flex-col gap-2">
           <Button
@@ -133,16 +131,21 @@ export const SourceCandidatesPage = ({
                 : "Source candidates"}
           </Button>
           <p className="text-xs text-muted-foreground">
-            Finds people matching this role and saves them to your pipeline (up
-            to 25 shown, all saved).
+            Fetches up to 100 people matching this role — ranked by fit, top 25
+            shown with a brief explanation of why they could be a match. All 100
+            are saved to your pipeline.
           </p>
         </div>
       )}
 
+      {/* Refine panel — steering input + learned criteria (sidebar is primary
+          on the workspace; this is the inline fallback for standalone use) */}
       <SourcingControlPanel s={s} embedded={embedded} />
 
+      {/* Search actions: preview + restore + Advanced › (X-ray, free portals) */}
       <SearchActionsSection s={s} simplified={simplified} />
 
+      {/* Free portal results (non-simplified standalone only) */}
       {s.selectedId && !simplified && <FreePortalSection s={s} />}
 
       {s.freePortalCandidates.length > 0 && (
@@ -152,7 +155,8 @@ export const SourceCandidatesPage = ({
         />
       )}
 
-      <XrayAssistSection s={s} />
+      {/* X-ray Assist only shown on standalone route (not embedded) */}
+      {!simplified && <XrayAssistSection s={s} />}
 
       {s.stage !== "idle" && (
         <div className="flex flex-col gap-4 border rounded-lg p-4">

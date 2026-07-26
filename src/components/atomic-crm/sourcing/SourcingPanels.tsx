@@ -1,6 +1,7 @@
 // Extracted panel components for SourceCandidatesPage — pure display,
 // all state/handlers flow in via the `s` sourcing context prop.
 
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import {
@@ -19,7 +20,7 @@ type SourcingContext = ReturnType<typeof useCandidateSourcing>;
 const CRITERIA_IMPACT_DISABLED = false;
 
 // ---------------------------------------------------------------------------
-// RoleBriefPanel — "Searching for:" detail + clarifying questions
+// RoleBriefPanel — compact collapsible "Searching for:" chip
 // ---------------------------------------------------------------------------
 
 export function RoleBriefPanel({
@@ -30,103 +31,119 @@ export function RoleBriefPanel({
   embedded: boolean;
 }) {
   const d = s.roleBriefDetail;
+  const [expanded, setExpanded] = useState(false);
   if (!d) return null;
+
+  // Build a compact one-liner summary
+  const summaryParts = [
+    d.seniority ? `${d.seniority} ` : "",
+    d.name ?? "(untitled role)",
+    d.location ? ` · ${d.location}` : "",
+    d.years_experience_min || d.years_experience_max
+      ? ` · ${d.years_experience_min ?? "0"}–${d.years_experience_max ?? "any"}y exp`
+      : "",
+  ].join("");
+
   return (
-    <div className={sourcingPanelClass(embedded, "flex flex-col gap-1.5 p-4")}>
-      <h3 className="text-sm font-medium">Searching for:</h3>
-      <ul className="text-sm list-disc pl-4 flex flex-col gap-0.5">
-        <li>
-          {d.name ?? "(untitled role)"}
-          {d.seniority ? ` · ${d.seniority}` : ""}
-        </li>
-        {d.location && <li>{d.location}</li>}
-        {(d.years_experience_min || d.years_experience_max) && (
-          <li>
-            {d.years_experience_min ?? "0"}
-            {d.years_experience_max ? `–${d.years_experience_max}` : "+"} years
-            experience
-          </li>
-        )}
-        {d.industry && <li>Industry (preferred): {d.industry}</li>}
-        {d.must_have_keywords && d.must_have_keywords.length > 0 && (
-          <li>Must have: {d.must_have_keywords.join(", ")}</li>
-        )}
-        {d.required_skills && d.required_skills.length > 0 && (
-          <li>Skills: {d.required_skills.join(", ")}</li>
-        )}
-        {d.nice_to_have_keywords && d.nice_to_have_keywords.length > 0 && (
-          <li>Nice to have: {d.nice_to_have_keywords.join(", ")}</li>
-        )}
-        {(d.company_type || d.company_size_min || d.company_size_max) && (
-          <li>
-            Companies (preferred):{" "}
-            {[
-              d.company_type,
-              d.company_size_min || d.company_size_max
-                ? `${d.company_size_min ?? "any"}-${d.company_size_max ?? "any"} employees`
-                : null,
-            ]
-              .filter(Boolean)
-              .join(", ")}
-          </li>
-        )}
-        {d.excluded_companies && d.excluded_companies.length > 0 && (
-          <li>Excluding companies: {d.excluded_companies.join(", ")}</li>
-        )}
-        {d.exclusion_keywords && d.exclusion_keywords.length > 0 && (
-          <li>Excluding: {d.exclusion_keywords.join(", ")}</li>
-        )}
-        {d.past_titles && d.past_titles.length > 0 && (
-          <li>Boosting past titles: {d.past_titles.join(", ")}</li>
-        )}
-        {d.past_companies && d.past_companies.length > 0 && (
-          <li>Boosting past companies: {d.past_companies.join(", ")}</li>
-        )}
-      </ul>
+    <div className={sourcingPanelClass(embedded, "p-3")}>
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="w-full flex items-center justify-between gap-2 text-left"
+      >
+        <div className="flex items-center gap-2 flex-wrap min-w-0">
+          <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide shrink-0">
+            Searching for
+          </span>
+          <span className="text-sm font-medium truncate">{summaryParts}</span>
+        </div>
+        <span className="text-xs text-muted-foreground shrink-0">
+          {expanded ? "▲" : "▼"}
+        </span>
+      </button>
 
-      {d.clarifying_questions &&
-        d.clarifying_questions.length > 0 &&
-        !d.clarifying_questions_dismissed && (
-          <div
-            className={`flex flex-col gap-2 mt-1 rounded-md p-3 ${AH_CALLOUT_WARN}`}
-          >
-            <h4 className="text-xs font-medium">
-              Worth confirming before sourcing further
-            </h4>
-            <ul className="list-disc pl-5 text-xs">
-              {d.clarifying_questions.map((question, i) => (
-                <li key={i}>{question}</li>
-              ))}
-            </ul>
-            <div>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={s.handleDismissClarifyingQuestions}
+      {expanded && (
+        <div className="mt-3 border-t pt-3">
+          <ul className="text-sm list-disc pl-4 flex flex-col gap-0.5">
+            {d.must_have_keywords && d.must_have_keywords.length > 0 && (
+              <li>Must have: {d.must_have_keywords.join(", ")}</li>
+            )}
+            {d.required_skills && d.required_skills.length > 0 && (
+              <li>Skills: {d.required_skills.join(", ")}</li>
+            )}
+            {d.nice_to_have_keywords && d.nice_to_have_keywords.length > 0 && (
+              <li>Nice to have: {d.nice_to_have_keywords.join(", ")}</li>
+            )}
+            {d.industry && <li>Industry (preferred): {d.industry}</li>}
+            {(d.company_type || d.company_size_min || d.company_size_max) && (
+              <li>
+                Companies:{" "}
+                {[
+                  d.company_type,
+                  d.company_size_min || d.company_size_max
+                    ? `${d.company_size_min ?? "any"}–${d.company_size_max ?? "any"} employees`
+                    : null,
+                ]
+                  .filter(Boolean)
+                  .join(", ")}
+              </li>
+            )}
+            {d.excluded_companies && d.excluded_companies.length > 0 && (
+              <li>Excluding: {d.excluded_companies.join(", ")}</li>
+            )}
+            {d.past_titles && d.past_titles.length > 0 && (
+              <li>Boosting past titles: {d.past_titles.join(", ")}</li>
+            )}
+            {d.past_companies && d.past_companies.length > 0 && (
+              <li>Boosting past companies: {d.past_companies.join(", ")}</li>
+            )}
+          </ul>
+
+          {d.clarifying_questions &&
+            d.clarifying_questions.length > 0 &&
+            !d.clarifying_questions_dismissed && (
+              <div
+                className={`flex flex-col gap-2 mt-2 rounded-md p-3 ${AH_CALLOUT_WARN}`}
               >
-                Dismiss
-              </Button>
-            </div>
-          </div>
-        )}
-
-      {d.preference_tiers && d.preference_tiers.length > 0 && (
-        <div className="flex flex-col gap-1.5 mt-1 border-t pt-1.5">
-          {[...d.preference_tiers]
-            .sort((a, b) => a.rank - b.rank)
-            .map((tier) => (
-              <div key={tier.rank} className="text-sm">
-                <span className="font-medium">{tier.label}: </span>
-                {tier.keywords.join(", ")}
-                {tier.condition && (
-                  <span className="text-muted-foreground">
-                    {" "}
-                    ({tier.condition})
-                  </span>
-                )}
+                <h4 className="text-xs font-medium">
+                  Worth confirming before sourcing further
+                </h4>
+                <ul className="list-disc pl-5 text-xs">
+                  {d.clarifying_questions.map((question, i) => (
+                    <li key={i}>{question}</li>
+                  ))}
+                </ul>
+                <div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={s.handleDismissClarifyingQuestions}
+                  >
+                    Dismiss
+                  </Button>
+                </div>
               </div>
-            ))}
+            )}
+
+          {d.preference_tiers && d.preference_tiers.length > 0 && (
+            <div className="flex flex-col gap-1.5 mt-2 border-t pt-2">
+              {[...d.preference_tiers]
+                .sort((a, b) => a.rank - b.rank)
+                .map((tier) => (
+                  <div key={tier.rank} className="text-sm">
+                    <span className="font-medium">{tier.label}: </span>
+                    {tier.keywords.join(", ")}
+                    {tier.condition && (
+                      <span className="text-muted-foreground">
+                        {" "}
+                        ({tier.condition})
+                      </span>
+                    )}
+                  </div>
+                ))}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -135,6 +152,8 @@ export function RoleBriefPanel({
 
 // ---------------------------------------------------------------------------
 // SourcingControlPanel — steering input + learned-criteria impact
+// Now positioned as the "chat sidebar on page" — sidebar is primary for
+// sourcing refinement; this is the inline fallback when sidebar is hidden.
 // ---------------------------------------------------------------------------
 
 export function SourcingControlPanel({
@@ -151,7 +170,7 @@ export function SourcingControlPanel({
       className={sourcingPanelClass(embedded, "flex flex-col gap-2 p-4")}
     >
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-medium">Control panel</h3>
+        <h3 className="text-sm font-medium">Refine search</h3>
         <Button
           size="sm"
           variant="outline"
@@ -198,7 +217,7 @@ export function SourcingControlPanel({
           </Button>
         </div>
         <p className="text-xs text-muted-foreground">
-          Checking costs a couple of search credits (a before/after preview) --
+          Checking costs a couple of search credits (a before/after preview) —
           nothing is applied to future searches until you review and confirm
           below.
         </p>
@@ -207,7 +226,7 @@ export function SourcingControlPanel({
           s.steeringResult &&
           !s.steeringResult.applicable && (
             <p className="text-xs text-muted-foreground">
-              That doesn't map onto a concrete, checkable criterion -- nothing
+              That doesn't map onto a concrete, checkable criterion — nothing
               was applied.
             </p>
           )}
@@ -247,8 +266,8 @@ export function SourcingControlPanel({
         !s.criteriaImpactLoading && (
           <p className="text-xs text-muted-foreground">
             Shows every criterion learned from calibration feedback for this
-            role, with how many candidates each one is currently excluding --
-            and lets you undo any single one.
+            role, with how many candidates each one is currently excluding — and
+            lets you undo any single one.
           </p>
         )}
       {s.criteriaImpact && (
@@ -319,6 +338,7 @@ export function SourcingControlPanel({
 
 // ---------------------------------------------------------------------------
 // SearchActionsSection — simplified accordion or preview/restore buttons
+// X-ray links moved to a discreet "Advanced ›" toggle at the top.
 // ---------------------------------------------------------------------------
 
 export function SearchActionsSection({
@@ -328,93 +348,57 @@ export function SearchActionsSection({
   s: SourcingContext;
   simplified: boolean;
 }) {
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const xrayQueries = s.roleBriefDetail
+    ? buildXrayQueries(s.roleBriefDetail)
+    : [];
+
   if (simplified) {
     return (
-      <details className="group">
-        <summary className="cursor-pointer text-sm text-muted-foreground hover:text-foreground list-none flex items-center gap-1.5 select-none py-1">
-          <span className="transition-transform group-open:rotate-90 inline-block text-base leading-none">
-            ›
-          </span>
-          More ways to search
-        </summary>
-        <div className="mt-3 flex flex-col gap-4 pl-4 border-l border-border">
-          <div className="flex flex-col gap-2">
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-              Paid discovery search
-            </p>
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                onClick={s.handlePreview}
-                disabled={s.previewLoading || !s.selectedId}
-                variant="outline"
-                size="sm"
-              >
-                {s.previewLoading ? "Searching..." : "Preview match count"}
-              </Button>
-              {s.selectedId && s.candidates.length === 0 && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={s.handleRestoreLastSearch}
-                  disabled={
-                    s.restoreLoading ||
-                    s.previewLoading ||
-                    s.fetchLoading ||
-                    !s.selectedId
-                  }
-                >
-                  {s.restoreLoading ? "Restoring..." : "Restore last search"}
-                </Button>
-              )}
-            </div>
-            {s.selectedId && s.candidates.length === 0 && (
-              <p className="text-xs text-muted-foreground max-w-xl">
-                Restore last search reloads candidates from this session without
-                a new discovery call.
-              </p>
-            )}
-          </div>
-          <div className="flex flex-col gap-2">
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-              Free &amp; low-cost sources
-            </p>
-            <div className="flex flex-wrap gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={s.handleSearchFreePortals}
-                disabled={s.freePortalLoading}
-              >
-                {s.freePortalLoading
-                  ? "Searching..."
-                  : s.freePortalSearched
-                    ? "Search again (GitHub, Stack Exchange, Exa)"
-                    : "Search GitHub, Stack Exchange, Exa"}
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={s.handleSearchXray}
-                disabled={s.xrayLoading}
-              >
-                {s.xrayLoading ? "Searching..." : "Run X-ray search (LinkedIn)"}
-              </Button>
-            </div>
-            {s.freePortalNotes.length > 0 && (
-              <ul className="text-muted-foreground text-xs list-disc pl-4">
-                {s.freePortalNotes.map((note, i) => (
-                  <li key={i}>{note}</li>
-                ))}
-              </ul>
-            )}
-          </div>
-          {s.roleBriefDetail && (
-            <div className="flex flex-col gap-1.5">
+      <div className="flex flex-col gap-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            onClick={s.handlePreview}
+            disabled={s.previewLoading || !s.selectedId}
+            variant="outline"
+            size="sm"
+          >
+            {s.previewLoading ? "Searching..." : "Preview match count"}
+          </Button>
+          {s.selectedId && s.candidates.length === 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={s.handleRestoreLastSearch}
+              disabled={
+                s.restoreLoading ||
+                s.previewLoading ||
+                s.fetchLoading ||
+                !s.selectedId
+              }
+            >
+              {s.restoreLoading ? "Restoring..." : "Restore last search"}
+            </Button>
+          )}
+          {xrayQueries.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowAdvanced((v) => !v)}
+              className="text-xs text-muted-foreground hover:text-foreground underline"
+            >
+              Advanced {showAdvanced ? "▲" : "›"}
+            </button>
+          )}
+        </div>
+
+        {showAdvanced && (
+          <div className="pl-3 border-l border-border flex flex-col gap-4">
+            <div className="flex flex-col gap-2">
               <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                X-ray links (manual)
+                X-ray search (open in new tab)
               </p>
               <div className="flex flex-wrap gap-2">
-                {buildXrayQueries(s.roleBriefDetail).map((q) => (
+                {xrayQueries.map((q) => (
                   <a
                     key={q.url}
                     href={q.url}
@@ -427,9 +411,45 @@ export function SearchActionsSection({
                 ))}
               </div>
             </div>
-          )}
-        </div>
-      </details>
+            <div className="flex flex-col gap-2">
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                Free &amp; low-cost sources
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={s.handleSearchFreePortals}
+                  disabled={s.freePortalLoading}
+                >
+                  {s.freePortalLoading
+                    ? "Searching..."
+                    : s.freePortalSearched
+                      ? "Search again (GitHub, Stack Exchange, Exa)"
+                      : "Search GitHub, Stack Exchange, Exa"}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={s.handleSearchXray}
+                  disabled={s.xrayLoading}
+                >
+                  {s.xrayLoading
+                    ? "Searching..."
+                    : "Run X-ray search (LinkedIn)"}
+                </Button>
+              </div>
+              {s.freePortalNotes.length > 0 && (
+                <ul className="text-muted-foreground text-xs list-disc pl-4">
+                  {s.freePortalNotes.map((note, i) => (
+                    <li key={i}>{note}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
     );
   }
 
@@ -456,6 +476,15 @@ export function SearchActionsSection({
             {s.restoreLoading ? "Restoring..." : "Restore last search"}
           </Button>
         )}
+        {xrayQueries.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setShowAdvanced((v) => !v)}
+            className="text-xs text-muted-foreground hover:text-foreground underline"
+          >
+            Advanced {showAdvanced ? "▲" : "›"}
+          </button>
+        )}
       </div>
       {s.selectedId && s.candidates.length === 0 && (
         <p className="text-xs text-muted-foreground max-w-xl">
@@ -463,6 +492,38 @@ export function SearchActionsSection({
           them from this browser session or from saved search ids (one profile
           lookup each, not a new discovery search).
         </p>
+      )}
+      {showAdvanced && (
+        <div className="pl-3 border-l border-border flex flex-col gap-3">
+          <div className="flex flex-col gap-1.5">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+              X-ray links (manual)
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {xrayQueries.map((q) => (
+                <a
+                  key={q.url}
+                  href={q.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-xs underline text-muted-foreground hover:text-foreground"
+                >
+                  {q.label}
+                </a>
+              ))}
+            </div>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={s.handleSearchFreePortals}
+            disabled={s.freePortalLoading}
+          >
+            {s.freePortalLoading
+              ? "Searching..."
+              : "Search GitHub, Stack Exchange, Exa"}
+          </Button>
+        </div>
       )}
     </div>
   );
@@ -481,15 +542,11 @@ export function FreePortalSection({ s }: { s: SourcingContext }) {
             Free &amp; low-cost search (GitHub, Stack Exchange, Exa)
           </h3>
           <p className="text-xs text-muted-foreground">
-            GitHub/Stack Exchange are official free APIs -- no scraping, no
+            GitHub/Stack Exchange are official free APIs — no scraping, no
             vendor bill. Exa is a paid, general public-web people-search API
             (roughly $0.015 per search) run alongside them since its cost is
-            negligible -- results from all three are merged into one list below,
-            with duplicates combined. Hugging Face/Kaggle are excluded here by
-            design (noisy for non-ML roles). Try this before Coresignal, which
-            costs real money per candidate record. Learned criteria from
-            calibration feedback narrow these results too, where they can
-            honestly apply.
+            negligible. Try this before Coresignal, which costs real money per
+            candidate record.
           </p>
         </div>
         <Button
@@ -514,10 +571,7 @@ export function FreePortalSection({ s }: { s: SourcingContext }) {
           <p className="text-xs text-muted-foreground">
             Runs a narrow-to-broad query ladder per site via Exa: exact
             title/location first, then a title synonym, then the candidate's
-            state name, then nearby metros, then a skill-only wide net --
-            roughly $0.015 per query. CodeChef/HackerRank hits are
-            cross-referenced with GitHub for free. Results merge into the list
-            below.
+            state name, then nearby metros, then a skill-only wide net.
           </p>
         </div>
         <Button
@@ -548,21 +602,24 @@ export function FreePortalSection({ s }: { s: SourcingContext }) {
 }
 
 // ---------------------------------------------------------------------------
-// XrayAssistSection — client-side X-ray Assist links
+// XrayAssistSection — now hidden from primary flow (merged into Advanced ›)
+// Kept as a component for the standalone (non-simplified) route.
 // ---------------------------------------------------------------------------
 
 export function XrayAssistSection({ s }: { s: SourcingContext }) {
   if (!s.selectedId || !s.roleBriefDetail) return null;
+  const queries = buildXrayQueries(s.roleBriefDetail);
+  if (queries.length === 0) return null;
   return (
     <div className="flex flex-col gap-2 border rounded-lg p-4">
       <h3 className="text-sm font-medium">X-ray Assist</h3>
       <p className="text-xs text-muted-foreground">
-        Opens a search engine with a ready-made query for this role -- you do
-        the actual searching and reviewing, same as manual X-ray search always
-        worked. Nothing here touches LinkedIn directly.
+        Opens a search engine with a ready-made query for this role — you do the
+        actual searching and reviewing, same as manual X-ray search always
+        worked.
       </p>
       <div className="flex flex-wrap gap-2">
-        {buildXrayQueries(s.roleBriefDetail).map(({ label, url }) => (
+        {queries.map(({ label, url }) => (
           <Button
             key={label}
             size="sm"
@@ -605,14 +662,14 @@ export function CalibrationSection({ s }: { s: SourcingContext }) {
               : "Calibrate first (review top 3)"}
           </Button>
           <span className="text-muted-foreground text-xs">
-            Cheap gut-check before pulling more -- mark the top 3 matches fit /
+            Cheap gut-check before pulling more — mark the top 3 matches fit /
             not a fit with a reason.
           </span>
         </div>
         <div className="flex items-end gap-3">
           <div className="flex flex-col gap-2 max-w-[200px]">
             <Label htmlFor="size">
-              How many to fetch (max 100 — all saved, 25 shown at a time)
+              How many to fetch (max 100 — all saved, top 25 shown)
             </Label>
             <input
               id="size"
@@ -691,7 +748,7 @@ export function CalibrationSection({ s }: { s: SourcingContext }) {
               )}
             </div>
             <p className="text-xs text-muted-foreground">
-              Check the LinkedIn profile before judging -- it may be stale, so
+              Check the LinkedIn profile before judging — it may be stale, so
               use your own read on whether it's actually a fit, not just what's
               listed here.
             </p>

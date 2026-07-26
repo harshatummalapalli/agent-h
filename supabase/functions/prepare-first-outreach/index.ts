@@ -394,7 +394,7 @@ const handler = async (req: Request) => {
     return jsonResponse(
       {
         error:
-          "Outreach isn't configured yet — RESEND_RECEIVING_DOMAIN must be set as an Edge Function secret first.",
+          "Email outreach isn't configured on this server yet. Ask your admin to add email outreach secrets in Supabase Edge Function settings.",
       },
       500,
     );

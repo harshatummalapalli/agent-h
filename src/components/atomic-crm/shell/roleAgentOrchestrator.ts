@@ -421,27 +421,38 @@ export async function proposeOutreachAfterPipelineAdd(
     } else {
       metadata = base;
     }
-  } catch {
-    // LinkedIn not configured or no contact info — show a softer prompt.
-    await appendAgentTurn(
-      deps,
-      `${candidateName} is now in the pipeline. To reach out, connect LinkedIn on your Profile page, or add an email for this candidate.`,
-      {
+  } catch (err) {
+    // Outreach not available — show a friendly message in the transcript
+    // without exposing internal error details or vendor names.
+    const rawMsg = err instanceof Error ? err.message : "";
+    const friendlyMsg = /no email|no contact|linkedin outreach isn/i.test(
+      rawMsg,
+    )
+      ? `${candidateName} is in the pipeline. To reach out, add contact details or connect LinkedIn in Preferences.`
+      : `${candidateName} is in the pipeline. Outreach couldn't be prepared automatically — open the candidate record to try manually.`;
+    try {
+      await appendAgentTurn(deps, friendlyMsg, {
         kind: "result",
         action: "send_first_outreach",
         status: "cancelled",
-      },
-    );
-    deps.invalidateTranscript();
+      });
+      deps.invalidateTranscript();
+    } catch {
+      // If even the transcript write fails, swallow so the caller stays clean.
+    }
     return;
   }
 
-  await appendAgentTurn(
-    deps,
-    metadata.explanation ?? `Ready to reach out to ${candidateName}?`,
-    metadata,
-  );
-  deps.invalidateTranscript();
+  try {
+    await appendAgentTurn(
+      deps,
+      metadata.explanation ?? `Ready to reach out to ${candidateName}?`,
+      metadata,
+    );
+    deps.invalidateTranscript();
+  } catch {
+    // Non-fatal — outreach was prepared, transcript write failed.
+  }
 }
 
 export async function dispatchRoleAgentCommand(

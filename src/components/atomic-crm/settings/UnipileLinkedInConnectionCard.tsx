@@ -114,12 +114,12 @@ export const UnipileLinkedInConnectionCard = () => {
         <div className="flex flex-col gap-1">
           <h2 className="text-xl font-semibold text-muted-foreground">
             {translate("crm.profile.linkedin.title", {
-              _: "LinkedIn (Unipile)",
+              _: "LinkedIn",
             })}
           </h2>
           <p className="text-sm text-muted-foreground">
             {translate("crm.profile.linkedin.description", {
-              _: "Connect your LinkedIn account for Phase 4 outreach sequences. Credentials stay with Unipile — this app never stores your LinkedIn password.",
+              _: "Connect your LinkedIn account to send outreach messages directly from this platform. This app never stores your LinkedIn password.",
             })}
           </p>
         </div>
@@ -129,10 +129,21 @@ export const UnipileLinkedInConnectionCard = () => {
             Loading connection status…
           </p>
         ) : !account?.configured ? (
-          <p className="text-sm ah-callout-warn rounded-md p-3">
-            LinkedIn connection is not configured on the server yet
-            (UNIPILE_API_KEY / UNIPILE_DSN).
-          </p>
+          <div className="flex flex-col gap-3">
+            <p className="text-sm ah-callout-warn rounded-md p-3">
+              LinkedIn outreach isn't set up on this server yet. Ask your admin
+              to add LinkedIn outreach secrets in Supabase Edge Function
+              settings, then redeploy the LinkedIn functions.
+            </p>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => refetch()}
+              disabled={isPending}
+            >
+              Refresh after admin sets secrets
+            </Button>
+          </div>
         ) : (
           <>
             <div className="flex flex-wrap items-center gap-2">

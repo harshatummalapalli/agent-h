@@ -57,7 +57,7 @@ export function useCandidateSourcing({
 
   const [roleBriefs, setRoleBriefs] = useState<RoleBriefOption[]>([]);
   const [selectedId, setSelectedId] = useState<string>("");
-  const [size, setSize] = useState(25);
+  const [size, setSize] = useState(100);
   const [backgroundSaving, setBackgroundSaving] = useState(false);
 
   const [stage, setStage] = useState<Stage>("idle");
@@ -297,6 +297,7 @@ export function useCandidateSourcing({
   const applySourcingSnapshot = (
     snapshot: ReturnType<typeof loadSourcingSnapshot> & object,
     source: "session" | "server",
+    silent = false,
   ) => {
     setSelectedId((snapshot as any).dealId);
     setStage((snapshot as any).stage);
@@ -316,12 +317,14 @@ export function useCandidateSourcing({
       ),
     );
     loadRoleBriefContext((snapshot as any).dealId);
-    notify(
-      source === "session"
-        ? `Restored ${(snapshot as any).candidates.length} candidate(s) from this browser session (no new search credits).`
-        : `Restored ${(snapshot as any).candidates.length} candidate(s) from your last search on this role.`,
-      { type: "success" },
-    );
+    if (!silent) {
+      notify(
+        source === "session"
+          ? `Restored ${(snapshot as any).candidates.length} candidate(s) from this browser session (no new search credits).`
+          : `Restored ${(snapshot as any).candidates.length} candidate(s) from your last search on this role.`,
+        { type: "success" },
+      );
+    }
   };
 
   const autoSaveAllCandidates = async (
@@ -420,7 +423,9 @@ export function useCandidateSourcing({
     if (!initialRoleBriefId) return;
     const snapshot = loadSourcingSnapshot(initialRoleBriefId);
     if (snapshot?.candidates?.length) {
-      applySourcingSnapshot(snapshot as any, "session");
+      // silent=true: auto-restore on mount should not show a toast every time
+      // the tab remounts. Toast only fires on explicit "Restore last search" click.
+      applySourcingSnapshot(snapshot as any, "session", true);
     } else {
       setSelectedId(initialRoleBriefId);
       loadRoleBriefContext(initialRoleBriefId);

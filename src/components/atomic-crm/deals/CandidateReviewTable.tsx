@@ -177,9 +177,9 @@ export const CandidateReviewTable = ({
       toast.success(
         `Outreach prepared for ${selectedRows.length} candidate${selectedRows.length === 1 ? "" : "s"} — check the transcript to approve.`,
       );
-    } catch (error) {
+    } catch {
       toast.error(
-        error instanceof Error ? error.message : "Couldn't prepare outreach",
+        "Couldn't prepare outreach for some candidates. Check the transcript for details.",
       );
     } finally {
       setBulkPreparing(false);
@@ -194,9 +194,9 @@ export const CandidateReviewTable = ({
         queryKey: ["deal_candidates_for_deal", dealId],
       });
       toast.success("Outreach prepared — check the transcript to approve.");
-    } catch (error) {
+    } catch {
       toast.error(
-        error instanceof Error ? error.message : "Couldn't prepare outreach",
+        "Couldn't prepare outreach. Check the transcript for details.",
       );
     }
   };

@@ -23,7 +23,7 @@ export async function unipileFetch(
 ): Promise<Response> {
   if (!isUnipileConfigured()) {
     throw new Error(
-      "Unipile is not configured — set UNIPILE_API_KEY and UNIPILE_DSN as Edge Function secrets.",
+      "LinkedIn outreach isn't configured on this server yet. Ask your admin to add LinkedIn outreach secrets in Supabase Edge Function settings.",
     );
   }
   return fetch(unipileApiUrl(path), {

@@ -232,15 +232,14 @@ export function createDiscoverySearchHandlers(d: DiscoverySearchDeps) {
         Number(d.selectedId),
         d.size,
       )) as SourceResult;
-      d.setCandidates(
-        sortCandidatesForDisplay(
-          data.candidates,
-          d.sortField,
-          d.sortByMatchEvidence,
-          d.sortByYearsExperience,
-          d.sortByCompanySize,
-        ),
+      const sorted = sortCandidatesForDisplay(
+        data.candidates,
+        d.sortField,
+        d.sortByMatchEvidence,
+        d.sortByYearsExperience,
+        d.sortByCompanySize,
       );
+      d.setCandidates(sorted);
       d.setScrollToken(data.scroll_token);
       d.setTotal(data.total);
       d.setTotalMatchesAll(data.total_matches_all);
@@ -256,11 +255,13 @@ export function createDiscoverySearchHandlers(d: DiscoverySearchDeps) {
       d.setCandidateDbIds((prev) => ({ ...prev, ...seededDbIds }));
       d.setStage("fetched");
       d.resetPagination();
+      // Auto-expand why-fit for all; pre-load evidence only for top 25
       d.setEvidenceExpanded(
         Object.fromEntries(data.candidates.map((c) => [c.id, true])),
       );
       void Promise.allSettled(
-        data.candidates
+        sorted
+          .slice(0, 25)
           .filter((c) => !seededDbIds[c.id])
           .map((c) => handleDiscoveryEvidence(c)),
       );
@@ -303,17 +304,16 @@ export function createDiscoverySearchHandlers(d: DiscoverySearchDeps) {
     try {
       const data = (await d.dataProvider.sourceCandidates(
         Number(d.selectedId),
-        25,
+        d.size,
       )) as SourceResult;
-      d.setCandidates(
-        sortCandidatesForDisplay(
-          data.candidates,
-          d.sortField,
-          d.sortByMatchEvidence,
-          d.sortByYearsExperience,
-          d.sortByCompanySize,
-        ),
+      const sorted = sortCandidatesForDisplay(
+        data.candidates,
+        d.sortField,
+        d.sortByMatchEvidence,
+        d.sortByYearsExperience,
+        d.sortByCompanySize,
       );
+      d.setCandidates(sorted);
       d.setScrollToken(data.scroll_token);
       d.setTotal(data.total);
       d.setTotalMatchesAll(data.total_matches_all);
@@ -329,17 +329,19 @@ export function createDiscoverySearchHandlers(d: DiscoverySearchDeps) {
       d.setCandidateDbIds((prev) => ({ ...prev, ...seededDbIds }));
       d.setStage("fetched");
       d.resetPagination();
+      // Auto-expand why-fit for all candidates; pre-load evidence for top 25
       d.setEvidenceExpanded(
         Object.fromEntries(data.candidates.map((c) => [c.id, true])),
       );
       void Promise.allSettled(
-        data.candidates
+        sorted
+          .slice(0, 25)
           .filter((c) => !seededDbIds[c.id])
           .map((c) => handleDiscoveryEvidence(c)),
       );
       void d.autoSaveAllCandidates(data.candidates, Number(d.selectedId));
     } catch (error: any) {
-      d.notify(error?.message || "Failed to fetch candidates", {
+      d.notify(error?.message || "Failed to search for candidates", {
         type: "error",
       });
     } finally {

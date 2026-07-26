@@ -56,6 +56,22 @@ This is idempotent — running it more than once is harmless.
 
 ---
 
+## Setting LinkedIn outreach secrets (without Docker)
+
+If you see "LinkedIn outreach isn't configured on this server yet" in Preferences → Connected Accounts, the LinkedIn outreach secrets need to be set on your hosted Supabase project. Run these commands from the repo root (requires the Supabase CLI linked as above):
+
+```powershell
+npx supabase secrets set UNIPILE_API_KEY=your_key_here UNIPILE_DSN=https://your-dsn.unipile.com:port
+npx supabase functions deploy get-unipile-linkedin-account
+npx supabase functions deploy create-unipile-hosted-auth-link
+npx supabase functions deploy prepare-first-outreach
+npx supabase functions deploy send-first-outreach
+```
+
+After deploying, go to **Preferences → Connected Accounts** and click **Refresh after admin sets secrets** — the card should now show the LinkedIn connect button.
+
+---
+
 ## After applying migrations
 
 ### Redeploy the frontend

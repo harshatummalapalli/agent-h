@@ -278,7 +278,12 @@ const handler = async (req: Request) => {
       RESEND_RECEIVING_DOMAIN
     ) {
       try {
-        await sendResendEmail(emailTo, emailSubject, emailHtml);
+        await sendResendEmail({
+          to: emailTo,
+          subject: emailSubject,
+          html: emailHtml,
+          logLabel: "send-first-outreach dual-channel",
+        });
         emailSent = true;
       } catch (err) {
         // Non-blocking — LinkedIn was already sent; log and continue

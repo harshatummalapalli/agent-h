@@ -9,7 +9,6 @@
 // recruiter-approved message. The recruiter must call prepare-first-outreach,
 // review/edit the preview, then explicitly approve before this runs.
 //
-// LinkedIn path requires: UNIPILE_API_KEY, UNIPILE_DSN
 // Email path requires: RESEND_API_KEY, RESEND_FROM_EMAIL, RESEND_RECEIVING_DOMAIN
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
@@ -80,7 +79,7 @@ const handler = async (req: Request) => {
       return jsonResponse(
         {
           error:
-            "LinkedIn outreach isn't configured — UNIPILE_API_KEY and UNIPILE_DSN must be set.",
+            "LinkedIn outreach isn't configured on this server yet. Ask your admin to add LinkedIn outreach secrets in Supabase Edge Function settings.",
         },
         500,
       );

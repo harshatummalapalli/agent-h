@@ -11,7 +11,6 @@
 //   Otherwise → email (falls back to legacy Resend path)
 //
 // Required secrets: ANTHROPIC_API_KEY (optional, falls back), RESEND_RECEIVING_DOMAIN (email fallback)
-// LinkedIn secrets: UNIPILE_API_KEY, UNIPILE_DSN
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { getUserSaleFromRequest } from "../_shared/getUserSale.ts";

@@ -1771,18 +1771,23 @@ const getDataProviderWithCustomMethods = () => {
 
       return data.turn;
     },
-    // Agent H Unipile Phase 3: LinkedIn hosted auth + checkpoint handling.
-    async createUnipileHostedAuthLink(reconnect = false) {
+    // Native LinkedIn connect — in-app username/password (no hosted redirect).
+    async connectLinkedInAccount(
+      username: string,
+      password: string,
+      reconnect = false,
+    ) {
       const { data, error } = await getSupabaseClient().functions.invoke<{
-        url: string;
-        expires_on?: string;
-      }>("create-unipile-hosted-auth-link", {
+        status: string;
+        seat_type?: string | null;
+        checkpoint_type?: string | null;
+        message?: string;
+      }>("connect-linkedin-account", {
         method: "POST",
-        body: { reconnect },
+        body: { username, password, reconnect },
       });
 
-      if (!data?.url || error) {
-        console.error("createUnipileHostedAuthLink.error", error);
+      if (!data || error) {
         const errorDetails = await (async () => {
           try {
             return (await error?.context?.json()) ?? {};
@@ -1791,13 +1796,34 @@ const getDataProviderWithCustomMethods = () => {
           }
         })();
         throw new Error(
-          errorDetails?.message ||
-            errorDetails?.error ||
-            "Failed to start LinkedIn connection",
+          errorDetails?.error ||
+            errorDetails?.message ||
+            "Failed to connect LinkedIn account",
         );
       }
 
       return data;
+    },
+    async rankDiscoveryBatch(
+      candidates: Array<{
+        id: string;
+        full_name?: string | null;
+        job_title?: string | null;
+        job_company_name?: string | null;
+        location_name?: string | null;
+        skills?: string[] | null;
+        years_experience?: number | null;
+      }>,
+      roleBrief: Record<string, unknown>,
+    ) {
+      const { data } = await getSupabaseClient().functions.invoke<{
+        ranked: Array<{ id: string; rank: number; why_fit: string }>;
+        note?: string;
+      }>("rank-discovery-batch", {
+        method: "POST",
+        body: { candidates, role_brief: roleBrief },
+      });
+      return data?.ranked ?? [];
     },
     async getUnipileLinkedInAccount() {
       const { data, error } = await getSupabaseClient().functions.invoke(

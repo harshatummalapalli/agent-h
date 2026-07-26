@@ -172,5 +172,3 @@ verify_jwt = false
 verify_jwt = false
 [functions.mcp]
 verify_jwt = false
-[functions.unipile-hosted-auth-notify]
-verify_jwt = false

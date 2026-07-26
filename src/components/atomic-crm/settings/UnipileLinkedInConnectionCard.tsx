@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useDataProvider, useNotify, useTranslate } from "ra-core";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -40,66 +40,124 @@ function statusBadgeClass(status: string): string {
   return "ah-status-badge ah-status-neutral";
 }
 
+function ConnectForm({
+  onSubmit,
+  busy,
+  reconnect,
+}: {
+  onSubmit: (username: string, password: string) => void;
+  busy: boolean;
+  reconnect: boolean;
+}) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!username.trim() || !password) return;
+    onSubmit(username.trim(), password);
+    setPassword("");
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-3">
+      <div className="flex flex-col gap-1">
+        <Label htmlFor="li-username" className="text-xs">
+          LinkedIn email or username
+        </Label>
+        <Input
+          id="li-username"
+          type="text"
+          autoComplete="username"
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          placeholder="you@example.com"
+          disabled={busy}
+        />
+      </div>
+      <div className="flex flex-col gap-1">
+        <Label htmlFor="li-password" className="text-xs">
+          Password
+        </Label>
+        <Input
+          id="li-password"
+          type="password"
+          autoComplete={reconnect ? "current-password" : "new-password"}
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder="Your LinkedIn password"
+          disabled={busy}
+        />
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Your password is sent directly to LinkedIn and is never stored.
+      </p>
+      <Button
+        type="submit"
+        size="sm"
+        disabled={busy || !username.trim() || !password}
+      >
+        {busy ? "Connecting…" : reconnect ? "Reconnect" : "Connect LinkedIn"}
+      </Button>
+    </form>
+  );
+}
+
 export const UnipileLinkedInConnectionCard = () => {
   const dataProvider = useDataProvider<CrmDataProvider>();
   const notify = useNotify();
   const translate = useTranslate();
   const queryClient = useQueryClient();
   const [checkpointCode, setCheckpointCode] = useState("");
-  const [connectBusy, setConnectBusy] = useState(false);
+  const [showConnectForm, setShowConnectForm] = useState(false);
+  const [reconnectMode, setReconnectMode] = useState(false);
 
   const { data, isPending, refetch } = useQuery({
     queryKey: ["unipile_linkedin_account"],
     queryFn: () => dataProvider.getUnipileLinkedInAccount(),
   });
 
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const linkedin = params.get("linkedin");
-    if (linkedin === "connected") {
-      notify("LinkedIn connected — syncing account details…", {
-        type: "success",
-      });
-      refetch();
-      params.delete("linkedin");
-      const next = `${window.location.pathname}${params.toString() ? `?${params}` : ""}`;
-      window.history.replaceState({}, "", next);
-    } else if (linkedin === "failed") {
-      notify("LinkedIn connection did not complete — try again.", {
-        type: "error",
-      });
-      params.delete("linkedin");
-      const next = `${window.location.pathname}${params.toString() ? `?${params}` : ""}`;
-      window.history.replaceState({}, "", next);
-    }
-  }, [notify, refetch]);
-
   const { mutate: solveCheckpoint, isPending: solving } = useMutation({
     mutationFn: (code: string) => dataProvider.solveUnipileCheckpoint(code),
     onSuccess: (result) => {
       setCheckpointCode("");
       queryClient.invalidateQueries({ queryKey: ["unipile_linkedin_account"] });
-      notify(result.message ?? "Checkpoint solved", { type: "success" });
+      notify(result.message ?? "Verification complete", { type: "success" });
     },
     onError: (error: Error) => {
-      notify(error.message || "Checkpoint failed", { type: "error" });
+      notify(error.message || "Verification failed", { type: "error" });
     },
   });
 
-  const startConnect = async (reconnect = false) => {
-    setConnectBusy(true);
-    try {
-      const { url } = await dataProvider.createUnipileHostedAuthLink(reconnect);
-      window.location.href = url;
-    } catch (error) {
-      notify(
-        error instanceof Error
-          ? error.message
-          : "Could not start LinkedIn connect",
-        { type: "error" },
-      );
-      setConnectBusy(false);
-    }
+  const { mutate: connectLinkedIn, isPending: connecting } = useMutation({
+    mutationFn: ({
+      username,
+      password,
+      reconnect,
+    }: {
+      username: string;
+      password: string;
+      reconnect: boolean;
+    }) => dataProvider.connectLinkedInAccount(username, password, reconnect),
+    onSuccess: (result) => {
+      setShowConnectForm(false);
+      queryClient.invalidateQueries({ queryKey: ["unipile_linkedin_account"] });
+      if (result.status === "checkpoint_pending") {
+        notify("LinkedIn needs a verification code — enter it below.", {
+          type: "info",
+        });
+      } else {
+        notify("LinkedIn connected.", { type: "success" });
+      }
+    },
+    onError: (error: Error) => {
+      notify(error.message || "Could not connect LinkedIn", { type: "error" });
+    },
+  });
+
+  const startConnect = (reconnect = false) => {
+    setReconnectMode(reconnect);
+    setShowConnectForm(true);
   };
 
   const account = data as UnipileLinkedInAccount | undefined;
@@ -209,45 +267,58 @@ export const UnipileLinkedInConnectionCard = () => {
               </div>
             ) : null}
 
-            <div className="flex flex-wrap gap-2">
-              {status === "connected" ? (
-                <>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={connectBusy}
-                    onClick={() => refetch()}
-                  >
-                    Refresh status
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={connectBusy}
-                    onClick={() => startConnect(true)}
-                  >
-                    Reconnect
-                  </Button>
-                </>
-              ) : (
+            {showConnectForm ? (
+              <div className="ah-callout-neutral rounded-md p-3 space-y-3">
+                <ConnectForm
+                  reconnect={reconnectMode}
+                  busy={connecting}
+                  onSubmit={(username, password) =>
+                    connectLinkedIn({
+                      username,
+                      password,
+                      reconnect: reconnectMode,
+                    })
+                  }
+                />
                 <Button
                   size="sm"
-                  disabled={connectBusy}
-                  onClick={() => startConnect(false)}
+                  variant="ghost"
+                  onClick={() => setShowConnectForm(false)}
                 >
-                  {connectBusy ? "Redirecting…" : "Connect LinkedIn"}
+                  Cancel
                 </Button>
-              )}
-              {status === "credentials_required" ? (
-                <Button
-                  size="sm"
-                  disabled={connectBusy}
-                  onClick={() => startConnect(true)}
-                >
-                  Reconnect LinkedIn
-                </Button>
-              ) : null}
-            </div>
+              </div>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {status === "connected" ? (
+                  <>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => refetch()}
+                    >
+                      Refresh status
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => startConnect(true)}
+                    >
+                      Reconnect
+                    </Button>
+                  </>
+                ) : status === "checkpoint_pending" ? null : (
+                  <Button size="sm" onClick={() => startConnect(false)}>
+                    Connect LinkedIn
+                  </Button>
+                )}
+                {status === "credentials_required" ? (
+                  <Button size="sm" onClick={() => startConnect(true)}>
+                    Reconnect LinkedIn
+                  </Button>
+                ) : null}
+              </div>
+            )}
           </>
         )}
       </CardContent>

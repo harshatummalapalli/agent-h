@@ -62,13 +62,19 @@ If you see "LinkedIn outreach isn't configured on this server yet" in Preference
 
 ```powershell
 npx supabase secrets set UNIPILE_API_KEY=your_key_here UNIPILE_DSN=https://your-dsn.unipile.com:port
+```
+
+Then deploy the LinkedIn edge functions (note: `create-unipile-hosted-auth-link` and `unipile-hosted-auth-notify` have been removed — do not deploy them):
+
+```powershell
+npx supabase functions deploy connect-linkedin-account
 npx supabase functions deploy get-unipile-linkedin-account
-npx supabase functions deploy create-unipile-hosted-auth-link
+npx supabase functions deploy solve-unipile-checkpoint
 npx supabase functions deploy prepare-first-outreach
 npx supabase functions deploy send-first-outreach
 ```
 
-After deploying, go to **Preferences → Connected Accounts** and click **Refresh after admin sets secrets** — the card should now show the LinkedIn connect button.
+After deploying, go to **Preferences → Connected Accounts** and click **Refresh after admin sets secrets** — the card will show a LinkedIn username/password form. Enter your LinkedIn credentials directly; they are passed to LinkedIn and never stored.
 
 ---
 

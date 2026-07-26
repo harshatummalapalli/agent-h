@@ -41,16 +41,29 @@ function CandidateCardTurn({
           {metadata.why_fit}
         </div>
       )}
-      {normalizeLinkedinUrl(metadata.linkedin_url) && (
-        <a
-          href={normalizeLinkedinUrl(metadata.linkedin_url)!}
-          target="_blank"
-          rel="noreferrer"
-          className="text-xs text-blue-700 underline"
-        >
-          LinkedIn profile
-        </a>
+      {metadata.location_name && (
+        <div className="text-xs text-muted-foreground">
+          📍 {metadata.location_name}
+        </div>
       )}
+      {(() => {
+        const normalized = normalizeLinkedinUrl(metadata.linkedin_url);
+        const href =
+          normalized ??
+          (metadata.linkedin_url
+            ? `https://${metadata.linkedin_url.replace(/^https?:\/\//i, "")}`
+            : null);
+        return href ? (
+          <a
+            href={href}
+            target="_blank"
+            rel="noreferrer"
+            className="text-xs text-blue-700 underline"
+          >
+            LinkedIn profile
+          </a>
+        ) : null;
+      })()}
       {metadata.must_haves.length > 0 && (
         <ul className="flex flex-col gap-0.5 mt-0.5">
           {metadata.must_haves.map((m, i) => (

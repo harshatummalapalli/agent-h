@@ -32,6 +32,7 @@ export type CalibrationCandidate = {
   why_fit: string;
   match_score: number | null;
   linkedin_url?: string | null;
+  location_name?: string | null;
   from_bench?: boolean;
 };
 

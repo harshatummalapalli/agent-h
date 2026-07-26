@@ -50,6 +50,24 @@ describe("normalizeLinkedinUrl", () => {
     );
   });
 
+  it("handles a company URL", () => {
+    expect(normalizeLinkedinUrl("linkedin.com/company/acme-corp")).toBe(
+      "https://www.linkedin.com/company/acme-corp",
+    );
+  });
+
+  it("handles a pub/ URL", () => {
+    expect(
+      normalizeLinkedinUrl("https://www.linkedin.com/pub/jane-doe/1/2/3"),
+    ).toBe("https://www.linkedin.com/pub/jane-doe/1/2/3");
+  });
+
+  it("returns a best-effort URL when string contains 'linkedin' without a recognised path", () => {
+    expect(normalizeLinkedinUrl("linkedin-johndoe")).toBe(
+      "https://www.linkedin.com/in/linkedin-johndoe",
+    );
+  });
+
   it("returns null for null input", () => {
     expect(normalizeLinkedinUrl(null)).toBeNull();
   });

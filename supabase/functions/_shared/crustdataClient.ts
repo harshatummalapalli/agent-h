@@ -327,9 +327,14 @@ export function normalizeCrustdataProfile(
     unknown
   >;
   // Prefer social_handles.professional_network_identifier.profile_url; fall
-  // back to any top-level linkedin_url field some Crustdata response shapes provide.
+  // back to pni.public_identifier slug, then any top-level linkedin_url field.
   const rawLinkedin =
-    (typeof pni.profile_url === "string" ? pni.profile_url : null) ??
+    (typeof pni.profile_url === "string" && pni.profile_url
+      ? pni.profile_url
+      : null) ??
+    (typeof pni.public_identifier === "string" && pni.public_identifier
+      ? `linkedin.com/in/${pni.public_identifier}`
+      : null) ??
     (typeof raw.linkedin_url === "string" ? raw.linkedin_url : null);
 
   const personId =
@@ -376,7 +381,9 @@ function locationMatchesCountry(
   locationName: string | null,
   canonicalCountry: string,
 ): boolean {
-  if (!locationName) return true; // don't over-filter null locations
+  // Null/empty location is REJECTED when a country constraint is active.
+  // Better to surface fewer candidates than to show the wrong geography.
+  if (!locationName) return false;
   const pattern = COUNTRY_LOCATION_PATTERNS[canonicalCountry];
   if (pattern) return pattern.test(locationName);
   // Generic fallback: case-insensitive substring match on country name.
@@ -426,7 +433,19 @@ export async function searchCrustdataForRoleBrief(
       },
       body: JSON.stringify({ filters, limit }),
     });
-    if (!response.ok) return [];
+    if (!response.ok) {
+      let bodySnippet = "";
+      try {
+        bodySnippet = (await response.text()).slice(0, 200);
+      } catch {
+        // ignore read error
+      }
+      console.error(
+        `crustdata HTTP error ${response.status}:`,
+        bodySnippet || "(no body)",
+      );
+      return [];
+    }
     const result = (await response.json()) as {
       profiles?: Array<Record<string, unknown>>;
     };
@@ -434,7 +453,8 @@ export async function searchCrustdataForRoleBrief(
     return canonicalCountry
       ? filterByCountry(normalized, canonicalCountry)
       : normalized;
-  } catch {
+  } catch (err) {
+    console.error("crustdata fetch error:", err);
     return [];
   }
 }

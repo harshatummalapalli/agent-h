@@ -66,6 +66,7 @@ export type ConversationTurnMetadata = {
     name: string;
     headline: string | null;
     linkedin_url: string | null;
+    location_name?: string | null;
     match_score: number | null;
     must_haves: Array<{
       label: string;

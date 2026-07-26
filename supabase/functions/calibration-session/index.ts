@@ -29,7 +29,11 @@
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import * as jose from "jsr:@panva/jose@6";
-import { searchCrustdataForRoleBrief } from "../_shared/crustdataClient.ts";
+import {
+  searchCrustdataForRoleBrief,
+  parseLocationForFilter,
+  COUNTRY_ALIASES,
+} from "../_shared/crustdataClient.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY");
@@ -127,6 +131,7 @@ type CalibrationCandidate = {
   why_fit: string;
   match_score: number | null;
   linkedin_url: string | null;
+  location_name: string | null;
   from_bench: boolean;
 };
 
@@ -260,6 +265,7 @@ function buildBatch(
         why_fit: whyFitById.get(id) ?? "",
         match_score: null,
         linkedin_url: raw.linkedin_url ?? null,
+        location_name: raw.location_name ?? null,
         from_bench: raw._from_bench ?? false,
       };
     })
@@ -349,6 +355,29 @@ Deno.serve(async (req: Request) => {
         seen.add(key);
         merged.push(c);
       }
+    }
+
+    // If pool is empty and a country was requested, return a clear message
+    // rather than persisting/ranking an empty pool.
+    if (merged.length === 0) {
+      const locationStr =
+        typeof roleBrief.location === "string" ? roleBrief.location.trim() : "";
+      const { place } = locationStr
+        ? parseLocationForFilter(locationStr)
+        : { place: null };
+      const canonicalCountry = place
+        ? (COUNTRY_ALIASES[place.toLowerCase().trim()] ?? null)
+        : null;
+      const bench_note = canonicalCountry
+        ? `No ${canonicalCountry}-based profiles found for this brief — try broadening the role title or required skills.`
+        : "No matching profiles found for this brief — try broadening the criteria.";
+      return jsonResponse({
+        candidates: [],
+        pool_size: 0,
+        cursor: 0,
+        pool_exhausted: true,
+        bench_note,
+      });
     }
 
     const ranked = await rankCandidates(merged, roleBrief, authHeader);

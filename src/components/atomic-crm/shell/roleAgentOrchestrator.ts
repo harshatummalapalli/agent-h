@@ -471,6 +471,7 @@ async function appendCalibrationCardTurns(
           name: c.name,
           headline: c.headline,
           linkedin_url: c.linkedin_url ?? null,
+          location_name: c.location_name ?? null,
           match_score: c.match_score,
           must_haves: [],
           calibration_external_id: c.external_id,

@@ -4,6 +4,7 @@
 // All T1-T6 behaviour preserved.
 import { isValid } from "date-fns";
 import {
+  Archive,
   BookOpen,
   ChevronLeft,
   ChevronRight,
@@ -96,6 +97,7 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
   );
   const [addCandidatesOpen, setAddCandidatesOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
   const [memoryPanelOpen, setMemoryPanelOpen] = useState(true);
   // Track the latest calibration batch so we can offer "Add N confident candidates"
   const [lastBatch, setLastBatch] = useState<CalibrationBatch | null>(null);
@@ -324,6 +326,49 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
     }
   };
 
+  const handleArchiveRole = async () => {
+    try {
+      // 1. Set archived_at on the deal
+      await dataProvider.update("deals", {
+        id: dealId,
+        data: { archived_at: new Date().toISOString() },
+        previousData: deal ?? { id: dealId },
+      });
+      // 2. Remove all deal_candidates links for this role
+      //    (candidates rows are never deleted — GDPR: keep on platform)
+      const { data: links } = await dataProvider.getList("deal_candidates", {
+        filter: { deal_id: dealId },
+        sort: { field: "id", order: "ASC" },
+        pagination: { page: 1, perPage: 1000 },
+      });
+      if (links.length > 0) {
+        await dataProvider.deleteMany("deal_candidates", {
+          ids: links.map((l: { id: string | number }) => l.id),
+        });
+      }
+      // 3. Clear role_discovery_cache for this deal
+      const { data: cacheRows } = await dataProvider.getList(
+        "role_discovery_cache",
+        {
+          filter: { deal_id: dealId },
+          sort: { field: "id", order: "ASC" },
+          pagination: { page: 1, perPage: 100 },
+        },
+      );
+      if (cacheRows.length > 0) {
+        await dataProvider.deleteMany("role_discovery_cache", {
+          ids: cacheRows.map((r: { id: string | number }) => r.id),
+        });
+      }
+      toast.success("Role archived");
+      navigate("/roles");
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Couldn't archive this role",
+      );
+    }
+  };
+
   const defaultTab: WorkspaceTab =
     !pipelinePending && pipelineCount > 0 ? "review" : "sourcing";
 
@@ -395,6 +440,7 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
               onContinueSearch={handleContinueSearch}
               onAddNConfident={() => handleAddNConfident(confidentCandidates)}
               onSettings={() => setSettingsOpen(true)}
+              onArchive={() => setArchiveConfirmOpen(true)}
             />
 
             {showLinkedInBanner && (
@@ -584,7 +630,40 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
           onOpenChange={setSettingsOpen}
         />
       )}
-    </AgentHShell>
+
+      {/* Archive confirm dialog */}
+      <Dialog open={archiveConfirmOpen} onOpenChange={setArchiveConfirmOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Archive this role?</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            The role and all its sourcing history will be archived. Candidates
+            already on the platform are kept — only the link to this role is
+            removed.
+          </p>
+          <div className="flex justify-end gap-2 mt-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setArchiveConfirmOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() => {
+                setArchiveConfirmOpen(false);
+                void handleArchiveRole();
+              }}
+            >
+              Archive role
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </div>
   );
 };
 
@@ -605,6 +684,7 @@ type RoleWorkspaceHeaderProps = {
   onContinueSearch: () => void;
   onAddNConfident: () => void;
   onSettings: () => void;
+  onArchive: () => void;
 };
 
 const RoleWorkspaceHeader = ({
@@ -618,6 +698,7 @@ const RoleWorkspaceHeader = ({
   onContinueSearch,
   onAddNConfident,
   onSettings,
+  onArchive,
 }: RoleWorkspaceHeaderProps) => {
   const [linkCopied, setLinkCopied] = useState(false);
   if (!deal) return null;
@@ -715,6 +796,18 @@ const RoleWorkspaceHeader = ({
           className="px-2"
         >
           <Settings className="h-4 w-4" />
+        </Button>
+
+        {/* Archive role */}
+        <Button
+          variant="ghost"
+          size="sm"
+          aria-label="Archive role"
+          onClick={onArchive}
+          className="px-2 text-muted-foreground hover:text-destructive"
+          title="Archive role"
+        >
+          <Archive className="h-4 w-4" />
         </Button>
 
         <EditButton />

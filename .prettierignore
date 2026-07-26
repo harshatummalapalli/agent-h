@@ -26,3 +26,5 @@ cypress/screenshots
 !.yarn/sdks
 !.yarn/versions
 .github
+**/index.mcp.bundle.part*.txt
+**/index.mcp.bundle.ts

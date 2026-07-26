@@ -13,6 +13,7 @@ export default tseslint.config(
       "dist",
       // Generated MCP paste-bundle (self-contained Deno edge entry; not app source).
       "**/supabase/functions/**/index.mcp.bundle.ts",
+      "**/supabase/functions/**/index.mcp.bundle.part*.ts",
     ],
   },
   {

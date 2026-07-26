@@ -1,0 +1,2287 @@
+// Agent H fix (2026-07-15, THIRD and final pass -- verified against a real
+// response, not docs): the two prior passes both went off Coresignal's
+// PUBLISHED docs (Base Employee API page, then the Multi-source Employee
+// API page), and both were wrong, because Coresignal's own docs are
+// inaccurate here -- the live `employee_multi_source/search/es_dsl/preview`
+// response does NOT use `professional_network_url` at all. Confirmed by
+// temporarily writing one full raw candidate record to a debug column and
+// reading it back: the real response looks like
+//   { id, _score, headline, full_name, company_name, linkedin_url,
+//     location_full, company_website, followers_count, company_industry,
+//     location_country, connections_count, company_hq_country,
+//     company_linkedin_url, active_experience_title,
+//     company_hq_full_address, active_experience_department,
+//     active_experience_management_level }
+// -- i.e. the field is simply `linkedin_url` (not `professional_network_
+// url`, and not `profile_url` either -- both prior guesses, both wrong).
+// `active_experience_title`, `location_full`, `location_country`, and
+// `company_name` WERE already correct in the previous pass (confirmed
+// present with expected values in the captured sample), so only the
+// LinkedIn field name itself was ever wrong.
+//
+// `linkedin_url` comes back as a full URL with scheme (e.g.
+// "https://www.linkedin.com/in/naga-swetha-kotari"), unlike PDL's bare
+// "linkedin.com/in/..." format that the rest of this codebase standardized
+// on (see the candidates table, save-sourced-candidate, and the frontend's
+// href={`https://${candidate.linkedin_url}`} construction in
+// SourceCandidatesPage.tsx, which all assume no scheme is present) -- still
+// stripped below so it matches that bare-domain convention.
+function normalizeCoresignalCandidate(
+  raw: Record<string, unknown>,
+): Record<string, unknown> {
+  const rawLinkedinUrl =
+    typeof raw.linkedin_url === "string" ? raw.linkedin_url : null;
+  return {
+    id: typeof raw.id === "string" ? raw.id : String(raw.id ?? ""),
+    full_name: typeof raw.full_name === "string" ? raw.full_name : null,
+    job_title:
+      typeof raw.active_experience_title === "string"
+        ? raw.active_experience_title
+        : typeof raw.headline === "string"
+          ? raw.headline
+          : null,
+    job_company_name:
+      typeof raw.company_name === "string" ? raw.company_name : null,
+    location_name:
+      typeof raw.location_full === "string"
+        ? raw.location_full
+        : typeof raw.location_country === "string"
+          ? raw.location_country
+          : null,
+    // inferred_skills isn't part of the preview response's denormalized
+    // field set (see header note) -- left empty rather than guessed here;
+    // a later checkpoint could add a follow-up "collect" call per shown
+    // candidate if skills display turns out to matter for the comparison.
+    skills: [],
+    linkedin_url: rawLinkedinUrl
+      ? rawLinkedinUrl.replace(/^https?:\/\//i, "")
+      : null,
+    years_experience: coresignalYearsExperience(raw),
+    company_size: coresignalCompanySize(raw),
+    _source_vendor: "coresignal",
+  };
+}
+
+// Apollo provider (taxonomy/boolean-logic test). Two real HTTP calls:
+// 1) the free People Search (person_titles/person_locations/person_
+//    seniorities), which returns obfuscated results, then
+// 2) people/bulk_match on the returned ids, which spends Apollo enrichment
+//    credits (Harsha's explicit call, see header note) to get real
+//    names/locations back for a genuine side-by-side against PDL.
+// Deliberately simpler than pdlProvider for this v1 test: no tight/loose
+// seniority fallback yet -- that refinement is worth adding once we can
+// see real result counts to tune against, same "start simple, refine from
+// real results" approach already used for PDL.
+const _apolloProvider: DiscoveryProvider = {
+  name: "apollo",
+  isConfigured: () => Boolean(APOLLO_API_KEY),
+  async search(criteria, options) {
+    const notes: string[] = [];
+    const body: Record<string, unknown> = { per_page: options.size, page: 1 };
+
+    if (criteria.titles && criteria.titles.length > 0) {
+      body.person_titles = criteria.titles;
+      if (criteria.titles.length > 1) {
+        notes.push(
+          `Searching ${criteria.titles.length} equivalent titles: ${criteria.titles.join(", ")}.`,
+        );
+      }
+    } else {
+      notes.push(
+        "No role title on this role brief -- title not used in the query.",
+      );
+    }
+
+    if (criteria.location && !REMOTE_PATTERN.test(criteria.location)) {
+      body.person_locations = [criteria.location];
+    } else if (criteria.location) {
+      notes.push(
+        "Role marked remote/location-flexible -- no location constraint applied.",
+      );
+    }
+
+    if (criteria.requiredSkills && criteria.requiredSkills.length > 0) {
+      // Real taxonomy gap: Apollo has no structured skills filter, only a
+      // vague free-text q_keywords blob -- so the top required skill goes
+      // there as a best-effort keyword match, not a real filter the way
+      // PDL's/Coresignal's dedicated skills fields are.
+      body.q_keywords = criteria.requiredSkills[0];
+      notes.push(
+        `Apollo has no structured skills field -- using "${criteria.requiredSkills[0]}" as a free-text keyword search only, not a real filter.`,
+      );
+    }
+
+    if (criteria.seniority) {
+      const mapped = SENIORITY_TO_APOLLO_LEVELS[criteria.seniority];
+      if (mapped && mapped.length > 0) {
+        body.person_seniorities = mapped;
+        notes.push(
+          `Requiring seniority level "${criteria.seniority}" (mapped to Apollo's ${mapped.map((l) => `"${l}"`).join("/")}).`,
+        );
+      } else {
+        notes.push(
+          `Seniority "${criteria.seniority}" doesn't have a clean equivalent in Apollo's own taxonomy -- not used as a filter.`,
+        );
+      }
+    }
+
+    const queryText = JSON.stringify({ ...body, page: undefined });
+
+    const searchResponse = await fetch(APOLLO_SEARCH_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Cache-Control": "no-cache",
+        "x-api-key": APOLLO_API_KEY!,
+      },
+      body: JSON.stringify(body),
+    });
+    const searchResult = await searchResponse.json();
+
+    if (!searchResponse.ok) {
+      throw new Error(
+        `Apollo API error (${searchResponse.status}): ${JSON.stringify(searchResult)}`,
+      );
+    }
+
+    const rawPeople: Array<Record<string, unknown>> =
+      searchResult?.people ?? [];
+    const total =
+      searchResult?.pagination?.total_entries ??
+      searchResult?.total_entries ??
+      0;
+
+    if (rawPeople.length === 0) {
+      return { candidates: [], total, scrollToken: null, queryText, notes };
+    }
+
+    // Enrichment step: de-obfuscate the names/locations Harsha approved
+    // spending credits on. Best-effort -- if this call fails for any
+    // reason, fall back to the obfuscated search results rather than
+    // failing the whole search (the recruiter still sees SOMETHING, same
+    // "never fail the whole search over a quality add-on" principle used
+    // for Voyage scoring and title expansion above).
+    let enriched: Array<Record<string, unknown>> = rawPeople;
+    try {
+      const ids = rawPeople
+        .map((p) => p.id)
+        .filter((id): id is string => typeof id === "string" && id.length > 0);
+      const bulkResponse = await fetch(APOLLO_BULK_MATCH_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": APOLLO_API_KEY!,
+        },
+        body: JSON.stringify({ details: ids.map((id) => ({ id })) }),
+      });
+      const bulkResult = await bulkResponse.json();
+      if (bulkResponse.ok) {
+        const matches: Array<Record<string, unknown>> =
+          bulkResult?.matches ?? bulkResult?.people ?? [];
+        if (matches.length > 0) {
+          enriched = matches;
+        } else {
+          notes.push(
+            "Apollo enrichment returned no matches -- showing obfuscated search results instead.",
+          );
+        }
+      } else {
+        notes.push(
+          "Apollo enrichment call failed -- showing obfuscated search results instead (names/locations masked).",
+        );
+      }
+    } catch (error) {
+      console.error("Apollo bulk_match enrichment failed (non-fatal)", error);
+      notes.push(
+        "Apollo enrichment call failed -- showing obfuscated search results instead (names/locations masked).",
+      );
+    }
+
+    return {
+      candidates: enriched.map(normalizeApolloCandidate),
+      total,
+      // Apollo paginates with a plain page number, not an opaque token --
+      // encode the next page as our own token so "search wider" can reuse
+      // the resume-search-position plumbing already built for PDL.
+      scrollToken: rawPeople.length > 0 ? JSON.stringify({ page: 2 }) : null,
+      queryText,
+      notes,
+    };
+  },
+};
+
+// Coresignal provider (taxonomy/boolean-logic test, Multi-source Employee
+// API tier -- see header note for why Multi-source over Base).
+//
+// Query redesign (post-native-UI test): the v1 version of this query
+// returned ZERO candidates for every real role brief tested, despite
+// Coresignal's own AI-chat "Data search" tool proving thousands of real
+// matches exist for the identical title+location combination. Root cause,
+// confirmed directly against Coresignal's PUBLISHED Elasticsearch mapping
+// (docs.coresignal.com/employee-api/multi-source-employee-api/
+// elasticsearch-dsl -- the actual index schema, not a guess): the v1 query
+// filtered on `experience.is_current`, a field that DOES NOT EXIST anywhere
+// in Coresignal's real schema. The nested `experience` array's boolean flag
+// for "this is the person's current position" is actually named
+// `experience.active_experience` (byte, 1/0). Querying a field the index
+// doesn't have doesn't error in Elasticsearch -- it just silently matches
+// nothing -- and since that clause sat inside the outer `bool.must` array,
+// one permanently-empty clause zeroed out every search regardless of how
+// good the rest of the query was. That's the whole bug.
+//
+// Fixing the typo alone would have been enough to stop returning zero, but
+// Harsha's instruction after seeing the native-UI results was explicit:
+// think deeper than a one-line fix, and design the query logic properly.
+// Two real design problems existed beyond the typo, both confirmed against
+// the same published schema:
+//   1. Location was being queried through a `nested` clause on
+//      `experience.location` for no real reason -- Coresignal's schema also
+//      has flat, ROOT-level `location_city` / `location_full` fields
+//      (same level as `active_experience_title`), which is both simpler and
+//      more robust: no nested-query/mapping mismatch is possible against a
+//      flat field. Switched to those.
+//   2. The v1 query used only the SINGLE top-listed required skill as an
+//      exact-phrase "must" filter, and separately used the seniority enum
+//      (`active_experience_management_level`) as a second independent hard
+//      "must" filter. Stacking multiple all-or-nothing hard filters is
+//      exactly the failure mode the native-UI test surfaced firsthand:
+//      title+location alone returned 127,619 matches (useless, too broad),
+//      while adding several fully-required constraints in one shot risks
+//      overcorrecting to zero again -- the same shape of bug as the typo,
+//      just from over-filtering instead of a wrong field name. The
+//      native-UI test that actually worked well (14 precise, genuinely
+//      relevant matches: Nike, Gap, Maersk, DSV, Wayfair) combined title +
+//      location + experience threshold + a few named skills + industry all
+//      at once, but as a single well-specified natural-language ask, not as
+//      independent brittle AND filters.
+//
+// The design below reproduces that same combination but splits it into two
+// honest tiers instead of one flat AND, matching how a recruiter actually
+// weighs these signals:
+//   - HARD filters (a candidate must satisfy ALL of these to appear at
+//     all): title (one of the expanded variants), location, and a
+//     MAJORITY (not all) of the top few required skills. Majority-not-all
+//     avoids the v1 problem in the other direction PDL already hit (see the
+//     candidate-narrowing header note above buildPdlQuery) -- requiring
+//     every one of 10 listed skills is unrealistic tagging completeness to
+//     expect from any real profile.
+//   - A real range filter on `total_experience_duration_months` (confirmed
+//     field, root-level, populated in months) when the role brief has
+//     years_experience_min set. This is new capability v1 didn't have at
+//     all, and it's a materially better seniority proxy than the enum
+//     below: Coresignal's own AI-chat tool used exactly this field
+//     ("60+ months") to represent "5+ years experience" in the native-UI
+//     test that worked, not a management-level bucket.
+//   - SOFT signals (influence ranking via Elasticsearch score, never
+//     exclude a candidate outright): industry (nested on `experience`,
+//     using the CORRECT `experience.active_experience` field this time,
+//     matched against `experience.company_industry`) and seniority
+//     (`active_experience_management_level`) both move here rather than
+//     being hard filters -- industry-taxonomy correspondence isn't exact
+//     enough to safely exclude on, and total-experience-months is now the
+//     primary seniority signal, so the enum becomes a tie-breaker instead
+//     of a second independent gate that could zero out results again.
+//     Nice-to-have keywords are also folded in here as light score boosts.
+//   - Past-position search fix (2026-07-22 session): a NEW soft signal,
+//     also nested on `experience` but deliberately WITHOUT the
+//     active_experience:1 restriction the current-employer/current-title
+//     clauses above use -- "previously at Microsoft" means ANY entry in
+//     the candidate's work history, not specifically their current job.
+//     Live-verified against Coresignal's own query assistant (see
+//     AGENT_H_HANDOFF_2026-07-21.md, Query 2): "currently at
+//     Google/Meta/..., previously at Microsoft" resolved to a genuine
+//     two-nested-clause structure and returned 2 real matches -- the
+//     company-name half of this is high confidence. The title half
+//     (pastTitles, field `experience.position_title`) is confirmed directly
+//     against Coresignal's own Multi-source Employee API data dictionary
+//     (fetched 2026-07-22) rather than guessed -- see the note pushed below.
+const CORESIGNAL_TOP_SKILLS_COUNT = 4;
+const CORESIGNAL_TOP_SKILLS_MAJORITY_FRACTION = 0.6;
+const CORESIGNAL_NICE_TO_HAVE_BOOST_COUNT = 5;
+
+// A single required skill can be a compound string ("AWS/Azure/GCP",
+// "Hibernate/JPA") -- same real-world JD-authoring pattern PDL's query
+// builder already has to handle (see buildPdlQuery). Splits on "/" into an
+// OR-group (matching any one variant counts as satisfying that skill)
+// rather than requiring the literal, never-real compound phrase.
+function buildCoresignalSkillClause(skill: string): Record<string, unknown> {
+  const variants = skill
+    .split("/")
+    .map((t) => t.trim())
+    .filter((t) => t.length > 0);
+  if (variants.length > 1) {
+    return {
+      bool: {
+        should: variants.map((v) => ({
+          match: { inferred_skills: { query: v, operator: "and" } },
+        })),
+        minimum_should_match: 1,
+      },
+    };
+  }
+  return { match: { inferred_skills: { query: skill, operator: "and" } } };
+}
+
+// Total-match-count fix: a single cheap call to the main search endpoint
+// with items_per_page=1 (the minimum Coresignal allows), sent purely to read
+// the x-total-results response header -- confirmed directly against
+// Coresignal's docs to be present on this endpoint (unlike the preview
+// endpoint, which documents no total-count field at all). Same query body
+// the preview call already built, so the total reflects the exact same
+// filters the recruiter is seeing results for. Best-effort: any failure
+// (network, auth, unexpected header shape) just means the total is left
+// unknown for this call -- it must never block the actual preview results,
+// which is the part recruiters are directly waiting on.
+async function fetchCoresignalTotal(
+  query: Record<string, unknown>,
+): Promise<number | null> {
+  try {
+    const response = await fetch(`${CORESIGNAL_SEARCH_URL}?items_per_page=1`, {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        apikey: CORESIGNAL_API_KEY!,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(query),
+    });
+    if (!response.ok) return null;
+    // Consume the body even though we only need the header -- some runtimes
+    // otherwise log a warning about an unread response body.
+    await response.text();
+    const totalHeader = response.headers.get("x-total-results");
+    if (!totalHeader) return null;
+    const parsed = Number(totalHeader);
+    return Number.isFinite(parsed) ? parsed : null;
+  } catch (error) {
+    console.error("fetchCoresignalTotal failed (non-fatal)", error);
+    return null;
+  }
+}
+
+const _coresignalProvider: DiscoveryProvider = {
+  name: "coresignal",
+  isConfigured: () => Boolean(CORESIGNAL_API_KEY),
+  async search(criteria, options) {
+    const must: Record<string, unknown>[] = [];
+    const filter: Record<string, unknown>[] = [];
+    const should: Record<string, unknown>[] = [];
+    const notes: string[] = [];
+
+    // --- Hard filter: title (unchanged from v1 -- active_experience_title
+    // is a real root-level flat field, this part was never the bug) ---
+    if (criteria.titles && criteria.titles.length > 0) {
+      if (criteria.titles.length === 1) {
+        must.push({
+          match: {
+            active_experience_title: {
+              query: criteria.titles[0],
+              operator: "and",
+            },
+          },
+        });
+      } else {
+        must.push({
+          bool: {
+            should: criteria.titles.map((t) => ({
+              match: { active_experience_title: { query: t, operator: "and" } },
+            })),
+            minimum_should_match: 1,
+          },
+        });
+        notes.push(
+          `Searching ${criteria.titles.length} equivalent titles: ${criteria.titles.join(", ")}.`,
+        );
+      }
+    } else {
+      notes.push(
+        "No role title on this role brief -- title not used in the query.",
+      );
+    }
+
+    // --- Hard filter: location, fixed to use flat root-level fields ---
+    if (criteria.location && !REMOTE_PATTERN.test(criteria.location)) {
+      const city = criteria.location.split(",")[0].trim();
+      must.push({
+        bool: {
+          should: [
+            { match: { location_city: { query: city, operator: "and" } } },
+            { match: { location_full: { query: city, operator: "and" } } },
+          ],
+          minimum_should_match: 1,
+        },
+      });
+      notes.push(
+        `Requiring location "${city}" (matched against Coresignal's flat location_city/location_full fields -- fixed from a bug where the query filtered on a nested "experience.is_current" field that doesn't exist in Coresignal's real schema, which silently zeroed out every search).`,
+      );
+    } else if (criteria.location) {
+      notes.push(
+        "Role marked remote/location-flexible -- no location constraint applied.",
+      );
+    }
+    // --- Hard filter: majority of the top required skills, not all of
+    // them and not just one -- see header comment for why. ---
+    //
+    // Agent H fix (2026-07-17, small-N ceiling bug): Math.ceil rounds the
+    // 60% majority UP to "all of them" whenever only 1-2 required skills
+    // exist on the role brief -- e.g. Math.ceil(2 * 0.6) = 2, i.e. BOTH of
+    // 2 skills required, even though the surrounding comment (and the v1
+    // postmortem it documents) explicitly says this filter must never
+    // degrade into requiring every skill. Root-caused against role brief
+    // #5 ("QA Tester", required_skills = ["QA Testing", "Speech to Text
+    // testing"]): with only 2 skills, minimumMatch computed to 2, and
+    // "Speech to Text testing" is an odd compound domain phrase unlikely to
+    // appear verbatim in Coresignal's inferred_skills tagging -- so every
+    // candidate missing that exact tag was hard-excluded, collapsing the
+    // result set to 2 candidates. Confirmed via the cached query on that
+    // role brief (role_brief_last_scroll_query), not a guess -- and
+    // confirmed as the actual narrowing cause by contrast with Harsha's own
+    // manual LinkedIn boolean search (same title/location, no experience
+    // filter, OR-based across skill synonyms) returning many results for
+    // the identical role. No Coresignal credits were spent diagnosing this;
+    // it's a pure query-construction bug, visible from the cached query JSON
+    // alone.
+    //
+    // Fix: cap minimumMatch at (topSkills.length - 1) whenever more than one
+    // skill is listed, so the filter can never silently become "require
+    // all" again regardless of how few skills a role brief happens to have.
+    // Only topSkills.length === 1 is exempt (there is no "majority but not
+    // all" of a single item -- matching the one listed skill is the only
+    // option, same as before this fix).
+    if (criteria.requiredSkills && criteria.requiredSkills.length > 0) {
+      const topSkills = criteria.requiredSkills.slice(
+        0,
+        Math.min(CORESIGNAL_TOP_SKILLS_COUNT, criteria.requiredSkills.length),
+      );
+      let minimumMatch = Math.max(
+        1,
+        Math.ceil(topSkills.length * CORESIGNAL_TOP_SKILLS_MAJORITY_FRACTION),
+      );
+      if (topSkills.length > 1) {
+        minimumMatch = Math.min(minimumMatch, topSkills.length - 1);
+      }
+      must.push({
+        bool: {
+          should: topSkills.map(buildCoresignalSkillClause),
+          minimum_should_match: minimumMatch,
+        },
+      });
+      notes.push(
+        `Requiring at least ${minimumMatch} of the top ${topSkills.length} required skills to appear in inferred_skills: ${topSkills.join(", ")}.`,
+      );
+      const remaining = criteria.requiredSkills.slice(topSkills.length);
+      if (remaining.length > 0) {
+        notes.push(
+          `${remaining.length} lower-priority skill(s) not used as a hard filter (${remaining.join(", ")}), but still shape match ranking.`,
+        );
+      }
+    } else {
+      notes.push(
+        "No required skills on this role brief -- skills not used in the query.",
+      );
+    }
+
+    // --- Hard filter (range, not a should): total years of experience.
+    // Confirmed field, populated in months, root-level.
+    //
+    // Years-experience-max fix: this used to only ever build a floor (gte),
+    // even though years_experience_max has been captured on the role brief
+    // since JD intake (parsed by parse-job-description, editable in
+    // JdIntakePage.tsx) -- the recruiter's upper bound (e.g. "5-8 years")
+    // was silently dropped, so a search for "5-8 years" behaved identically
+    // to "5+ years" with no ceiling. Now builds a real range object with
+    // both gte and lte set whenever each bound is present, same
+    // Elasticsearch range-query shape, just no longer missing the lte half. ---
+    // Calibration-loop fix: a learned years_experience_min/max criterion
+    // (schema role_brief_learned_criteria) can TIGHTEN this range further
+    // than the JD-derived bounds -- never loosen it. Computed here, before
+    // the range clause below is built, so it folds into the same single
+    // range object rather than adding a second, conflicting one.
+    let effectiveYearsMin = criteria.yearsExperienceMin ?? null;
+    let effectiveYearsMax = criteria.yearsExperienceMax ?? null;
+    if (criteria.learnedCriteria) {
+      for (const lc of criteria.learnedCriteria) {
+        if (
+          lc.criterionType === "years_experience_min" &&
+          typeof lc.value.years === "number"
+        ) {
+          effectiveYearsMin =
+            effectiveYearsMin !== null
+              ? Math.max(effectiveYearsMin, lc.value.years)
+              : lc.value.years;
+        }
+        if (
+          lc.criterionType === "years_experience_max" &&
+          typeof lc.value.years === "number"
+        ) {
+          effectiveYearsMax =
+            effectiveYearsMax !== null
+              ? Math.min(effectiveYearsMax, lc.value.years)
+              : lc.value.years;
+        }
+      }
+    }
+
+    if (
+      (effectiveYearsMin && effectiveYearsMin > 0) ||
+      (effectiveYearsMax && effectiveYearsMax > 0)
+    ) {
+      const range: Record<string, number> = {};
+      if (effectiveYearsMin && effectiveYearsMin > 0) {
+        range.gte = effectiveYearsMin * 12;
+      }
+      if (effectiveYearsMax && effectiveYearsMax > 0) {
+        range.lte = effectiveYearsMax * 12;
+      }
+      filter.push({ range: { total_experience_duration_months: range } });
+      if (range.gte !== undefined && range.lte !== undefined) {
+        notes.push(
+          `Requiring ${effectiveYearsMin}-${effectiveYearsMax} years (${range.gte}-${range.lte} months) of total experience (total_experience_duration_months).`,
+        );
+      } else if (range.gte !== undefined) {
+        notes.push(
+          `Requiring at least ${effectiveYearsMin} years (${range.gte}+ months) of total experience (total_experience_duration_months).`,
+        );
+      } else {
+        notes.push(
+          `Requiring at most ${effectiveYearsMax} years (up to ${range.lte} months) of total experience (total_experience_duration_months).`,
+        );
+      }
+    }
+
+    // --- Soft signal: industry. Nested query, using the CORRECT
+    // experience.active_experience field this time (see header comment) --
+    // deliberately a "should", not a "must": industry-taxonomy
+    // correspondence between a role brief's free-text industry and
+    // Coresignal's company_industry values isn't exact enough to safely
+    // exclude candidates over, only to rank them. ---
+    if (criteria.industry) {
+      const industryTerms = criteria.industry
+        .split(/[/,]/)
+        .map((t) => t.trim())
+        .filter((t) => t.length > 0);
+      for (const term of industryTerms) {
+        should.push({
+          nested: {
+            path: "experience",
+            query: {
+              bool: {
+                must: [
+                  { term: { "experience.active_experience": 1 } },
+                  { match: { "experience.company_industry": term } },
+                ],
+              },
+            },
+          },
+        });
+      }
+      if (industryTerms.length > 0) {
+        notes.push(
+          `Boosting (not requiring) candidates whose current company's industry matches: ${industryTerms.join(", ")}. This is a ranking signal, not a hard filter, to avoid excluding good candidates over inexact industry-taxonomy matching.`,
+        );
+      }
+    } else {
+      notes.push(
+        "No industry on this role brief -- industry not used in the query.",
+      );
+    }
+
+    // --- Soft signal: seniority. Moved from a hard "must" (v1) to a
+    // ranking "should" -- total_experience_duration_months above is now the
+    // primary, more-reliably-populated seniority proxy; the management_level
+    // enum is a tie-breaker on top of it, not a second independent gate that
+    // could zero out results the same way the v1 bug did. ---
+    if (criteria.seniority) {
+      const mapped = SENIORITY_TO_CORESIGNAL_LEVELS[criteria.seniority];
+      if (mapped && mapped.length > 0) {
+        should.push({
+          bool: {
+            should: mapped.map((level) => ({
+              term: { "active_experience_management_level.exact": level },
+            })),
+            minimum_should_match: 1,
+          },
+        });
+        notes.push(
+          `Boosting seniority level "${criteria.seniority}" (mapped to Coresignal's ${mapped.map((l) => `"${l}"`).join("/")}) as a ranking signal, not a hard filter.`,
+        );
+      } else {
+        notes.push(
+          `Seniority "${criteria.seniority}" doesn't have a clean equivalent in Coresignal's own taxonomy -- not used.`,
+        );
+      }
+    } else {
+      notes.push(
+        "No seniority on this role brief -- seniority not used in the query.",
+      );
+    }
+
+    // --- Soft signal: nice-to-have keywords, light score boosts only
+    // (no operator:"and" -- these are meant to be loose, unlike the hard
+    // required-skills filter above). ---
+    if (criteria.niceToHaveKeywords && criteria.niceToHaveKeywords.length > 0) {
+      const boosted = criteria.niceToHaveKeywords.slice(
+        0,
+        CORESIGNAL_NICE_TO_HAVE_BOOST_COUNT,
+      );
+      for (const keyword of boosted) {
+        should.push({ match: { inferred_skills: { query: keyword } } });
+      }
+      notes.push(
+        `Boosting ${boosted.length} nice-to-have signal(s) in ranking, not as a hard filter: ${boosted.join(", ")}.`,
+      );
+    }
+
+    // --- must_not: recruiter-entered hard excludes. The first must_not
+    // this query builder has ever needed -- everything above is
+    // deliberately a should/soft signal because Coresignal's taxonomy is
+    // too coarse to safely exclude on, but a recruiter naming a specific
+    // competitor or a specific disqualifying term is precise by
+    // definition, not a taxonomy-matching problem, so a hard exclude is
+    // the correct (and safer-to-get-wrong-in-this-direction) behavior. ---
+    const mustNot: Record<string, unknown>[] = [];
+
+    if (criteria.excludedCompanies && criteria.excludedCompanies.length > 0) {
+      for (const company of criteria.excludedCompanies) {
+        // Scoped to the candidate's CURRENT employer (active_experience),
+        // matching the same nested-path convention as the industry should
+        // above -- a recruiter excluding a company almost always means
+        // "don't show me people who work there now", not "has ever worked
+        // there at any point in their career".
+        mustNot.push({
+          nested: {
+            path: "experience",
+            query: {
+              bool: {
+                must: [
+                  { term: { "experience.active_experience": 1 } },
+                  { match: { "experience.company_name": company } },
+                ],
+              },
+            },
+          },
+        });
+      }
+      notes.push(
+        `Excluding candidates currently at: ${criteria.excludedCompanies.join(", ")}.`,
+      );
+    }
+
+    if (criteria.exclusionKeywords && criteria.exclusionKeywords.length > 0) {
+      for (const keyword of criteria.exclusionKeywords) {
+        mustNot.push({ match: { inferred_skills: { query: keyword } } });
+        mustNot.push({
+          match: { active_experience_title: { query: keyword } },
+        });
+      }
+      notes.push(
+        `Excluding candidates matching: ${criteria.exclusionKeywords.join(", ")} (checked against skills and current title).`,
+      );
+    }
+
+    // --- Calibration loop: learned criteria (schema
+    // role_brief_learned_criteria), born from a recruiter's calibration
+    // feedback and layered on top of everything above. require_keyword/
+    // exclude_keyword map onto the same inferred_skills + active_experience_
+    // title fields the JD-derived filters above already use; years_
+    // experience_min/max were already folded into the range filter above
+    // (see effectiveYearsMin/effectiveYearsMax). Only ACTIVE criteria are
+    // ever passed in here -- see fetchLearnedCriteria's status filter, and
+    // the discoverCandidates handler below which fetches only "active". ---
+    if (criteria.learnedCriteria && criteria.learnedCriteria.length > 0) {
+      for (const lc of criteria.learnedCriteria) {
+        if (lc.criterionType === "require_keyword" && lc.value.keyword) {
+          must.push({
+            bool: {
+              should: [
+                {
+                  match: {
+                    inferred_skills: {
+                      query: lc.value.keyword,
+                      operator: "and",
+                    },
+                  },
+                },
+                {
+                  match: {
+                    active_experience_title: {
+                      query: lc.value.keyword,
+                      operator: "and",
+                    },
+                  },
+                },
+              ],
+              minimum_should_match: 1,
+            },
+          });
+        } else if (lc.criterionType === "exclude_keyword" && lc.value.keyword) {
+          mustNot.push({
+            match: { inferred_skills: { query: lc.value.keyword } },
+          });
+          mustNot.push({
+            match: { active_experience_title: { query: lc.value.keyword } },
+          });
+        }
+        notes.push(
+          `Learned criterion applied (from calibration feedback): ${lc.label}`,
+        );
+      }
+    }
+
+    // --- should: company type/size, sourcing-preference soft signals.
+    // Same "should, never excludes" treatment as industry above --
+    // Coresignal has no dedicated company-type field at all (company_type
+    // is matched against company_industry as a best-effort proxy, not a
+    // real taxonomy correspondence), and company-size buckets are coarse
+    // enough that a recruiter's "50-200" shouldn't zero out a genuinely
+    // good 210-person-company candidate. The nested field name
+    // (experience.company_employees_count) is taken from Coresignal's
+    // flat-filter-endpoint field `experience_company_employees_count_gte/lte`
+    // (confirmed via their published Base Employee API docs) using the same
+    // "strip the experience_ prefix, use dot notation" convention already
+    // confirmed working for experience.company_industry -- NOT yet
+    // confirmed against a real Coresignal response for this specific field,
+    // same disclosed-gap treatment as the preview-endpoint response shape
+    // note below. ---
+    if (criteria.companyType) {
+      should.push({
+        nested: {
+          path: "experience",
+          query: {
+            bool: {
+              must: [
+                { term: { "experience.active_experience": 1 } },
+                {
+                  match: {
+                    "experience.company_industry": criteria.companyType,
+                  },
+                },
+              ],
+            },
+          },
+        },
+      });
+      notes.push(
+        `Boosting (not requiring) candidates whose current company looks like "${criteria.companyType}" -- Coresignal has no dedicated company-type field, so this is matched against company_industry as a best-effort proxy.`,
+      );
+    }
+
+    if (criteria.companySizeMin || criteria.companySizeMax) {
+      const range: Record<string, number> = {};
+      if (criteria.companySizeMin) range.gte = criteria.companySizeMin;
+      if (criteria.companySizeMax) range.lte = criteria.companySizeMax;
+      should.push({
+        nested: {
+          path: "experience",
+          query: {
+            bool: {
+              must: [
+                { term: { "experience.active_experience": 1 } },
+                { range: { "experience.company_employees_count": range } },
+              ],
+            },
+          },
+        },
+      });
+      notes.push(
+        `Boosting (not requiring) candidates whose current company size is ${criteria.companySizeMin ?? "any"}-${criteria.companySizeMax ?? "any"} employees. Field name not yet confirmed against a live Coresignal response -- if this silently has no effect, that's the first thing to check.`,
+      );
+    }
+
+    // --- Soft signal: past-position search (2026-07-22 session). See the
+    // header comment above and the RoleBrief.past_titles/past_companies
+    // field comment for the full rationale/verification trail. Deliberately
+    // a "should", not a "must" -- same reasoning as industry/companyType
+    // above: this describes a work-history preference the recruiter wants
+    // BOOSTED, not a hard requirement that could zero out an otherwise
+    // great candidate over an incomplete Coresignal history.
+    //
+    // pastCompanies: CONFIRMED. Matched against the nested
+    // `experience.company_name` field, deliberately WITHOUT the
+    // `experience.active_experience: 1` restriction the current-employer
+    // clauses above use -- "previously at Microsoft" should match ANY
+    // entry in the candidate's history, current or past, since Coresignal's
+    // nested array doesn't let us cleanly express "this entry AND it's not
+    // the active one" without an extra script/range clause not worth the
+    // complexity here. Live-verified two-nested-clause pattern: see
+    // AGENT_H_HANDOFF_2026-07-21.md, Query 2 ("currently at
+    // Google/Meta/..., previously at Microsoft" -- 2 real matches,
+    // Coresignal's own query assistant built exactly this shape).
+    if (criteria.pastCompanies && criteria.pastCompanies.length > 0) {
+      for (const company of criteria.pastCompanies) {
+        should.push({
+          nested: {
+            path: "experience",
+            query: {
+              bool: {
+                must: [{ match: { "experience.company_name": company } }],
+              },
+            },
+          },
+        });
+      }
+      notes.push(
+        `Boosting (not requiring) candidates who have worked at: ${criteria.pastCompanies.join(", ")} at any point in their career (matched against Coresignal's nested experience.company_name field, live-verified via Coresignal's own query assistant -- see AGENT_H_HANDOFF_2026-07-21.md).`,
+      );
+    }
+
+    // pastTitles: CONFIRMED, fixed 2026-07-22 -- the first draft of this
+    // clause used `experience.title`, a guessed field name that was never
+    // actually checked against Coresignal's own docs. Confirmed directly
+    // against Coresignal's published Multi-source Employee API data
+    // dictionary (docs.coresignal.com/employee-api/multi-source-employee-api/
+    // data-dictionary-multi-source-employee-api, fetched 2026-07-22): the
+    // nested `experience` array's real title field is `position_title`
+    // (String), alongside `active_experience` (Integer, 1 = current position,
+    // 0 = past) -- which is exactly the flag AGENT_H_HANDOFF_2026-07-21.md's
+    // Query 1 test relied on when it manually verified a real candidate's
+    // `experience` array had a distinct past position ("Founding Engineer",
+    // active_experience: 0) separate from their current one ("AI Engineer",
+    // active_experience: 1). Same "should, not must" and "no active_experience
+    // restriction" reasoning as pastCompanies above -- a past title should
+    // match any point in the candidate's history, not just their immediately
+    // prior role.
+    if (criteria.pastTitles && criteria.pastTitles.length > 0) {
+      for (const title of criteria.pastTitles) {
+        should.push({
+          nested: {
+            path: "experience",
+            query: {
+              bool: {
+                must: [
+                  {
+                    match: {
+                      "experience.position_title": {
+                        query: title,
+                        operator: "and",
+                      },
+                    },
+                  },
+                ],
+              },
+            },
+          },
+        });
+      }
+      notes.push(
+        `Boosting (not requiring) candidates who have held a title matching: ${criteria.pastTitles.join(", ")} at any point in their career (matched against Coresignal's nested experience.position_title field, confirmed directly against Coresignal's own data dictionary).`,
+      );
+    }
+
+    if (must.length === 0) {
+      throw new DiscoveryConfigError(
+        "This role brief doesn't have enough information (title or location) to search Coresignal yet.",
+      );
+    }
+
+    const bool: Record<string, unknown> = { must };
+    if (filter.length > 0) bool.filter = filter;
+    if (mustNot.length > 0) bool.must_not = mustNot;
+    if (should.length > 0) {
+      bool.should = should;
+      // Explicit, not relying on ES's implicit default: with "must" present,
+      // "should" clauses are optional and score-only -- exactly the "soft
+      // signal, never excludes" behavior this design depends on.
+      bool.minimum_should_match = 0;
+    }
+
+    const query = { query: { bool } };
+    const queryText = JSON.stringify(query);
+    const page = options.scrollToken
+      ? (JSON.parse(options.scrollToken).page ?? 1)
+      : 1;
+
+    const response = await fetch(
+      `${CORESIGNAL_SEARCH_PREVIEW_URL}?page=${page}`,
+      {
+        method: "POST",
+        headers: {
+          accept: "application/json",
+          apikey: CORESIGNAL_API_KEY!,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(query),
+      },
+    );
+    const result = await response.json();
+
+    if (!response.ok) {
+      throw new Error(
+        `Coresignal API error (${response.status}): ${JSON.stringify(result)}`,
+      );
+    }
+
+    // Defensive parsing: Coresignal's docs show the preview endpoint
+    // returning a bare JSON array of records, but this hasn't been
+    // confirmed against a real response yet -- also accept a { data: [...] }
+    // or { hits: [...] } wrapper rather than assume and break on the first
+    // real call.
+    const allRawCandidates: Array<Record<string, unknown>> = Array.isArray(
+      result,
+    )
+      ? result
+      : (result?.data ?? result?.hits ?? []);
+
+    // Preview-size fix: the preview endpoint's docs only confirm a `page`
+    // param -- no documented `items_per_page` equivalent -- and it was
+    // observed returning a fixed-size page (e.g. 20) regardless of the
+    // recruiter's requested size (e.g. asking for a 3-candidate preview
+    // still returned 20). Rather than depend on an undocumented param
+    // Coresignal may or may not honor, slice to the requested size here,
+    // in code, so the response always matches what was actually asked for.
+    // This does mean a non-preview "search wider" continuation only ever
+    // advances a full Coresignal page at a time even when size is smaller
+    // than that page -- an accepted tradeoff for now (see the
+    // resume-search-position comment elsewhere in this file for the
+    // general caching approach), not a regression, since previously the
+    // full page was shown unsliced regardless of request.
+    const rawCandidates = allRawCandidates.slice(0, options.size);
+
+    // Total-match-count fix: a real total for this exact query, from the
+    // main search endpoint's x-total-results header (see fetchCoresignalTotal
+    // above) -- best-effort, never blocks returning the preview results
+    // themselves if it fails or is skipped.
+    const totalMatches = await fetchCoresignalTotal(query);
+
+    if (totalMatches !== null) {
+      notes.push(
+        `${totalMatches} total candidate(s) match this query across Coresignal's full index -- ${rawCandidates.length} shown here.`,
+      );
+    } else {
+      notes.push(
+        "Coresignal's preview endpoint doesn't expose a total match count, and the supplementary total-count lookup didn't return one this time -- the number shown is how many candidates are in this response, not the full match count.",
+      );
+    }
+
+    return {
+      candidates: rawCandidates.map(normalizeCoresignalCandidate),
+      total: rawCandidates.length,
+      totalMatches,
+      scrollToken:
+        allRawCandidates.length > 0 ? JSON.stringify({ page: page + 1 }) : null,
+      queryText,
+      notes,
+    };
+  },
+};
+
+// Normalizes a Crustdata /person/search profile into the same common
+// candidate shape every other provider normalizes into (see
+// normalizeCoresignalCandidate's header comment for why). Field names below
+// come from the live-fetched PersonSearch response schema, not guessed --
+// note the response's OWN field names sometimes differ from the FILTER dot-
+// paths used to query for them (e.g. the filter path is
+// "experience.employment_details.current.company_name" but the response
+// object's key for that same value is just "name" -- confirmed directly in
+// the fetched schema's PersonEmploymentDetails example: { name: "Retool",
+// title: "Founder, CEO", ... }).
+function normalizeCrustdataCandidate(
+  raw: Record<string, unknown>,
+): Record<string, unknown> {
+  const basicProfile = (raw.basic_profile ?? {}) as Record<string, unknown>;
+  const experience = (raw.experience ?? {}) as Record<string, unknown>;
+  const employmentDetails = (experience.employment_details ?? {}) as Record<
+    string,
+    unknown
+  >;
+  const currentPositions = Array.isArray(employmentDetails.current)
+    ? (employmentDetails.current as Array<Record<string, unknown>>)
+    : [];
+  const currentPosition = currentPositions[0] ?? {};
+
+  const location = (basicProfile.location ?? {}) as Record<string, unknown>;
+  const locationName =
+    typeof location.raw === "string" && location.raw.length > 0
+      ? location.raw
+      : [location.city, location.state, location.country]
+          .filter((v): v is string => typeof v === "string" && v.length > 0)
+          .join(", ") || null;
+
+  const socialHandles = (raw.social_handles ?? {}) as Record<string, unknown>;
+  const professionalNetworkIdentifier =
+    (socialHandles.professional_network_identifier ?? {}) as Record<
+      string,
+      unknown
+    >;
+  const rawLinkedinUrl =
+    typeof professionalNetworkIdentifier.profile_url === "string"
+      ? professionalNetworkIdentifier.profile_url
+      : null;
+
+  return {
+    id:
+      typeof raw.crustdata_person_id === "number" ||
+      typeof raw.crustdata_person_id === "string"
+        ? String(raw.crustdata_person_id)
+        : "",
+    full_name: typeof basicProfile.name === "string" ? basicProfile.name : null,
+    job_title:
+      typeof basicProfile.current_title === "string"
+        ? basicProfile.current_title
+        : typeof currentPosition.title === "string"
+          ? currentPosition.title
+          : null,
+    job_company_name:
+      typeof currentPosition.name === "string" ? currentPosition.name : null,
+    location_name: locationName,
+    // skills.professional_network_skills isn't part of the default response
+    // field set (the "fields" request param would need to explicitly ask
+    // for it) -- left empty rather than guessed, same disclosed-gap
+    // treatment as normalizeCoresignalCandidate's skills field above.
+    skills: [],
+    linkedin_url: rawLinkedinUrl
+      ? rawLinkedinUrl.replace(/^https?:\/\//i, "")
+      : null,
+    years_experience: crustdataYearsExperience(raw),
+    company_size: crustdataCompanySize(raw),
+    _source_vendor: "crustdata",
+  };
+}
+
+// Crustdata provider. Query construction (mapping DiscoveryCriteria onto
+// Crustdata's filter language) lives in crustdataQueryBuilder.ts, kept
+// separate from this HTTP-calling code so it can be unit-tested under
+// Vitest without needing Deno -- see that file's header comment for the
+// full rationale and the confirmed API-shape/gotcha details. This function
+// is the thin HTTP wrapper: build filters, call /person/search, normalize
+// the response -- same shape as pdlProvider.search/coresignalProvider.search.
+const crustdataProvider: DiscoveryProvider = {
+  name: "crustdata",
+  isConfigured: () => Boolean(CRUSTDATA_API_KEY),
+  async search(criteria, options) {
+    const searchCriteria: CrustdataSearchCriteria = {
+      titles: criteria.titles,
+      location: criteria.location,
+      requiredSkills: criteria.requiredSkills,
+      seniority: criteria.seniority,
+      yearsExperienceMin: criteria.yearsExperienceMin,
+      yearsExperienceMax: criteria.yearsExperienceMax,
+      excludedCompanies: criteria.excludedCompanies,
+      exclusionKeywords: criteria.exclusionKeywords,
+      pastTitles: criteria.pastTitles,
+      pastCompanies: criteria.pastCompanies,
+      companySizeMin: criteria.companySizeMin,
+      companySizeMax: criteria.companySizeMax,
+      learnedCriteria: criteria.learnedCriteria,
+    };
+
+    const { filters, notes } = buildCrustdataFilters(searchCriteria, {
+      useSeniority: true,
+    });
+
+    if (!filters) {
+      throw new DiscoveryConfigError(
+        "This role brief doesn't have enough information (title or location) to search yet.",
+      );
+    }
+
+    const queryText = JSON.stringify(filters);
+
+    // "Resume search position" fix, same pattern as executeQuery (PDL) --
+    // reuse the cached cursor only when this role brief's last Crustdata
+    // query was byte-for-byte the same one that cursor was issued against.
+    let cursor: string | undefined = options.scrollToken;
+    if (!cursor && !options.isPreview) {
+      if (
+        options.cachedScrollToken &&
+        options.cachedScrollQuery === queryText
+      ) {
+        cursor = options.cachedScrollToken;
+        notes.push(
+          "Continuing from where this role brief's search left off last time -- not starting over from the top.",
+        );
+      }
+    }
+
+    const body: Record<string, unknown> = { filters, limit: options.size };
+    if (cursor) body.cursor = cursor;
+
+    const response = await fetch(CRUSTDATA_SEARCH_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${CRUSTDATA_API_KEY}`,
+        "x-api-version": CRUSTDATA_API_VERSION,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+
+    const result = await response.json();
+
+    if (!response.ok) {
+      throw new Error(
+        `Crustdata API error (${response.status}): ${JSON.stringify(
+          result?.error ?? result,
+        )}`,
+      );
+    }
+
+    const profiles: Array<Record<string, unknown>> = result?.profiles ?? [];
+    const totalCount: number | null =
+      typeof result?.total_count === "number" ? result.total_count : null;
+
+    if (totalCount !== null) {
+      notes.push(
+        `${totalCount} total candidate(s) match this query across the full index.`,
+      );
+    }
+
+    return {
+      candidates: profiles.map(normalizeCrustdataCandidate),
+      total: profiles.length,
+      totalMatches: totalCount,
+      scrollToken: result?.next_cursor ?? null,
+      queryText,
+      notes,
+    };
+  },
+};
+
+// Config-driven priority list (architecture doc, Section 2). Order IS
+// priority: runDiscovery below tries each configured provider in this order
+// and falls through on a genuine vendor failure.
+//
+// Coresignal-first, as of the 2026-07-11 session (Harsha's explicit call,
+// made after a partial PDL-vs-Coresignal side-by-side test -- see
+// AGENT_H_HANDOFF_2026-07-11.md for the taxonomy research and test data
+// behind this): Coresignal is the primary discovery provider. pdlProvider
+// and apolloProvider are DELIBERATELY left out of this list -- their code
+// is untouched and still fully functional, so re-enabling either later is a
+// one-line change (add the provider back into this array), not a rewrite.
+//   - pdlProvider: dormant per Harsha's original instruction (real
+//     calibration feedback that PDL profiles run stale). Kept as free
+//     optionality if a specific role brief's Coresignal coverage ever
+//     turns out thin.
+//   - apolloProvider: not used for discovery at all going forward --
+//     confirmed no real structured skills field (see the taxonomy header
+//     comment above), plus its People Search call has an open, undiagnosed
+//     502 bug. Reserved instead for a later, separate contact-enrichment
+//     step on candidates already found via Coresignal (task #27).
+//   - crustdataProvider: sole ACTIVE discovery provider as of Phase 1 vendor
+//     consolidation (2026-07-25, ADR-unipile-linkedin-outreach). Listed
+//     alone in DISCOVERY_PROVIDERS — Coresignal is dormant (code kept).
+//     isConfigured() gates on CRUSTDATA_API_KEY being set.
+const DISCOVERY_PROVIDERS: DiscoveryProvider[] = [crustdataProvider];
+
+function getPrimaryDiscoveryProvider(): DiscoveryProvider {
+  const configured = DISCOVERY_PROVIDERS.filter((p) => p.isConfigured());
+  if (configured.length === 0) {
+    throw new Error(
+      "No discovery provider is configured for this project. Add CRUSTDATA_API_KEY under Project Settings > Edge Functions > Secrets.",
+    );
+  }
+  return configured[0];
+}
+
+// Tries each configured provider in priority order. A provider that isn't
+// configured (no API key set) is skipped silently, not counted as a
+// failure. A genuine vendor error (network, auth, rate limit) is logged and
+// the next provider is tried; a DiscoveryConfigError (the role brief itself
+// doesn't have enough information) is NOT retried against the next
+// provider, since a different vendor would fail on the same missing data.
+async function runDiscovery(
+  criteria: DiscoveryCriteria,
+  options: DiscoverySearchOptions,
+  // Taxonomy/boolean-logic test addition: an optional forced provider name
+  // (e.g. "apollo" or "coresignal"), so the same role brief can be run
+  // against ONE specific vendor on demand for a real side-by-side
+  // comparison, bypassing the normal priority-fallback behavior. Not sent
+  // by the frontend today -- exists for the comparative test itself (and
+  // any future "let the recruiter pick a vendor" feature).
+  preferredProvider?: string,
+): Promise<{ result: DiscoverySearchResult; providerName: string }> {
+  const configured = DISCOVERY_PROVIDERS.filter((p) => p.isConfigured());
+  if (configured.length === 0) {
+    throw new Error(
+      "No discovery provider is configured for this project. Add CRUSTDATA_API_KEY under Project Settings > Edge Functions > Secrets (Coresignal/Apollo/PDL are dormant for discovery — see DISCOVERY_PROVIDERS).",
+    );
+  }
+
+  if (preferredProvider) {
+    const forced = configured.find((p) => p.name === preferredProvider);
+    if (!forced) {
+      throw new DiscoveryConfigError(
+        `Requested provider "${preferredProvider}" is not configured for this project.`,
+      );
+    }
+    const result = await forced.search(criteria, options);
+    return { result, providerName: forced.name };
+  }
+
+  let lastError: unknown;
+  for (const provider of configured) {
+    try {
+      const result = await provider.search(criteria, options);
+      return { result, providerName: provider.name };
+    } catch (error) {
+      if (error instanceof DiscoveryConfigError) throw error;
+      console.error(
+        `discovery provider "${provider.name}" failed, trying next configured provider`,
+        error,
+      );
+      lastError = error;
+    }
+  }
+  throw lastError ?? new Error("All discovery providers failed");
+}
+
+// Calibration loop (2026-07-17): converts a recruiter's "not a fit" reason
+// into ZERO OR ONE structured, checkable search criterion (see
+// LearnedCriterion above), via the same forced-tool-use Claude pattern as
+// parse-job-description and expandTitle. If Claude decides the reason
+// doesn't map onto one of the four supported criterion kinds, this returns
+// { applicable: false } rather than guessing -- an unmappable reason stays
+// exactly what it always was (a candidate_calibration_feedback row, still
+// fully visible for reference), it just doesn't ALSO become a query
+// criterion.
+//
+// Also computes the "blast radius" Noon-style: how many candidates this
+// role brief's CURRENT search (base JD fields + already-active learned
+// criteria) would newly exclude if this criterion were added, using two
+// cheap size=1/preview Coresignal calls (the exact same coresignalProvider
+// .search path the real search uses, just reused directly rather than
+// duplicated) -- so previewing the impact of a criterion costs about the
+// same as one search preview, before the recruiter commits to anything.
+//
+// X-ray match-evidence fix (2026-07-22): when a candidate being rejected
+// was surfaced via an X-ray search rather than a normal Coresignal search,
+// the frontend already threads that candidate's `_match_evidence` string
+// (the platform's own explanation of why it considered this an X-ray match)
+// through as `match_evidence` on this endpoint's request body -- but until
+// now this handler never read it, so Claude was deciding "does this reason
+// imply a checkable criterion?" from the recruiter's raw rejection text
+// ALONE, with no visibility into what the system itself thought made this
+// candidate a match in the first place. That context matters here: a
+// rejection reason like "not actually a match on the thing it flagged" only
+// makes sense to a human (or an LLM) that also sees what the platform
+// flagged. Optional and best-effort by construction -- omitted entirely
+// (empty string) whenever the candidate didn't come from an X-ray search,
+// in which case the prompt looks exactly like it did before this fix.
+async function handleCalibrationContextualize(
+  body: any,
+  authHeader: string,
+): Promise<Response> {
+  const dealId = body?.deal_id;
+  const reason = typeof body?.reason === "string" ? body.reason.trim() : "";
+  const matchEvidence =
+    typeof body?.match_evidence === "string" ? body.match_evidence.trim() : "";
+
+  if (!dealId || typeof dealId !== "number") {
+    return jsonResponse({ error: "deal_id is required" }, 400);
+  }
+  if (!reason) {
+    return jsonResponse({ error: "reason is required" }, 400);
+  }
+  if (!ANTHROPIC_API_KEY) {
+    return jsonResponse(
+      {
+        error:
+          "ANTHROPIC_API_KEY is not set for this project -- required to contextualize calibration feedback.",
+      },
+      500,
+    );
+  }
+  if (!crustdataProvider.isConfigured()) {
+    return jsonResponse(
+      {
+        error:
+          "CRUSTDATA_API_KEY is not set for this project -- required to preview a learned criterion's impact.",
+      },
+      500,
+    );
+  }
+
+  const roleBrief = await fetchRoleBrief(dealId, authHeader);
+  if (!roleBrief) {
+    return jsonResponse(
+      { error: "Role brief not found (or you don't have access to it)" },
+      404,
+    );
+  }
+
+  const SUGGEST_TOOL = {
+    name: "suggest_criterion",
+    description:
+      "Decide whether a recruiter's 'not a fit' reason for rejecting a candidate implies a concrete, checkable search criterion, and if so, express it in a small fixed vocabulary.",
+    input_schema: {
+      type: "object",
+      properties: {
+        applicable: {
+          type: "boolean",
+          description:
+            "True only if the reason clearly implies one concrete, checkable requirement in one of the four supported kinds below. False if the reason is vague, subjective, or doesn't map onto any of them (e.g. 'didn't seem excited about the role', 'gut feeling wasn't right') -- do not force a fit onto a kind that doesn't really apply.",
+        },
+        criterion_type: {
+          type: ["string", "null"],
+          description:
+            "One of: require_keyword, exclude_keyword, years_experience_min, years_experience_max. Null if applicable is false.",
+        },
+        keyword: {
+          type: ["string", "null"],
+          description:
+            "A short skill/technology/keyword phrase, required for require_keyword or exclude_keyword. Null otherwise.",
+        },
+        years: {
+          type: ["integer", "null"],
+          description:
+            "A whole number of years, required for years_experience_min or years_experience_max. Null otherwise.",
+        },
+        label: {
+          type: ["string", "null"],
+          description:
+            "A single formal sentence stating the criterion, e.g. 'Must have between 4 and 8 years of experience in software or machine learning engineering.' or 'Must not be missing hands-on production deployment experience.' Null if applicable is false.",
+        },
+      },
+      required: ["applicable"],
+    },
+  };
+
+  const roleContext = [
+    roleBrief.name ? `Role: ${roleBrief.name}` : null,
+    roleBrief.years_experience_min || roleBrief.years_experience_max
+      ? `Current years-of-experience range: ${roleBrief.years_experience_min ?? "any"}-${roleBrief.years_experience_max ?? "any"}`
+      : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  // X-ray match-evidence fix (2026-07-22): appended to the prompt, never
+  // substituted for the recruiter's own reason -- the reason is still the
+  // thing being interpreted, this is just additional context for
+  // interpreting it correctly. Empty string (not sent, or the candidate
+  // wasn't from an X-ray search) collapses to "" so the prompt is byte-for-
+  // byte identical to the pre-fix version in that case.
+  const matchEvidenceContext = matchEvidence
+    ? `\n\nFor context, this candidate was originally surfaced via an X-ray search, and the platform's own explanation for why it considered them a match was:\n"${matchEvidence}"`
+    : "";
+
+  let suggestion: any;
+  try {
+    const response = await fetch(ANTHROPIC_API_URL, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: ANTHROPIC_MODEL,
+        max_tokens: 512,
+        tools: [SUGGEST_TOOL],
+        tool_choice: { type: "tool", name: "suggest_criterion" },
+        messages: [
+          {
+            role: "user",
+            content: `${roleContext}${matchEvidenceContext}\n\nA recruiter marked a candidate "not a fit" for this role and gave this reason:\n"${reason}"\n\nDecide whether this reason implies a concrete, checkable search criterion.`,
+          },
+        ],
+      }),
+    });
+    if (!response.ok) {
+      const errorBody = await response.text();
+      throw new Error(`Anthropic API error (${response.status}): ${errorBody}`);
+    }
+    const result = await response.json();
+    const toolUseBlock = result?.content?.find(
+      (b: any) => b.type === "tool_use",
+    );
+    suggestion = toolUseBlock?.input;
+  } catch (error) {
+    console.error("calibration contextualize (Claude call) failed", error);
+    return jsonResponse(
+      { error: "Failed to interpret the rejection reason" },
+      502,
+    );
+  }
+
+  if (!suggestion?.applicable) {
+    return jsonResponse({ applicable: false });
+  }
+
+  const criterionType = suggestion.criterion_type as
+    | LearnedCriterion["criterionType"]
+    | undefined;
+  const validTypes = [
+    "require_keyword",
+    "exclude_keyword",
+    "years_experience_min",
+    "years_experience_max",
+  ];
+  if (
+    !criterionType ||
+    !validTypes.includes(criterionType) ||
+    !suggestion.label
+  ) {
+    return jsonResponse({ applicable: false });
+  }
+
+  const value: LearnedCriterion["value"] = {};
+  if (
+    criterionType === "require_keyword" ||
+    criterionType === "exclude_keyword"
+  ) {
+    if (typeof suggestion.keyword !== "string" || !suggestion.keyword.trim()) {
+      return jsonResponse({ applicable: false });
+    }
+    value.keyword = suggestion.keyword.trim();
+  } else {
+    if (typeof suggestion.years !== "number" || suggestion.years <= 0) {
+      return jsonResponse({ applicable: false });
+    }
+    value.years = Math.round(suggestion.years);
+  }
+
+  // Blast-radius preview: build the SAME criteria this role brief's real
+  // searches use (title expansion + already-active learned criteria), then
+  // compare a "before" total against an "after" total with the candidate
+  // criterion added on top -- never persisted unless the recruiter clicks
+  // Apply.
+  let expandedTitles: string[] = roleBrief.name ? [roleBrief.name] : [];
+  try {
+    expandedTitles = await getOrExpandTitles(roleBrief, authHeader);
+  } catch (error) {
+    console.error(
+      "title expansion failed during calibration preview (non-fatal)",
+      error,
+    );
+  }
+
+  let activeLearnedCriteria: LearnedCriterion[] = [];
+  try {
+    activeLearnedCriteria = await fetchLearnedCriteria(
+      dealId,
+      authHeader,
+      "active",
+    );
+  } catch (error) {
+    console.error(
+      "fetchLearnedCriteria failed during calibration preview (non-fatal)",
+      error,
+    );
+  }
+
+  const baseCriteria: DiscoveryCriteria = {
+    titles: expandedTitles,
+    location: roleBrief.location,
+    requiredSkills: roleBrief.required_skills,
+    seniority: roleBrief.seniority,
+    yearsExperienceMin: roleBrief.years_experience_min,
+    yearsExperienceMax: roleBrief.years_experience_max,
+    industry: roleBrief.industry,
+    niceToHaveKeywords: roleBrief.nice_to_have_keywords,
+    excludedCompanies: roleBrief.excluded_companies,
+    exclusionKeywords: roleBrief.exclusion_keywords,
+    companyType: roleBrief.company_type,
+    companySizeMin: roleBrief.company_size_min,
+    companySizeMax: roleBrief.company_size_max,
+    pastTitles: roleBrief.past_titles,
+    pastCompanies: roleBrief.past_companies,
+    learnedCriteria:
+      activeLearnedCriteria.length > 0 ? activeLearnedCriteria : null,
+  };
+
+  const candidateCriterion: LearnedCriterion = {
+    id: -1,
+    criterionType,
+    value,
+    label: suggestion.label,
+    status: "active",
+    lastRejectCount: null,
+    lastRejectCountComputedAt: null,
+  };
+
+  const afterCriteria: DiscoveryCriteria = {
+    ...baseCriteria,
+    learnedCriteria: [
+      ...(baseCriteria.learnedCriteria ?? []),
+      candidateCriterion,
+    ],
+  };
+
+  let currentTotal: number | null = null;
+  let projectedTotal: number | null = null;
+  try {
+    const previewOptions: DiscoverySearchOptions = {
+      size: 1,
+      isPreview: true,
+      cachedScrollToken: null,
+      cachedScrollQuery: null,
+    };
+    const [beforeResult, afterResult] = await Promise.all([
+      getPrimaryDiscoveryProvider().search(baseCriteria, previewOptions),
+      getPrimaryDiscoveryProvider().search(afterCriteria, previewOptions),
+    ]);
+    currentTotal = beforeResult.totalMatches ?? null;
+    projectedTotal = afterResult.totalMatches ?? null;
+  } catch (error) {
+    console.error("blast-radius preview failed (non-fatal)", error);
+  }
+
+  const rejectedCount =
+    currentTotal !== null && projectedTotal !== null
+      ? Math.max(0, currentTotal - projectedTotal)
+      : null;
+
+  return jsonResponse({
+    applicable: true,
+    criterion: {
+      criterion_type: criterionType,
+      value,
+      label: suggestion.label,
+    },
+    current_total: currentTotal,
+    projected_total: projectedTotal,
+    rejected_count: rejectedCount,
+  });
+}
+
+// Calibration loop: Control Panel data -- for a role brief, returns the
+// current total (base JD fields + all ACTIVE learned criteria) plus, for
+// EVERY learned criterion (active or relaxed), how many candidates it is
+// currently costing (if active) or would newly exclude if reapplied (if
+// relaxed) -- Noon's "N rejected" per rule, with Relax/Reapply symmetry.
+// Same size=1/preview Coresignal calls as the blast-radius preview above --
+// cheap, but genuinely N+1 calls (one baseline plus one per criterion),
+// accepted for v1 given a role brief will typically only accumulate a
+// handful of these.
+//
+// Credit-burn fix (2026-07-22): the "N+1 calls, accepted for v1" tradeoff
+// above stopped being a safe accepted tradeoff once role briefs started
+// accumulating a real double-digit number of learned criteria -- this
+// handler is called from SourceCandidatesPage.tsx's Control Panel refresh
+// button, from useInboxDecisions.ts (up to 6 open deals per Inbox load),
+// and from CanvasPage.tsx (on every mount), and every single one of those
+// call sites fans this same uncapped Promise.all out over EVERY criterion,
+// active AND relaxed, with zero caching -- one Inbox load could legitimately
+// burn 15-21+ live Coresignal credits before a recruiter did anything at
+// all. (All three frontend call sites are disabled client-side as an
+// emergency kill switch while this fix ships -- not this function's
+// concern, but the reason this fix can't just be "add a note", the
+// uncapped fan-out itself has to stop.) Two changes below, both scoped to
+// this function and its two helpers (fetchLearnedCriteria, LearnedCriterion):
+//   1. CRITERIA_IMPACT_PRICING_CAP -- price at most this many criteria with
+//      a LIVE Coresignal call per request, not the whole list.
+//   2. CRITERIA_IMPACT_CACHE_TTL_MS -- even for a priced criterion, reuse
+//      last_reject_count when it was computed inside the TTL window rather
+//      than always re-pricing it.
+// See the two constants and the per-criterion loop below for exactly how.
+
+// How many learned criteria get a LIVE Coresignal reprice on a single
+// handleCriteriaImpact call. Deliberately in the 5-8 range this fix's
+// design discussion settled on: high enough that a role brief with a
+// normal, healthy number of active calibration rules (most role briefs
+// tested so far have 2-4) never even notices the cap, low enough that the
+// worst case (a role brief that has accumulated dozens of criteria over a
+// long-running search) can no longer burn double-digit credits from one
+// page load or one button click. 6 specifically: the midpoint of that
+// range, not tuned against real usage data yet -- the first thing to
+// revisit if this turns out too tight (criteria feel stale) or too loose
+// (credits still climb faster than expected).
+const CRITERIA_IMPACT_PRICING_CAP = 6;
+
+// Cache lifetime for a criterion's last_reject_count before it's considered
+// stale enough to warrant a fresh live Coresignal call. 1 hour: long enough
+// that the normal "recruiter refreshes the Control Panel a few times while
+// reviewing the same role brief in one sitting" pattern (and the repeated
+// Inbox/Canvas mounts that motivated this fix in the first place) mostly
+// hits the cache instead of re-pricing every criterion every time, short
+// enough that the displayed "N rejected" number still reflects Coresignal's
+// index reasonably closely -- this isn't data that needs to be real-time,
+// a rejected-count that's up to an hour stale is a perfectly fine tradeoff
+// against burning a live credit on every single load.
+const CRITERIA_IMPACT_CACHE_TTL_MS = 60 * 60 * 1000;
+
+async function handleCriteriaImpact(
+  body: any,
+  authHeader: string,
+): Promise<Response> {
+  const dealId = body?.deal_id;
+  if (!dealId || typeof dealId !== "number") {
+    return jsonResponse({ error: "deal_id is required" }, 400);
+  }
+  if (!crustdataProvider.isConfigured()) {
+    return jsonResponse(
+      {
+        error:
+          "CRUSTDATA_API_KEY is not set for this project -- required to compute criteria impact.",
+      },
+      500,
+    );
+  }
+
+  const roleBrief = await fetchRoleBrief(dealId, authHeader);
+  if (!roleBrief) {
+    return jsonResponse(
+      { error: "Role brief not found (or you don't have access to it)" },
+      404,
+    );
+  }
+
+  let expandedTitles: string[] = roleBrief.name ? [roleBrief.name] : [];
+  try {
+    expandedTitles = await getOrExpandTitles(roleBrief, authHeader);
+  } catch (error) {
+    console.error(
+      "title expansion failed during criteria impact (non-fatal)",
+      error,
+    );
+  }
+
+  let allCriteria: LearnedCriterion[] = [];
+  try {
+    allCriteria = await fetchLearnedCriteria(dealId, authHeader);
+  } catch (error) {
+    console.error("fetchLearnedCriteria failed during criteria impact", error);
+    return jsonResponse({ error: "Failed to load learned criteria" }, 502);
+  }
+
+  const activeCriteria = allCriteria.filter((c) => c.status === "active");
+
+  // Credit-burn fix: which criteria get a LIVE reprice this request. Most-
+  // recently-added first -- fetchLearnedCriteria orders ascending by
+  // created_at, so the tail of the array is the newest criteria. Newest
+  // criteria are the ones a recruiter is actively calibrating against right
+  // now (that's the whole point of the calibration loop: react to the
+  // latest feedback), so they're the ones worth spending a live credit to
+  // keep fresh; long-settled older criteria are far more likely to already
+  // have a recent cached value anyway, and even when they don't, a slightly
+  // stale "N rejected" on a rule nobody's actively tuning is a much smaller
+  // cost than starving the criterion someone just added of any number at all.
+  const pricedIds = new Set(
+    allCriteria.slice(-CRITERIA_IMPACT_PRICING_CAP).map((c) => c.id),
+  );
+
+  const baseCriteriaFor = (
+    learned: LearnedCriterion[] | null,
+  ): DiscoveryCriteria => ({
+    titles: expandedTitles,
+    location: roleBrief.location,
+    requiredSkills: roleBrief.required_skills,
+    seniority: roleBrief.seniority,
+    yearsExperienceMin: roleBrief.years_experience_min,
+    yearsExperienceMax: roleBrief.years_experience_max,
+    industry: roleBrief.industry,
+    niceToHaveKeywords: roleBrief.nice_to_have_keywords,
+    excludedCompanies: roleBrief.excluded_companies,
+    exclusionKeywords: roleBrief.exclusion_keywords,
+    companyType: roleBrief.company_type,
+    companySizeMin: roleBrief.company_size_min,
+    companySizeMax: roleBrief.company_size_max,
+    pastTitles: roleBrief.past_titles,
+    pastCompanies: roleBrief.past_companies,
+    learnedCriteria: learned && learned.length > 0 ? learned : null,
+  });
+
+  const previewOptions: DiscoverySearchOptions = {
+    size: 1,
+    isPreview: true,
+    cachedScrollToken: null,
+    cachedScrollQuery: null,
+  };
+
+  let baseTotal: number | null = null;
+  try {
+    const baseResult = await getPrimaryDiscoveryProvider().search(
+      baseCriteriaFor(activeCriteria),
+      previewOptions,
+    );
+    baseTotal = baseResult.totalMatches ?? null;
+  } catch (error) {
+    console.error("criteria impact baseline search failed", error);
+    return jsonResponse(
+      { error: "Failed to compute current search totals" },
+      502,
+    );
+  }
+
+  const criteriaWithImpact = await Promise.all(
+    allCriteria.map(async (criterion) => {
+      // Credit-burn fix: cache check, before deciding whether this
+      // criterion even gets considered for a live call at all. A cached
+      // value counts as fresh (and is reused as-is, no live call, no
+      // PATCH) whenever it was computed inside CRITERIA_IMPACT_CACHE_TTL_MS
+      // -- regardless of whether this criterion made the pricing-cap cut
+      // this request, since a fresh cache entry makes a live call redundant
+      // either way.
+      const cachedAgeMs = criterion.lastRejectCountComputedAt
+        ? Date.now() - new Date(criterion.lastRejectCountComputedAt).getTime()
+        : Infinity;
+      const hasFreshCache =
+        criterion.lastRejectCount !== null &&
+        cachedAgeMs < CRITERIA_IMPACT_CACHE_TTL_MS;
+
+      if (hasFreshCache) {
+        return {
+          id: criterion.id,
+          criterion_type: criterion.criterionType,
+          label: criterion.label,
+          status: criterion.status,
+          rejected_count: criterion.lastRejectCount,
+        };
+      }
+
+      // Credit-burn fix: criteria outside this request's pricing cap (see
+      // CRITERIA_IMPACT_PRICING_CAP above) never reach a live Coresignal
+      // call at all -- they fall back to whatever was last cached (however
+      // stale), or null if this criterion has never been priced yet. This
+      // is the actual cap: without a fresh cache hit above AND without
+      // being in the priced set, this criterion costs zero credits this
+      // request, full stop.
+      if (!pricedIds.has(criterion.id)) {
+        return {
+          id: criterion.id,
+          criterion_type: criterion.criterionType,
+          label: criterion.label,
+          status: criterion.status,
+          rejected_count: criterion.lastRejectCount,
+        };
+      }
+
+      let rejectedCount: number | null = null;
+      try {
+        if (criterion.status === "active") {
+          const without = activeCriteria.filter((c) => c.id !== criterion.id);
+          const result = await getPrimaryDiscoveryProvider().search(
+            baseCriteriaFor(without),
+            previewOptions,
+          );
+          const totalWithout = result.totalMatches ?? null;
+          rejectedCount =
+            baseTotal !== null && totalWithout !== null
+              ? Math.max(0, totalWithout - baseTotal)
+              : null;
+        } else {
+          const withThis = [...activeCriteria, criterion];
+          const result = await getPrimaryDiscoveryProvider().search(
+            baseCriteriaFor(withThis),
+            previewOptions,
+          );
+          const totalWithThis = result.totalMatches ?? null;
+          rejectedCount =
+            baseTotal !== null && totalWithThis !== null
+              ? Math.max(0, baseTotal - totalWithThis)
+              : null;
+        }
+      } catch (error) {
+        console.error(
+          `criteria impact computation failed for criterion ${criterion.id} (non-fatal)`,
+          error,
+        );
+      }
+
+      // Best-effort cache write -- a failed PATCH just means the cached
+      // display value on this row goes stale, never blocks the response.
+      try {
+        await fetch(
+          `${SUPABASE_URL}/rest/v1/role_brief_learned_criteria?id=eq.${criterion.id}`,
+          {
+            method: "PATCH",
+            headers: {
+              apikey: SUPABASE_ANON_KEY ?? "",
+              Authorization: authHeader,
+              "Content-Type": "application/json",
+              Prefer: "return=minimal",
+            },
+            body: JSON.stringify({
+              last_reject_count: rejectedCount,
+              last_reject_count_computed_at: new Date().toISOString(),
+            }),
+          },
+        );
+      } catch (error) {
+        console.error(
+          "learned criterion reject-count cache write failed (non-fatal)",
+          error,
+        );
+      }
+
+      return {
+        id: criterion.id,
+        criterion_type: criterion.criterionType,
+        label: criterion.label,
+        status: criterion.status,
+        rejected_count: rejectedCount,
+      };
+    }),
+  );
+
+  return jsonResponse({
+    base_total: baseTotal,
+    criteria: criteriaWithImpact,
+  });
+}
+
+/** Re-fetch a single Crustdata profile by stored person id (cheap restore). */
+async function fetchCrustdataPersonById(
+  sourceId: string,
+): Promise<Record<string, unknown> | null> {
+  if (!CRUSTDATA_API_KEY) return null;
+  const numericId = Number(sourceId);
+  if (!Number.isFinite(numericId)) return null;
+
+  const response = await fetch(CRUSTDATA_SEARCH_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${CRUSTDATA_API_KEY}`,
+      "x-api-version": CRUSTDATA_API_VERSION,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      filters: {
+        field: "crustdata_person_id",
+        type: "=",
+        value: numericId,
+      },
+      limit: 1,
+    }),
+  });
+
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(
+      `Crustdata person lookup failed (${response.status}): ${JSON.stringify(
+        (result as Record<string, unknown>)?.error ?? result,
+      )}`,
+    );
+  }
+
+  const profiles = (result as Record<string, unknown>)?.profiles as
+    | Array<Record<string, unknown>>
+    | undefined;
+  if (!profiles?.length) return null;
+  return normalizeCrustdataCandidate(profiles[0]) as Record<string, unknown>;
+}
+
+// Restore candidates from discovery_source_attribution (written on each
+// Fetch / Search wider). Does NOT re-run the full role query — one Crustdata
+// lookup per stored person id, so you get the same people back without
+// paying for a brand-new search.
+async function handleRehydrateFromAttribution(
+  body: Record<string, unknown>,
+  authHeader: string,
+): Promise<Response> {
+  const dealId = body?.deal_id;
+  if (!dealId || typeof dealId !== "number") {
+    return jsonResponse({ error: "deal_id is required" }, 400);
+  }
+  if (!crustdataProvider.isConfigured()) {
+    return jsonResponse(
+      {
+        error:
+          "CRUSTDATA_API_KEY is not set for this project -- required to restore search results.",
+      },
+      500,
+    );
+  }
+
+  const roleBrief = await fetchRoleBrief(dealId, authHeader);
+  if (!roleBrief) {
+    return jsonResponse(
+      { error: "Role brief not found (or you don't have access to it)" },
+      404,
+    );
+  }
+
+  const nowIso = new Date().toISOString();
+  const attrRes = await fetch(
+    `${SUPABASE_URL}/rest/v1/discovery_source_attribution?deal_id=eq.${dealId}&expires_at=gt.${encodeURIComponent(nowIso)}&select=source_id,vendor&order=created_at.asc`,
+    {
+      headers: {
+        apikey: SUPABASE_ANON_KEY ?? "",
+        Authorization: authHeader,
+      },
+    },
+  );
+  if (!attrRes.ok) {
+    console.error(
+      "rehydrate_from_attribution: attribution fetch failed",
+      attrRes.status,
+      await attrRes.text(),
+    );
+    return jsonResponse(
+      { error: "Failed to load saved search person ids for this role" },
+      502,
+    );
+  }
+
+  const rows = (await attrRes.json()) as Array<{
+    source_id: string;
+    vendor: string;
+  }>;
+  if (!rows.length) {
+    return jsonResponse(
+      {
+        error:
+          "No recent search results on file for this role. If you refreshed the page, browser session data may be gone — run Fetch candidates again.",
+        rehydrated_count: 0,
+      },
+      404,
+    );
+  }
+
+  const notes: string[] = [
+    `Restored ${rows.length} candidate id(s) from your last discovery search on this role (one Crustdata lookup each, not a new search).`,
+  ];
+  const candidates: Array<Record<string, unknown>> = [];
+  let lookupFailures = 0;
+  let skippedVendor = 0;
+
+  for (const row of rows) {
+    if (row.vendor !== "crustdata") {
+      skippedVendor += 1;
+      continue;
+    }
+    try {
+      const person = await fetchCrustdataPersonById(row.source_id);
+      if (person) candidates.push(person);
+    } catch (error) {
+      lookupFailures += 1;
+      console.error(
+        "rehydrate_from_attribution: person lookup failed",
+        row.source_id,
+        error,
+      );
+    }
+  }
+
+  if (skippedVendor > 0) {
+    notes.push(
+      `${skippedVendor} hit(s) from non-Crustdata sources were skipped (restore supports Crustdata fetch results only).`,
+    );
+  }
+  if (lookupFailures > 0) {
+    notes.push(
+      `${lookupFailures} profile(s) could not be reloaded from Crustdata.`,
+    );
+  }
+  if (candidates.length === 0) {
+    return jsonResponse(
+      {
+        error:
+          "Could not reload any profiles from the saved search ids — they may have expired at Crustdata. Run Fetch candidates again.",
+        rehydrated_count: 0,
+      },
+      404,
+    );
+  }
+
+  try {
+    await annotateAlreadySaved(candidates, authHeader);
+  } catch (error) {
+    console.error("rehydrate annotateAlreadySaved failed (non-fatal)", error);
+  }
+
+  if (VOYAGE_API_KEY) {
+    try {
+      const roleBriefVector = await getOrRefreshRoleBriefEmbedding(
+        roleBrief,
+        authHeader,
+      );
+      await scoreAndSortCandidates(candidates, roleBriefVector);
+    } catch (error) {
+      console.error("rehydrate scoring failed (non-fatal)", error);
+      notes.push(
+        "Match scoring unavailable for restored profiles — shown in discovery order.",
+      );
+    }
+  }
+
+  return jsonResponse({
+    role_brief: {
+      id: roleBrief.id,
+      title: roleBrief.name,
+      location: roleBrief.location,
+    },
+    query_used: null,
+    notes,
+    total: candidates.length,
+    total_matches_all: null,
+    candidates: candidates.map(stripVendorFieldsForClient),
+    scroll_token: roleBrief.role_brief_last_scroll_token ?? null,
+    rehydrated_count: candidates.length,
+  });
+}
+
+// Signature note (2026-07-17 calibration-loop change): this used to parse
+// its own request body from a raw Request. Deno.serve below now reads the
+// JSON body ONCE (a Request body can only be consumed once) and branches on
+// `body.mode` before calling any handler -- so this takes the already-
+// parsed body object and authHeader directly, same as the two new
+// calibration handlers above it.
+const discoverCandidates = async (body: any, authHeader: string) => {
+  const roleBriefId = body?.role_brief_id;
+  let size = DEFAULT_SIZE;
+  let scrollToken: string | undefined;
+  let isPreview = false;
+  // Taxonomy/boolean-logic test addition: an optional forced vendor name
+  // ("apollo" | "coresignal") for the side-by-side comparison -- see
+  // runDiscovery's preferredProvider param. Omitted entirely by the normal
+  // frontend flow, which just gets whichever configured provider comes
+  // first in priority order.
+  let preferredProvider: string | undefined;
+  if (typeof body?.size === "number") {
+    size = Math.max(1, Math.min(MAX_SIZE, Math.floor(body.size)));
+  }
+  // "Search wider": when the client sends back a scroll_token from a
+  // previous response, this call fetches the NEXT batch of the same search
+  // rather than starting over from the top -- see header comment.
+  if (typeof body?.scroll_token === "string" && body.scroll_token) {
+    scrollToken = body.scroll_token;
+  }
+  // "Resume search position" fix: the cheap size=1 probe never reads or
+  // writes the last-scroll-position cache below -- it's just a peek at the
+  // total count, not a real review of any candidates, so it shouldn't
+  // consume or advance the recruiter's actual place in the results.
+  isPreview = body?.is_preview === true;
+  if (typeof body?.provider === "string" && body.provider) {
+    preferredProvider = body.provider;
+  }
+
+  if (!roleBriefId || typeof roleBriefId !== "number") {
+    return jsonResponse({ error: "role_brief_id is required" }, 400);
+  }
+
+  const roleBrief = await fetchRoleBrief(roleBriefId, authHeader);
+
+  if (!roleBrief) {
+    return jsonResponse(
+      { error: "Role brief not found (or you don't have access to it)" },
+      404,
+    );
+  }
+
+  // Title-expansion fix: best-effort, non-fatal. If this fails for any
+  // reason (Claude call error, ANTHROPIC_API_KEY unset), fall back to just
+  // the role brief's literal title as a one-item list -- exactly the old
+  // behavior -- rather than failing the whole search over a quality
+  // improvement.
+  let expandedTitles: string[] = roleBrief.name ? [roleBrief.name] : [];
+  try {
+    expandedTitles = await getOrExpandTitles(roleBrief, authHeader);
+  } catch (error) {
+    console.error("title expansion failed (non-fatal)", error);
+  }
+
+  // Calibration loop: fold in any ACTIVE learned criteria for this role
+  // brief so every future search benefits from calibration feedback, not
+  // just the one search that produced it. Best-effort -- a failed fetch
+  // here just means this search runs without learned criteria applied, same
+  // "a feature having a bad moment shouldn't break search" principle as
+  // title expansion and scoring elsewhere in this file.
+  let activeLearnedCriteria: LearnedCriterion[] = [];
+  try {
+    activeLearnedCriteria = await fetchLearnedCriteria(
+      roleBriefId,
+      authHeader,
+      "active",
+    );
+  } catch (error) {
+    console.error("fetchLearnedCriteria failed (non-fatal)", error);
+  }
+
+  const criteria: DiscoveryCriteria = {
+    titles: expandedTitles,
+    location: roleBrief.location,
+    requiredSkills: roleBrief.required_skills,
+    seniority: roleBrief.seniority,
+    yearsExperienceMin: roleBrief.years_experience_min,
+    yearsExperienceMax: roleBrief.years_experience_max,
+    industry: roleBrief.industry,
+    niceToHaveKeywords: roleBrief.nice_to_have_keywords,
+    excludedCompanies: roleBrief.excluded_companies,
+    exclusionKeywords: roleBrief.exclusion_keywords,
+    companyType: roleBrief.company_type,
+    companySizeMin: roleBrief.company_size_min,
+    companySizeMax: roleBrief.company_size_max,
+    pastTitles: roleBrief.past_titles,
+    pastCompanies: roleBrief.past_companies,
+    learnedCriteria:
+      activeLearnedCriteria.length > 0 ? activeLearnedCriteria : null,
+  };
+
+  let discovery: { result: DiscoverySearchResult; providerName: string };
+  try {
+    discovery = await runDiscovery(
+      criteria,
+      {
+        size,
+        scrollToken,
+        isPreview,
+        cachedScrollToken: roleBrief.role_brief_last_scroll_token,
+        cachedScrollQuery: roleBrief.role_brief_last_scroll_query,
+      },
+      preferredProvider,
+    );
+  } catch (error) {
+    if (error instanceof DiscoveryConfigError) {
+      return jsonResponse({ error: error.message }, 400);
+    }
+    console.error(
+      "source-candidates-discovery: all discovery providers failed",
+      error,
+    );
+    // Root-caused (2026-07-17): this catch was firing for EVERY search, even
+    // role briefs with zero learned criteria -- traced via a temporary
+    // debug field on this response (since get_logs only returns gateway-
+    // level summaries, not console output) to a genuine Coresignal account
+    // issue, not a code bug: "Coresignal API error (402): Billing:
+    // Insufficient credits". Nothing in the calibration-loop change caused
+    // this -- the account simply ran out of Coresignal credits. Surfacing
+    // that specific detail here (still generic enough not to leak internals)
+    // rather than a flat "Failed to search" so this is diagnosable from the
+    // UI next time without needing another debug redeploy.
+    const detail =
+      error instanceof Error && /insufficient credits/i.test(error.message)
+        ? "Coresignal account is out of credits -- add credits/upgrade the plan before searching again."
+        : "Failed to search for candidates";
+    return jsonResponse({ error: detail }, 502);
+  }
+
+  const { result, providerName } = discovery;
+  const notes = [...result.notes];
+  if (providerName !== DISCOVERY_PROVIDERS[0]?.name) {
+    notes.push(
+      "Primary search source was unavailable -- results came from a backup source instead.",
+    );
+  }
+
+  try {
+    const candidates = result.candidates;
+    await annotateAlreadySaved(candidates, authHeader);
+
+    // Checkpoint 3c: best-effort, non-fatal semantic scoring. If it fails
+    // for any reason, the search still returns the discovery provider's
+    // results in their original order -- a ranking feature having a bad
+    // moment should never take down sourcing entirely.
+    if (!VOYAGE_API_KEY) {
+      notes.push(
+        "Match scoring unavailable: VOYAGE_API_KEY is not set for this project. Candidates shown in the discovery provider's original order.",
+      );
+    } else {
+      try {
+        const roleBriefVector = await getOrRefreshRoleBriefEmbedding(
+          roleBrief,
+          authHeader,
+        );
+        await scoreAndSortCandidates(candidates, roleBriefVector);
+      } catch (error) {
+        console.error("checkpoint 3c scoring failed (non-fatal)", error);
+        notes.push(
+          "Match scoring failed for this search -- candidates shown in the discovery provider's original order.",
+        );
+      }
+    }
+
+    // "Resume search position" fix, write side: remember where this fetch
+    // left off (in THIS provider's own query/token terms) so the NEXT plain
+    // "Fetch candidates" click continues from here. Skipped for preview
+    // calls. Best-effort: if this PATCH fails, the only consequence is the
+    // next fresh fetch restarts at the top again, not a broken search.
+    // Simplification worth flagging for later: this assumes one active
+    // provider at a time -- if a second provider is ever live
+    // simultaneously (not just as a failover), this cache would need to be
+    // keyed per-provider, not just per-role-brief.
+    if (!isPreview) {
+      try {
+        await fetch(`${SUPABASE_URL}/rest/v1/deals?id=eq.${roleBrief.id}`, {
+          method: "PATCH",
+          headers: {
+            apikey: SUPABASE_ANON_KEY ?? "",
+            Authorization: authHeader,
+            "Content-Type": "application/json",
+            Prefer: "return=minimal",
+          },
+          body: JSON.stringify({
+            role_brief_last_scroll_token: result.scrollToken,
+            role_brief_last_scroll_query: result.queryText,
+            role_brief_last_scroll_updated_at: new Date().toISOString(),
+          }),
+        });
+      } catch (error) {
+        console.error("scroll position cache write failed (non-fatal)", error);
+      }
+    }
+
+    if (!isPreview) {
+      const isContinuation = isDiscoverySearchContinuation({
+        scrollToken,
+        isPreview,
+        cachedScrollQuery: roleBrief.role_brief_last_scroll_query,
+        cachedScrollToken: roleBrief.role_brief_last_scroll_token,
+        queryText: result.queryText,
+      });
+      await persistDiscoverySourceAttribution(
+        roleBrief.id,
+        providerName,
+        candidates,
+        authHeader,
+        isContinuation,
+      );
+    }
+
+    return jsonResponse({
+      role_brief: {
+        id: roleBrief.id,
+        title: roleBrief.name,
+        location: roleBrief.location,
+      },
+      query_used: result.queryText,
+      notes,
+      total: result.total,
+      // Total-match-count fix: the real total across the whole index when
+      // available (Coresignal today; null for providers that don't supply
+      // this separately, e.g. PDL, whose `total` field above is already the
+      // real total). Distinct from `total`, which is just "how many
+      // candidates are in this response".
+      total_matches_all: result.totalMatches ?? null,
+      candidates: candidates.map(stripVendorFieldsForClient),
+      // Null/absent once the provider has nothing further to page into --
+      // the frontend uses this to know whether "Search wider" should still
+      // be offered.
+      scroll_token: result.scrollToken,
+    });
+  } catch (error) {
+    console.error("source-candidates-discovery failed", error);
+    return jsonResponse({ error: "Failed to process candidates" }, 500);
+  }
+};
+
+Deno.serve(async (req: Request) => {
+  if (req.method === "OPTIONS") {
+    return new Response(null, {
+      status: 204,
+      headers: CORS_HEADERS,
+    });
+  }
+  const authError = await requireAuth(req);
+  if (authError) return authError;
+
+  if (req.method !== "POST") {
+    return jsonResponse({ error: "Method Not Allowed" }, 405);
+  }
+
+  let body: any;
+  try {
+    body = await req.json();
+  } catch {
+    return jsonResponse({ error: "Invalid JSON body" }, 400);
+  }
+
+  const authHeader = req.headers.get("authorization")!;
+
+  // Calibration loop (2026-07-17): two new request modes, dispatched before
+  // the normal discovery flow -- see handleCalibrationContextualize /
+  // handleCriteriaImpact above. Omitting `mode` entirely (the normal
+  // frontend discovery flow) falls through to discoverCandidates unchanged.
+  if (body?.mode === "calibration_contextualize") {
+    return handleCalibrationContextualize(body, authHeader);
+  }
+  if (body?.mode === "criteria_impact") {
+    return handleCriteriaImpact(body, authHeader);
+  }
+  if (body?.mode === "rehydrate_from_attribution") {
+    return handleRehydrateFromAttribution(body, authHeader);
+  }
+
+  return discoverCandidates(body, authHeader);
+});

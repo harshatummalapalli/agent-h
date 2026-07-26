@@ -167,7 +167,7 @@ export const createDataProvider = ({
     });
   };
 
-  const dataProviderWithCustomMethod: CrmDataProvider = {
+  const dataProviderWithCustomMethod = {
     ...baseDataProvider,
     async getList(resource: string, params: any) {
       if (resource === "activity_log") {
@@ -185,6 +185,22 @@ export const createDataProvider = ({
     },
     prepareFirstOutreach: async () => {
       throw new Error("prepareFirstOutreach is not available in demo mode");
+    },
+    rankDiscoveryBatch: async () => [],
+    connectLinkedInAccount: async () => {
+      throw new Error("LinkedIn connect is not available in demo mode");
+    },
+    getUnipileLinkedInAccount: async () => ({
+      configured: false,
+      account_id: null,
+      seat_type: null,
+      status: "disconnected",
+      checkpoint_type: null,
+      connected_at: null,
+      last_sync_at: null,
+    }),
+    solveUnipileCheckpoint: async () => {
+      throw new Error("LinkedIn checkpoint is not available in demo mode");
     },
     unarchiveDeal: async (deal: Deal) => {
       // get all deals where stage is the same as the deal to unarchive
@@ -322,7 +338,9 @@ export const createDataProvider = ({
   };
 
   const dataProvider = withLifecycleCallbacks(
-    withSupabaseFilterAdapter(dataProviderWithCustomMethod),
+    withSupabaseFilterAdapter(
+      dataProviderWithCustomMethod as unknown as CrmDataProvider,
+    ),
     [
       {
         resource: "configuration",

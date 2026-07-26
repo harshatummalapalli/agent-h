@@ -437,9 +437,13 @@ export function useCandidateSourcing({
   // Handler factories — each factory receives current state/setters as deps
   // -------------------------------------------------------------------------
 
+  // RA's notify type uses `NotificationType` (a union) but all handler factories
+  // declare a looser `string` type for the opts.type field — cast to align them.
+  const notifyLoose = notify as (msg: string, opts: { type: string }) => void;
+
   const discoveryHandlers = createDiscoverySearchHandlers({
     dataProvider,
-    notify,
+    notify: notifyLoose,
     selectedId,
     size,
     sortField,
@@ -484,6 +488,7 @@ export function useCandidateSourcing({
     setSteeringResult,
     setSteeringApplyState,
     setRoleBriefDetail,
+    roleBriefDetail,
     resetSearchUiState,
     loadRoleBriefContext,
     applySourcingSnapshot,
@@ -492,7 +497,7 @@ export function useCandidateSourcing({
 
   const freePortalHandlers = createFreePortalAndXrayHandlers({
     dataProvider,
-    notify,
+    notify: notifyLoose,
     selectedId,
     freePortalCandidates,
     freePortalNotes,
@@ -506,7 +511,7 @@ export function useCandidateSourcing({
 
   const calibrationHandlers = createCalibrationFlowHandlers({
     dataProvider,
-    notify,
+    notify: notifyLoose,
     selectedId,
     calibrationReasons,
     contextualizeResults,
@@ -524,7 +529,7 @@ export function useCandidateSourcing({
 
   const enrichmentHandlers = createEnrichmentActionHandlers({
     dataProvider,
-    notify,
+    notify: notifyLoose,
     selectedId,
     candidateDbIds,
     fullProfileData,
@@ -543,7 +548,7 @@ export function useCandidateSourcing({
 
   const outreachHandlers = createOutreachActionHandlers({
     dataProvider,
-    notify,
+    notify: notifyLoose,
     selectedId,
     candidates,
     bulkSelected,
@@ -563,7 +568,7 @@ export function useCandidateSourcing({
 
   const interviewResumeOfferHandlers = createInterviewResumeOfferHandlers({
     dataProvider,
-    notify,
+    notify: notifyLoose,
     selectedId,
     candidateDbIds,
     bookingPrepared,

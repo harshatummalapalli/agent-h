@@ -66,6 +66,10 @@ export type PdlCandidate = {
   years_experience?: number | null;
   company_size?: number | null;
   _all_portals?: Array<{ vendor: string; url: string | null }>;
+  /** LLM pre-rank: 1 = best fit. Only set for candidates the LLM ranked (top 25). */
+  _llm_rank?: number | null;
+  /** Short LLM explanation of why this candidate fits the role. */
+  _llm_why_fit?: string | null;
 };
 
 export type FreePortalResult = {

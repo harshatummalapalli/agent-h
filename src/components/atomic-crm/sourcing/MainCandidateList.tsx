@@ -19,12 +19,14 @@ export function MainCandidateList({
   visibleCount,
   showMore,
   embedded,
+  onOpenSidebar,
 }: {
   s: SourcingContext;
   handleAddToPipeline: (candidate: PdlCandidate) => void;
   visibleCount: number;
   showMore: (total: number) => void;
   embedded: boolean;
+  onOpenSidebar?: () => void;
 }) {
   return (
     <div className="flex flex-col gap-3">
@@ -56,12 +58,13 @@ export function MainCandidateList({
               size="sm"
               variant="outline"
               onClick={() => {
-                s.controlPanelRef.current?.scrollIntoView({
-                  behavior: "smooth",
-                  block: "center",
-                });
-                if (!s.criteriaImpact && !s.criteriaImpactLoading) {
-                  void s.handleRefreshCriteriaImpact();
+                if (onOpenSidebar) {
+                  onOpenSidebar();
+                } else {
+                  s.controlPanelRef.current?.scrollIntoView({
+                    behavior: "smooth",
+                    block: "center",
+                  });
                 }
               }}
             >
@@ -71,11 +74,14 @@ export function MainCandidateList({
               size="sm"
               variant="outline"
               onClick={() => {
-                s.controlPanelRef.current?.scrollIntoView({
-                  behavior: "smooth",
-                  block: "center",
-                });
-                s.steeringInputRef.current?.focus();
+                if (onOpenSidebar) {
+                  onOpenSidebar();
+                } else {
+                  s.controlPanelRef.current?.scrollIntoView({
+                    behavior: "smooth",
+                    block: "center",
+                  });
+                }
               }}
             >
               Tighten
@@ -109,9 +115,11 @@ export function MainCandidateList({
       {s.stage === "fetched" && s.candidates.length > 0 && (
         <div className="flex items-center justify-between gap-3 -mt-2">
           <p className="text-xs text-muted-foreground">
-            {s.candidates.some((c) => typeof c._match_score === "number")
-              ? "Sorted by match score (highest first)."
-              : "Candidates shown in discovery order."}{" "}
+            {s.candidates.some((c) => c._llm_rank != null)
+              ? "Top 25 ranked by AI fit — best matches first."
+              : s.candidates.some((c) => typeof c._match_score === "number")
+                ? "Sorted by match score (highest first)."
+                : "Candidates shown in discovery order."}{" "}
             {s.backgroundSaving && (
               <span>Saving {s.candidates.length} candidates…</span>
             )}
@@ -143,193 +151,208 @@ export function MainCandidateList({
       )}
 
       {/* Candidate cards */}
-      {s.candidates.slice(0, visibleCount).map((candidate) => {
-        const saveState = s.saveStates[candidate.id] ?? "idle";
-        const candidateId = s.candidateDbIds[candidate.id];
-        const evidenceState = s.evidenceStates[candidate.id] ?? "idle";
-        const evidenceResult = s.evidenceResults[candidate.id];
-        const scoreState = s.scoreStates[candidate.id] ?? "idle";
-        const scoreResult = s.scoreResults[candidate.id];
+      {(() => {
+        const hasLlmRanks = s.candidates.some((c) => c._llm_rank != null);
+        const ranked25Count = hasLlmRanks
+          ? s.candidates.filter((c) => c._llm_rank != null).length
+          : 0;
+        return s.candidates.slice(0, visibleCount).map((candidate, idx) => {
+          const saveState = s.saveStates[candidate.id] ?? "idle";
+          const candidateId = s.candidateDbIds[candidate.id];
+          const evidenceState = s.evidenceStates[candidate.id] ?? "idle";
+          const evidenceResult = s.evidenceResults[candidate.id];
+          const isFirstUnranked =
+            hasLlmRanks && candidate._llm_rank == null && idx === ranked25Count;
 
-        return (
-          <div
-            key={candidate.id}
-            className="border rounded-md p-3 flex flex-col gap-3"
-          >
-            <div className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                aria-label={`Select ${candidate.full_name ?? candidate.id} for bulk outreach`}
-                checked={s.bulkSelected.has(candidate.id)}
-                onChange={(e) => {
-                  s.setBulkSelected((prev) => {
-                    const next = new Set(prev);
-                    if (e.target.checked) next.add(candidate.id);
-                    else next.delete(candidate.id);
-                    return next;
-                  });
-                }}
-                className="w-4 h-4 shrink-0"
-              />
-              <div className="flex-1">
-                <CandidateQuickActionBar emails={candidate.emails} />
-              </div>
-            </div>
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex gap-3">
-                <div
-                  className="w-10 h-10 rounded-full bg-muted flex items-center justify-center text-sm font-medium text-muted-foreground shrink-0"
-                  aria-hidden="true"
-                >
-                  {getInitials(candidate.full_name)}
-                </div>
-                <div>
-                  <div className="font-medium">
-                    {candidateId ? (
-                      <Link
-                        to={`/candidates/${candidateId}/show`}
-                        className="hover:underline"
-                      >
-                        {titleCase(candidate.full_name) ?? "(name unavailable)"}
-                      </Link>
-                    ) : (
-                      (titleCase(candidate.full_name) ?? "(name unavailable)")
-                    )}
-                  </div>
-                  <div className="text-sm text-muted-foreground">
-                    {titleCase(candidate.job_title)}
-                    {candidate.job_company_name
-                      ? ` at ${titleCase(candidate.job_company_name)}`
-                      : ""}
-                  </div>
-                  <div className="text-sm text-muted-foreground">
-                    {titleCase(candidate.location_name)}
-                  </div>
-                  <div className="flex items-center gap-2 mt-1">
-                    {candidate.linkedin_url && (
-                      <a
-                        href={`https://${candidate.linkedin_url}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-xs ah-link"
-                      >
-                        LinkedIn
-                      </a>
-                    )}
-                  </div>
-                  {candidate.skills && candidate.skills.length > 0 && (
-                    <div className="text-xs text-muted-foreground mt-1">
-                      Skills: {candidate.skills.slice(0, 10).join(", ")}
-                    </div>
-                  )}
-                  {candidate._match_evidence && (
-                    <div className={`text-xs mt-1 ${AH_CALLOUT_WARN}`}>
-                      {candidate._match_evidence}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <Button
-                variant={saveState === "saved" ? "outline" : "default"}
-                disabled={saveState === "saving" || saveState === "saved"}
-                onClick={() => handleAddToPipeline(candidate)}
-                className="shrink-0"
-              >
-                {saveState === "saved"
-                  ? "Added"
-                  : saveState === "saving"
-                    ? "Adding..."
-                    : "Add to pipeline"}
-              </Button>
-            </div>
-
-            {/* Why this could be a fit — auto-expanded for scored candidates */}
-            {s.selectedId && (
-              <div className="border-t pt-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    const isOpen = Boolean(s.evidenceExpanded[candidate.id]);
-                    s.setEvidenceExpanded((prev) => ({
-                      ...prev,
-                      [candidate.id]: !isOpen,
-                    }));
-                    if (!isOpen) {
-                      if (candidateId) {
-                        if (!scoreResult && scoreState === "idle") {
-                          s.handleScoreCandidate(candidate);
-                        }
-                      } else if (!evidenceResult && evidenceState === "idle") {
-                        s.handleDiscoveryEvidence(candidate);
-                      }
-                    }
-                  }}
-                  className="text-xs ah-link flex items-center gap-1"
-                >
-                  Why this could be a fit
-                  <span aria-hidden="true">
-                    {s.evidenceExpanded[candidate.id] ? "▲" : "▼"}
+          return (
+            <div key={candidate.id}>
+              {isFirstUnranked && (
+                <div className="flex items-center gap-2 py-2 my-1">
+                  <div className="flex-1 border-t border-dashed" />
+                  <span className="text-xs text-muted-foreground shrink-0">
+                    Additional candidates ({s.candidates.length - ranked25Count}{" "}
+                    more)
                   </span>
-                </button>
-                {s.evidenceExpanded[candidate.id] && (
-                  <div className="mt-2 flex flex-col gap-1">
-                    {(candidateId
-                      ? scoreState === "loading"
-                      : evidenceState === "loading") && (
-                      <p className="text-xs text-muted-foreground">
-                        Gathering evidence...
-                      </p>
-                    )}
-                    {(() => {
-                      const checks = candidateId
-                        ? scoreResult?.must_haves_check
-                        : evidenceResult;
-                      if (
-                        (candidateId ? scoreState : evidenceState) ===
-                          "loading" ||
-                        !checks
-                      )
-                        return null;
-                      if (checks.length === 0) {
-                        return (
-                          <p className="text-xs text-muted-foreground">
-                            No specific evidence available for this candidate.
-                          </p>
-                        );
-                      }
-                      return checks.map((m: MustHaveCheck, i: number) => (
-                        <div
-                          key={i}
-                          className="text-xs flex items-center gap-1.5"
-                        >
-                          <span
-                            className={
-                              m.status === "found"
-                                ? "ah-text-good"
-                                : m.status === "inferred"
-                                  ? "ah-text-warn"
-                                  : "ah-text-danger"
-                            }
-                            aria-hidden="true"
+                  <div className="flex-1 border-t border-dashed" />
+                </div>
+              )}
+              <div className="border rounded-md p-3 flex flex-col gap-3">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    aria-label={`Select ${candidate.full_name ?? candidate.id} for bulk outreach`}
+                    checked={s.bulkSelected.has(candidate.id)}
+                    onChange={(e) => {
+                      s.setBulkSelected((prev) => {
+                        const next = new Set(prev);
+                        if (e.target.checked) next.add(candidate.id);
+                        else next.delete(candidate.id);
+                        return next;
+                      });
+                    }}
+                    className="w-4 h-4 shrink-0"
+                  />
+                  <div className="flex-1">
+                    <CandidateQuickActionBar emails={candidate.emails} />
+                  </div>
+                </div>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex gap-3">
+                    <div
+                      className="w-10 h-10 rounded-full bg-muted flex items-center justify-center text-sm font-medium text-muted-foreground shrink-0"
+                      aria-hidden="true"
+                    >
+                      {getInitials(candidate.full_name)}
+                    </div>
+                    <div>
+                      <div className="font-medium">
+                        {candidateId ? (
+                          <Link
+                            to={`/candidates/${candidateId}/show`}
+                            className="hover:underline"
                           >
-                            {m.status === "found"
-                              ? "✓"
-                              : m.status === "inferred"
-                                ? "~"
-                                : "✗"}
-                          </span>
-                          <span>{m.requirement}</span>
+                            {titleCase(candidate.full_name) ??
+                              "(name unavailable)"}
+                          </Link>
+                        ) : (
+                          (titleCase(candidate.full_name) ??
+                          "(name unavailable)")
+                        )}
+                      </div>
+                      <div className="text-sm text-muted-foreground">
+                        {titleCase(candidate.job_title)}
+                        {candidate.job_company_name
+                          ? ` at ${titleCase(candidate.job_company_name)}`
+                          : ""}
+                      </div>
+                      <div className="text-sm text-muted-foreground">
+                        {titleCase(candidate.location_name)}
+                      </div>
+                      <div className="flex items-center gap-2 mt-1">
+                        {candidate.linkedin_url && (
+                          <a
+                            href={`https://${candidate.linkedin_url}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-xs ah-link"
+                          >
+                            LinkedIn
+                          </a>
+                        )}
+                      </div>
+                      {candidate.skills && candidate.skills.length > 0 && (
+                        <div className="text-xs text-muted-foreground mt-1">
+                          Skills: {candidate.skills.slice(0, 10).join(", ")}
                         </div>
-                      ));
-                    })()}
+                      )}
+                      {candidate._llm_why_fit && (
+                        <div className="text-xs mt-1 text-muted-foreground italic">
+                          {candidate._llm_why_fit}
+                        </div>
+                      )}
+                      {candidate._match_evidence && (
+                        <div className={`text-xs mt-1 ${AH_CALLOUT_WARN}`}>
+                          {candidate._match_evidence}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <Button
+                    variant={saveState === "saved" ? "outline" : "default"}
+                    disabled={saveState === "saving" || saveState === "saved"}
+                    onClick={() => handleAddToPipeline(candidate)}
+                    className="shrink-0"
+                  >
+                    {saveState === "saved"
+                      ? "Added"
+                      : saveState === "saving"
+                        ? "Adding..."
+                        : "Add to pipeline"}
+                  </Button>
+                </div>
+
+                {/* Why this could be a fit — auto-expanded for scored candidates */}
+                {s.selectedId && (
+                  <div className="border-t pt-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const isOpen = Boolean(
+                          s.evidenceExpanded[candidate.id],
+                        );
+                        s.setEvidenceExpanded((prev) => ({
+                          ...prev,
+                          [candidate.id]: !isOpen,
+                        }));
+                        if (
+                          !isOpen &&
+                          !evidenceResult &&
+                          evidenceState === "idle"
+                        ) {
+                          s.handleDiscoveryEvidence(candidate);
+                        }
+                      }}
+                      className="text-xs ah-link flex items-center gap-1"
+                    >
+                      Why this could be a fit
+                      <span aria-hidden="true">
+                        {s.evidenceExpanded[candidate.id] ? "▲" : "▼"}
+                      </span>
+                    </button>
+                    {s.evidenceExpanded[candidate.id] && (
+                      <div className="mt-2 flex flex-col gap-1">
+                        {evidenceState === "loading" && (
+                          <p className="text-xs text-muted-foreground">
+                            Gathering evidence...
+                          </p>
+                        )}
+                        {(() => {
+                          const checks = evidenceResult;
+                          if (evidenceState === "loading" || !checks)
+                            return null;
+                          if (checks.length === 0) {
+                            return (
+                              <p className="text-xs text-muted-foreground">
+                                No specific evidence available for this
+                                candidate.
+                              </p>
+                            );
+                          }
+                          return checks.map((m: MustHaveCheck, i: number) => (
+                            <div
+                              key={i}
+                              className="text-xs flex items-center gap-1.5"
+                            >
+                              <span
+                                className={
+                                  m.status === "found"
+                                    ? "ah-text-good"
+                                    : m.status === "inferred"
+                                      ? "ah-text-warn"
+                                      : "ah-text-danger"
+                                }
+                                aria-hidden="true"
+                              >
+                                {m.status === "found"
+                                  ? "✓"
+                                  : m.status === "inferred"
+                                    ? "~"
+                                    : "✗"}
+                              </span>
+                              <span>{m.requirement}</span>
+                            </div>
+                          ));
+                        })()}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
-            )}
-          </div>
-        );
-      })}
+            </div>
+          );
+        });
+      })()}
 
       {s.stage === "fetched" && visibleCount < s.candidates.length && (
         <Button variant="outline" onClick={() => showMore(s.candidates.length)}>

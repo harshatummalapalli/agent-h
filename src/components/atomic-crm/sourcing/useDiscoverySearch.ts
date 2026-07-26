@@ -64,6 +64,7 @@ export type DiscoverySearchDeps = {
   setSteeringResult: SetState<ContextualizeResult | null>;
   setSteeringApplyState: SetState<"idle" | "applying" | "applied">;
   setRoleBriefDetail: SetState<RoleBriefDetail | null>;
+  roleBriefDetail: RoleBriefDetail | null;
   // helpers from main hook
   resetSearchUiState: () => void;
   loadRoleBriefContext: (id: string) => void;
@@ -75,6 +76,43 @@ export type DiscoverySearchDeps = {
 };
 
 export function createDiscoverySearchHandlers(d: DiscoverySearchDeps) {
+  // Fire-and-forget: rank candidates with LLM and annotate top 25 with _llm_rank + _llm_why_fit.
+  // Updates candidates state in place; does not block the fetch flow.
+  const applyLlmRanks = async (candidates: PdlCandidate[]) => {
+    if (candidates.length === 0) return;
+    try {
+      const summaries = candidates.map((c) => ({
+        id: c.id,
+        full_name: c.full_name ?? null,
+        job_title: c.job_title ?? null,
+        job_company_name: c.job_company_name ?? null,
+        location_name: c.location_name ?? null,
+        skills: c.skills ?? null,
+        years_experience: c.years_experience ?? null,
+      }));
+      const ranked = await d.dataProvider.rankDiscoveryBatch(
+        summaries,
+        (d.roleBriefDetail ?? {}) as Record<string, unknown>,
+      );
+      if (!ranked.length) return;
+      const byId = new Map(ranked.map((r) => [r.id, r]));
+      d.setCandidates((prev) => {
+        const updated = prev.map((c) => {
+          const r = byId.get(c.id);
+          return r ? { ...c, _llm_rank: r.rank, _llm_why_fit: r.why_fit } : c;
+        });
+        // Re-sort: ranked top-25 first (by llm_rank), then unranked (by existing score)
+        const ranked25 = updated
+          .filter((c) => c._llm_rank != null)
+          .sort((a, b) => (a._llm_rank ?? 99) - (b._llm_rank ?? 99));
+        const rest = updated.filter((c) => c._llm_rank == null);
+        return [...ranked25, ...rest];
+      });
+    } catch {
+      // Non-fatal — ranking failure never breaks the main flow
+    }
+  };
+
   const handleDiscoveryEvidence = async (candidate: PdlCandidate) => {
     if (!d.selectedId) return;
     d.setEvidenceStates((prev) => ({ ...prev, [candidate.id]: "loading" }));
@@ -266,6 +304,8 @@ export function createDiscoverySearchHandlers(d: DiscoverySearchDeps) {
           .map((c) => handleDiscoveryEvidence(c)),
       );
       void d.autoSaveAllCandidates(data.candidates, Number(d.selectedId));
+      // LLM pre-rank (fire-and-forget; annotates top 25 and re-sorts candidates state)
+      void applyLlmRanks(sorted);
     } catch (error: any) {
       d.notify(error?.message || "Failed to fetch candidates", {
         type: "error",
@@ -340,6 +380,8 @@ export function createDiscoverySearchHandlers(d: DiscoverySearchDeps) {
           .map((c) => handleDiscoveryEvidence(c)),
       );
       void d.autoSaveAllCandidates(data.candidates, Number(d.selectedId));
+      // LLM pre-rank (fire-and-forget; annotates top 25 and re-sorts candidates state)
+      void applyLlmRanks(sorted);
     } catch (error: any) {
       d.notify(error?.message || "Failed to search for candidates", {
         type: "error",

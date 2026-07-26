@@ -56,21 +56,40 @@ export function checkDailyCap(sale: {
   };
 }
 
+function _seatFromPremiumFeatures(features: unknown): string | null {
+  if (!Array.isArray(features)) return null;
+  const f = features.map((x) => String(x).toLowerCase());
+  if (f.includes("recruiter")) return "recruiter";
+  if (f.some((x) => x.includes("sales"))) return "sales_navigator";
+  if (f.includes("premium")) return "premium";
+  return null;
+}
+
 export function detectLinkedInSeatType(
   account: Record<string, unknown>,
 ): string | null {
+  // Real Unipile shape: connection_params.im.premiumFeatures at account root
+  const rootParams = account.connection_params as
+    | Record<string, unknown>
+    | undefined;
+  const rootIm = rootParams?.im as Record<string, unknown> | undefined;
+  const rootSeat = _seatFromPremiumFeatures(rootIm?.premiumFeatures);
+  if (rootSeat) return rootSeat;
+
   const sources = account.sources;
   if (Array.isArray(sources)) {
     for (const source of sources) {
       if (!source || typeof source !== "object") continue;
       const row = source as Record<string, unknown>;
-      const provider = String(row.provider ?? row.type ?? "").toUpperCase();
-      if (provider !== "LINKEDIN") continue;
       if (typeof row.seat_type === "string") return row.seat_type;
       if (typeof row.account_type === "string") return row.account_type;
       const params = row.connection_params as
         | Record<string, unknown>
         | undefined;
+      const im = params?.im as Record<string, unknown> | undefined;
+      const srcSeat = _seatFromPremiumFeatures(im?.premiumFeatures);
+      if (srcSeat) return srcSeat;
+      // Legacy boolean flags
       if (params?.recruiter === true) return "recruiter";
       if (params?.sales_navigator === true) return "sales_navigator";
       if (params?.premium === true) return "premium";
@@ -88,11 +107,7 @@ export function mapUnipileAccountStatus(account: Record<string, unknown>): {
   status: string;
   checkpoint_type: string | null;
 } {
-  const rawStatus = String(account.status ?? account.state ?? "").toUpperCase();
-  if (rawStatus === "CREDENTIALS" || rawStatus === "DISCONNECTED") {
-    return { status: "credentials_required", checkpoint_type: null };
-  }
-
+  // Checkpoint takes priority regardless of where status appears
   const checkpoint = account.checkpoint;
   if (checkpoint && typeof checkpoint === "object") {
     const cp = checkpoint as Record<string, unknown>;
@@ -102,6 +117,36 @@ export function mapUnipileAccountStatus(account: Record<string, unknown>): {
     };
   }
 
+  // Real Unipile /accounts/{id}: status lives in sources[].status, not top-level
+  const sources = account.sources;
+  if (Array.isArray(sources) && sources.length > 0) {
+    const statuses = sources
+      .filter((s) => s && typeof s === "object")
+      .map((s) =>
+        String((s as Record<string, unknown>).status ?? "").toUpperCase(),
+      );
+    if (
+      statuses.some(
+        (s) => s === "CREDENTIALS" || s === "DISCONNECTED" || s === "ERROR",
+      )
+    ) {
+      return { status: "credentials_required", checkpoint_type: null };
+    }
+    if (
+      statuses.some((s) => s === "OK" || s === "CONNECTED" || s === "RUNNING")
+    ) {
+      return { status: "connected", checkpoint_type: null };
+    }
+  }
+
+  // Fallback: top-level status/state for forward-compat and older Unipile shapes
+  const rawStatus = String(account.status ?? account.state ?? "").toUpperCase();
+  if (rawStatus === "CREDENTIALS" || rawStatus === "DISCONNECTED") {
+    return { status: "credentials_required", checkpoint_type: null };
+  }
+  if (rawStatus === "ERROR") {
+    return { status: "credentials_required", checkpoint_type: null };
+  }
   if (
     rawStatus === "OK" ||
     rawStatus === "CONNECTED" ||

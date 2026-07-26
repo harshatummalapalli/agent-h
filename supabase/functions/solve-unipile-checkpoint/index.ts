@@ -19,7 +19,13 @@ const handler = async (req: Request) => {
     return jsonResponse({ error: "Method Not Allowed" }, 405);
 
   if (!isUnipileConfigured()) {
-    return jsonResponse({ error: "Unipile is not configured" }, 500);
+    return jsonResponse(
+      {
+        error:
+          "LinkedIn outreach isn't configured on this server yet. Ask your admin to add LinkedIn outreach secrets in Supabase Edge Function settings.",
+      },
+      500,
+    );
   }
 
   let code: string | undefined;
@@ -103,8 +109,7 @@ const handler = async (req: Request) => {
     method: "PATCH",
     body: JSON.stringify({
       unipile_linkedin_seat_type: seatType,
-      unipile_account_status:
-        mapped.status === "unknown" ? "connected" : mapped.status,
+      unipile_account_status: mapped.status,
       unipile_checkpoint_type: null,
       unipile_last_sync_at: now,
       unipile_metadata: { checkpoint_result: result },

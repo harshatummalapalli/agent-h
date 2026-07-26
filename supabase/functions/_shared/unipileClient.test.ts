@@ -74,8 +74,46 @@ describe("checkDailyCap", () => {
   });
 });
 
-describe("unipileClient", () => {
-  it("detects recruiter seat from sources metadata", () => {
+describe("detectLinkedInSeatType", () => {
+  it("detects recruiter from connection_params.im.premiumFeatures at account root (real payload shape)", () => {
+    expect(
+      detectLinkedInSeatType({
+        id: "b6OxZmnMQbyjsy_6eCkHEw",
+        type: "LINKEDIN",
+        sources: [{ id: "..._MESSAGING", status: "OK" }],
+        connection_params: { im: { premiumFeatures: ["recruiter"] } },
+      }),
+    ).toBe("recruiter");
+  });
+
+  it("detects sales_navigator from premiumFeatures", () => {
+    expect(
+      detectLinkedInSeatType({
+        id: "acc1",
+        connection_params: { im: { premiumFeatures: ["sales_navigator"] } },
+      }),
+    ).toBe("sales_navigator");
+  });
+
+  it("detects premium from premiumFeatures", () => {
+    expect(
+      detectLinkedInSeatType({
+        id: "acc1",
+        connection_params: { im: { premiumFeatures: ["premium"] } },
+      }),
+    ).toBe("premium");
+  });
+
+  it("falls back to classic when premiumFeatures is empty array", () => {
+    expect(
+      detectLinkedInSeatType({
+        id: "acc1",
+        connection_params: { im: { premiumFeatures: [] } },
+      }),
+    ).toBe("classic");
+  });
+
+  it("falls back to legacy boolean recruiter flag in sources", () => {
     expect(
       detectLinkedInSeatType({
         id: "acc1",
@@ -86,19 +124,79 @@ describe("unipileClient", () => {
     ).toBe("recruiter");
   });
 
-  it("maps checkpoint pending status", () => {
+  it("returns null when no id", () => {
+    expect(detectLinkedInSeatType({})).toBeNull();
+  });
+});
+
+describe("mapUnipileAccountStatus", () => {
+  it("returns connected for real Unipile payload with sources[].status=OK", () => {
+    expect(
+      mapUnipileAccountStatus({
+        id: "b6OxZmnMQbyjsy_6eCkHEw",
+        type: "LINKEDIN",
+        sources: [{ id: "..._MESSAGING", status: "OK" }],
+        connection_params: { im: { premiumFeatures: ["recruiter"] } },
+      }),
+    ).toEqual({ status: "connected", checkpoint_type: null });
+  });
+
+  it("returns credentials_required when sources[].status=CREDENTIALS", () => {
+    expect(
+      mapUnipileAccountStatus({
+        id: "acc1",
+        sources: [{ status: "CREDENTIALS" }],
+      }),
+    ).toEqual({ status: "credentials_required", checkpoint_type: null });
+  });
+
+  it("returns credentials_required when sources[].status=DISCONNECTED", () => {
+    expect(
+      mapUnipileAccountStatus({
+        id: "acc1",
+        sources: [{ status: "DISCONNECTED" }],
+      }),
+    ).toEqual({ status: "credentials_required", checkpoint_type: null });
+  });
+
+  it("returns credentials_required when sources[].status=ERROR", () => {
+    expect(
+      mapUnipileAccountStatus({
+        id: "acc1",
+        sources: [{ status: "ERROR" }],
+      }),
+    ).toEqual({ status: "credentials_required", checkpoint_type: null });
+  });
+
+  it("checkpoint takes priority over sources status", () => {
+    expect(
+      mapUnipileAccountStatus({
+        sources: [{ status: "OK" }],
+        checkpoint: { type: "2FA" },
+      }),
+    ).toEqual({ status: "checkpoint_pending", checkpoint_type: "2FA" });
+  });
+
+  it("falls back to top-level status=OK when no sources", () => {
+    expect(mapUnipileAccountStatus({ status: "OK" })).toEqual({
+      status: "connected",
+      checkpoint_type: null,
+    });
+  });
+
+  it("maps top-level CREDENTIALS when no sources", () => {
+    expect(mapUnipileAccountStatus({ status: "CREDENTIALS" })).toEqual({
+      status: "credentials_required",
+      checkpoint_type: null,
+    });
+  });
+
+  it("maps checkpoint pending (legacy shape with top-level status)", () => {
     expect(
       mapUnipileAccountStatus({
         status: "OK",
         checkpoint: { type: "2FA" },
       }),
     ).toEqual({ status: "checkpoint_pending", checkpoint_type: "2FA" });
-  });
-
-  it("maps credentials required", () => {
-    expect(mapUnipileAccountStatus({ status: "CREDENTIALS" })).toEqual({
-      status: "credentials_required",
-      checkpoint_type: null,
-    });
   });
 });

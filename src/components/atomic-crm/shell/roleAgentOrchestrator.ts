@@ -78,6 +78,19 @@ async function executeReversibleOrRead(
     return { summary: parsed.explanation };
   }
 
+  const sourcingActions = [
+    "start_sourcing",
+    "calibration_yes",
+    "show_more_like_this",
+    "relax_and_research",
+  ];
+  if (deps.deal?.sourcing_paused && sourcingActions.includes(parsed.action)) {
+    return {
+      summary:
+        "Sourcing is paused for this role — resume it from the role header before continuing.",
+    };
+  }
+
   if (parsed.action === "start_sourcing") {
     const batch = await deps.dataProvider.startCalibrationSourcing(deps.dealId);
     if (batch.candidates.length === 0) {

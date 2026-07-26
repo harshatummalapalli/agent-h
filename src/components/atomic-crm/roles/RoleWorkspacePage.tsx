@@ -166,7 +166,35 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
     },
   };
 
+  const handleToggleSourcingPause = async () => {
+    if (!deal) return;
+    const next = !deal.sourcing_paused;
+    try {
+      await dataProvider.update("deals", {
+        id: dealId,
+        data: { sourcing_paused: next },
+        previousData: deal,
+      });
+      queryClient.invalidateQueries({ queryKey: ["deals", dealId] });
+      toast.success(next ? "Sourcing paused" : "Sourcing resumed");
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Couldn't update sourcing status",
+      );
+    }
+  };
+
   const runFreeTextCommand = async (commandText: string) => {
+    const sourcingCommands = ["calibration_yes", "calibration_no"];
+    if (
+      deal?.sourcing_paused &&
+      (sourcingCommands.includes(commandText) || commandText.length < 200)
+    ) {
+      toast.info("Sourcing is paused — resume it before running new searches.");
+      return;
+    }
     setCommandBusy(true);
     try {
       if (pendingCalibrationQuestion) {
@@ -194,6 +222,10 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
   };
 
   const handleContinueSearch = async () => {
+    if (deal?.sourcing_paused) {
+      toast.info("Sourcing is paused for this role — resume it to continue.");
+      return;
+    }
     setCommandBusy(true);
     try {
       // If cache exists, get next batch; otherwise start fresh sourcing
@@ -430,6 +462,7 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
               onAddNConfident={() => handleAddNConfident(confidentCandidates)}
               onSettings={() => setSettingsOpen(true)}
               onArchive={() => setArchiveConfirmOpen(true)}
+              onToggleSourcingPause={handleToggleSourcingPause}
             />
 
             {showLinkedInBanner && (
@@ -674,6 +707,7 @@ type RoleWorkspaceHeaderProps = {
   onAddNConfident: () => void;
   onSettings: () => void;
   onArchive: () => void;
+  onToggleSourcingPause: () => void;
 };
 
 const RoleWorkspaceHeader = ({
@@ -688,6 +722,7 @@ const RoleWorkspaceHeader = ({
   onAddNConfident,
   onSettings,
   onArchive,
+  onToggleSourcingPause,
 }: RoleWorkspaceHeaderProps) => {
   const [linkCopied, setLinkCopied] = useState(false);
   if (!deal) return null;
@@ -714,6 +749,14 @@ const RoleWorkspaceHeader = ({
           <Badge variant="outline" className="text-xs">
             {findDealLabel(dealStages, deal.stage)}
           </Badge>
+          {deal.sourcing_paused && (
+            <Badge
+              variant="secondary"
+              className="text-xs text-amber-700 bg-amber-100 border-amber-200"
+            >
+              Sourcing paused
+            </Badge>
+          )}
           {deal.expected_closing_date &&
             isValid(new Date(deal.expected_closing_date)) && (
               <span>
@@ -762,7 +805,16 @@ const RoleWorkspaceHeader = ({
           Add candidates
         </Button>
 
-        {/* Sourcing details are in the Role Memory sidebar */}
+        {/* Pause / Resume sourcing */}
+        <Button
+          size="sm"
+          variant={deal.sourcing_paused ? "destructive" : "ghost"}
+          onClick={onToggleSourcingPause}
+          className="text-xs px-2"
+          title={deal.sourcing_paused ? "Resume sourcing" : "Pause sourcing"}
+        >
+          {deal.sourcing_paused ? "Resume sourcing" : "Pause sourcing"}
+        </Button>
 
         {/* Copy application link */}
         {deal.public_application_token && (

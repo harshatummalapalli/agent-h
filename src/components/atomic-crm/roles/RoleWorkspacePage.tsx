@@ -5,6 +5,7 @@
 // All existing orchestrator / AgentHShell / outreach logic is preserved —
 // only the layout changes.
 import { isValid } from "date-fns";
+import { Settings } from "lucide-react";
 import { useMemo, useState } from "react";
 import {
   InfiniteListBase,
@@ -18,6 +19,13 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import { EditButton } from "@/components/admin/edit-button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -73,7 +81,8 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
   const [approvalBusy, setApprovalBusy] = useState(false);
   // Loop B: when calibration_no fires the agent asks "What didn't fit?";
   // the next free-text command goes to calibrationRerank instead of parse-agent-command.
-  const [pendingCalibrationQuestion, setPendingCalibrationQuestion] = useState(false);
+  const [pendingCalibrationQuestion, setPendingCalibrationQuestion] =
+    useState(false);
   const [linkedInBannerDismissed, setLinkedInBannerDismissed] = useState(
     () =>
       typeof sessionStorage !== "undefined" &&
@@ -295,7 +304,20 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
           )}
         </div>
 
-        {/* Two-tab spine: Sourcing (conversation) + Review & Contact */}
+        {/* Transcript — shared above tabs so pending approvals are visible on both tabs */}
+        <div className="max-w-4xl mx-auto w-full px-6 pt-2">
+          <RoleConversationTranscript
+            dealId={dealId}
+            onApprove={handleApproveProposal}
+            onStop={handleStopProposal}
+            onRefine={handleRefineProposal}
+            actionBusy={approvalBusy || commandBusy}
+            onCalibrationYes={handleCalibrationYes}
+            onCalibrationNo={handleCalibrationNo}
+          />
+        </div>
+
+        {/* Two-tab spine: Sourcing (add candidates) + Review & Contact */}
         <Tabs
           defaultValue={defaultTab}
           className="flex-1 flex flex-col min-h-0"
@@ -321,23 +343,10 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
             </div>
           </div>
 
-          {/* Sourcing — conversation is the primary spine */}
+          {/* Sourcing — add candidates manually or in bulk */}
           <TabsContent value="sourcing" className="flex-1 mt-0 overflow-y-auto">
             <div className="max-w-4xl mx-auto px-6 py-6 flex flex-col gap-6">
-              <RoleConversationTranscript
-                dealId={dealId}
-                onApprove={handleApproveProposal}
-                onStop={handleStopProposal}
-                onRefine={handleRefineProposal}
-                actionBusy={approvalBusy || commandBusy}
-                onCalibrationYes={handleCalibrationYes}
-                onCalibrationNo={handleCalibrationNo}
-              />
-
               <AddCandidatesPanel dealId={dealId} />
-
-              {/* Coordinator setup — parked as a collapsed panel out of the primary tab bar */}
-              <CoordinatorSetupPanel dealId={dealId} />
             </div>
           </TabsContent>
 
@@ -378,33 +387,6 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
         </Tabs>
       </div>
     </AgentHShell>
-  );
-};
-
-/* ------------------------------------------------------------------ */
-/* Coordinator setup panel — collapsed by default, parked in Sourcing  */
-/* tab instead of a dedicated top-level tab so the tab bar stays clean */
-/* ------------------------------------------------------------------ */
-
-const CoordinatorSetupPanel = ({ dealId }: { dealId: string }) => {
-  const [open, setOpen] = useState(false);
-
-  return (
-    <div className="ah-panel overflow-hidden">
-      <button
-        type="button"
-        className="w-full flex items-center justify-between px-6 py-3 text-sm text-muted-foreground hover:text-foreground transition-colors"
-        onClick={() => setOpen((v) => !v)}
-      >
-        <span className="font-medium">Coordinator setup (beta)</span>
-        <span>{open ? "▲" : "▼"}</span>
-      </button>
-      {open && (
-        <div className="border-t px-6 py-6">
-          <CoordinatorSettings dealId={dealId} />
-        </div>
-      )}
-    </div>
   );
 };
 
@@ -457,6 +439,19 @@ const RoleWorkspaceHeader = () => {
             {linkCopied ? "Link copied!" : "Copy application link"}
           </Button>
         )}
+        <Dialog>
+          <DialogTrigger asChild>
+            <Button variant="ghost" size="sm" aria-label="Role settings">
+              <Settings className="h-4 w-4" />
+            </Button>
+          </DialogTrigger>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Role settings</DialogTitle>
+            </DialogHeader>
+            <CoordinatorSettings dealId={String(record.id)} />
+          </DialogContent>
+        </Dialog>
         <EditButton />
       </div>
     </div>
@@ -477,9 +472,6 @@ const CoordinatorSettings = ({ dealId }: { dealId: string }) => {
     saved.knowledge_base ?? "",
   );
   const [calendarLink, setCalendarLink] = useState(saved.calendar_link ?? "");
-  const [mode, setMode] = useState<"draft" | "auto">(
-    saved.reply_mode ?? "draft",
-  );
   const [saving, setSaving] = useState(false);
   const [savedOk, setSavedOk] = useState(false);
 
@@ -493,7 +485,7 @@ const CoordinatorSettings = ({ dealId }: { dealId: string }) => {
           coordinator_settings: {
             knowledge_base: knowledgeBase,
             calendar_link: calendarLink,
-            reply_mode: mode,
+            reply_mode: "draft",
           },
         },
         previousData: deal ?? { id: dealId },
@@ -511,83 +503,48 @@ const CoordinatorSettings = ({ dealId }: { dealId: string }) => {
   };
 
   return (
-    <div className="flex flex-col gap-8">
-      <div>
-        <h2 className="text-lg font-semibold">Coordinator setup</h2>
-        <p className="text-sm text-muted-foreground mt-1">
-          Configure how Agent H handles candidate communication for this role.
-          Drafts are always held for your approval.
+    <div className="flex flex-col gap-4">
+      <p className="text-sm text-muted-foreground">
+        Agent H drafts every reply for your approval before anything sends.
+      </p>
+
+      <div className="flex flex-col gap-1.5">
+        <label className="text-sm font-medium" htmlFor="coord-kb">
+          Knowledge base
+        </label>
+        <p className="text-xs text-muted-foreground">
+          Role context Agent H uses when responding to candidates — FAQs,
+          process steps, important details.
         </p>
+        <Textarea
+          id="coord-kb"
+          placeholder="e.g. This is a full-time remote role. Interview process: recruiter screen → technical → founder chat. Salary: $120k–$150k…"
+          rows={5}
+          value={knowledgeBase}
+          onChange={(e) => setKnowledgeBase(e.target.value)}
+        />
       </div>
 
-      <div className="flex flex-col gap-4">
-        <div className="flex flex-col gap-1.5">
-          <label className="text-sm font-medium" htmlFor="coord-kb">
-            Knowledge base
-          </label>
-          <p className="text-xs text-muted-foreground">
-            Role context Agent H uses when responding to candidates — FAQs,
-            process steps, important details.
-          </p>
-          <Textarea
-            id="coord-kb"
-            placeholder="e.g. This is a full-time remote role. Interview process: recruiter screen → technical → founder chat. Salary: $120k–$150k…"
-            rows={6}
-            value={knowledgeBase}
-            onChange={(e) => setKnowledgeBase(e.target.value)}
-          />
-        </div>
+      <div className="flex flex-col gap-1.5">
+        <label className="text-sm font-medium" htmlFor="coord-cal">
+          Calendar link
+        </label>
+        <Input
+          id="coord-cal"
+          type="url"
+          placeholder="https://cal.com/your-link"
+          value={calendarLink}
+          onChange={(e) => setCalendarLink(e.target.value)}
+        />
+      </div>
 
-        <div className="flex flex-col gap-1.5">
-          <label className="text-sm font-medium" htmlFor="coord-cal">
-            Calendar link
-          </label>
-          <Input
-            id="coord-cal"
-            type="url"
-            placeholder="https://cal.com/your-link"
-            value={calendarLink}
-            onChange={(e) => setCalendarLink(e.target.value)}
-          />
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <span className="text-sm font-medium">Reply mode</span>
-          <div className="flex gap-3">
-            {(["draft", "auto"] as const).map((m) => (
-              <button
-                key={m}
-                type="button"
-                onClick={() => setMode(m)}
-                className={`flex-1 rounded-lg border px-4 py-3 text-sm text-left transition-colors ${
-                  mode === m
-                    ? "border-[var(--orange-active)] bg-[var(--orange-active-soft,oklch(0.97_0.04_45))] font-medium"
-                    : "border-border hover:border-muted-foreground/40"
-                }`}
-              >
-                <div className="font-medium">
-                  {m === "draft"
-                    ? "Drafts held for approval"
-                    : "Send automatically (coming soon)"}
-                </div>
-                <div className="text-xs text-muted-foreground mt-0.5">
-                  {m === "draft"
-                    ? "Agent H drafts every reply — you review and approve before it sends."
-                    : "Agent H sends replies automatically without approval — not yet available."}
-                </div>
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="flex items-center gap-3">
-          <Button className="self-start" onClick={handleSave} disabled={saving}>
-            {saving ? "Saving…" : "Save"}
-          </Button>
-          {savedOk && (
-            <span className="text-sm text-muted-foreground">Saved.</span>
-          )}
-        </div>
+      <div className="flex items-center gap-3">
+        <Button className="self-start" onClick={handleSave} disabled={saving}>
+          {saving ? "Saving…" : "Save"}
+        </Button>
+        {savedOk && (
+          <span className="text-sm text-muted-foreground">Saved.</span>
+        )}
       </div>
     </div>
   );

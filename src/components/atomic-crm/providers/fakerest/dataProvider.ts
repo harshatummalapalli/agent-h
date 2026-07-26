@@ -187,6 +187,24 @@ export const createDataProvider = ({
       throw new Error("prepareFirstOutreach is not available in demo mode");
     },
     rankDiscoveryBatch: async () => [],
+    startCalibrationSourcing: async () => ({
+      candidates: [],
+      pool_size: 0,
+      cursor: 0,
+      pool_exhausted: true,
+    }),
+    calibrationNextBatch: async () => ({
+      candidates: [],
+      pool_size: 0,
+      cursor: 0,
+      pool_exhausted: true,
+    }),
+    calibrationRerank: async () => ({
+      candidates: [],
+      pool_size: 0,
+      cursor: 0,
+      pool_exhausted: true,
+    }),
     connectLinkedInAccount: async () => {
       throw new Error("LinkedIn connect is not available in demo mode");
     },

@@ -154,29 +154,36 @@ async function executeReversibleOrRead(
     const result = await deps.dataProvider.continueSourcingForDeal(
       parsed.deal_id,
     );
-    deps.queryClient.invalidateQueries({ queryKey: ["deals", deps.dealId] });
-    deps.queryClient.invalidateQueries({ queryKey: ["deal_candidates"] });
     const filteredNote =
       result.filteredCount > 0
         ? `, ${result.filteredCount} filtered as not relevant`
         : "";
-    // TASK-003: append candidate cards after sourcing so recruiter sees them inline.
-    if (result.savedCandidates.length > 0) {
-      void appendCandidateCardTurns(
-        deps,
-        result.savedCandidates.map((c) => ({
-          id: c.id,
-          first_name: c.fullName.split(" ")[0] ?? null,
-          last_name: c.fullName.split(" ").slice(1).join(" ") || null,
-          job_title: c.title,
-          job_company_name: c.company,
-          linkedin_url: null,
+    // Show found candidates as calibration-style cards so the recruiter
+    // can explicitly add each one to the pipeline (T1: no auto-save).
+    if (result.candidates.length > 0) {
+      const top5 = result.candidates.slice(0, 5);
+      void appendCalibrationCardTurns(deps, {
+        candidates: top5.map((c) => ({
+          external_id: c.id,
+          name: c.full_name ?? `Candidate ${c.id}`,
+          headline:
+            [c.job_title, c.job_company_name].filter(Boolean).join(" at ") ||
+            null,
+          why_fit: "",
           match_score: null,
+          linkedin_url: c.linkedin_url ?? null,
+          from_bench: false,
         })),
-      );
+        pool_size: result.foundCount,
+        cursor: 0,
+        pool_exhausted: true,
+      });
     }
     return {
-      summary: `Found ${result.foundCount}, saved ${result.savedCount} new candidates${filteredNote}.`,
+      summary:
+        result.foundCount === 0
+          ? `No candidates found${filteredNote}.`
+          : `Found ${result.foundCount} candidate${result.foundCount === 1 ? "" : "s"}${filteredNote} — click "Add to pipeline" on any card to save.`,
     };
   }
 

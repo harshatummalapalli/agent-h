@@ -16,13 +16,6 @@ export type SourcingStep = {
   status: SourcingStepStatus;
 };
 
-export type SavedCandidateCard = {
-  id: number;
-  fullName: string;
-  title: string | null;
-  company: string | null;
-};
-
 export type ThreadItem =
   | { kind: "user"; id: string; text: string }
   | {
@@ -33,12 +26,15 @@ export type ThreadItem =
       result?: {
         foundCount: number;
         filteredCount: number;
-        savedCount: number;
-        savedCandidates: SavedCandidateCard[];
       };
       error?: string;
     }
-  | { kind: "assistant"; id: string; text: string; tone: "success" | "info" | "error" };
+  | {
+      kind: "assistant";
+      id: string;
+      text: string;
+      tone: "success" | "info" | "error";
+    };
 
 export const initialSourcingSteps = (): SourcingStep[] => [
   { key: "parse", label: "Understanding your request", status: "done" },

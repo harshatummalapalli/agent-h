@@ -170,7 +170,7 @@ export const JdIntakePage = () => {
             ? `, ${result.filteredCount} filtered as not relevant`
             : "";
         toast.success(
-          `${dealName}: found ${result.foundCount}, saved ${result.savedCount} to pipeline${filteredNote}`,
+          `${dealName}: found ${result.foundCount} candidate${result.foundCount === 1 ? "" : "s"}${filteredNote} — open the role to add to pipeline`,
         );
       } else if (
         command.action === "relax_criterion" &&

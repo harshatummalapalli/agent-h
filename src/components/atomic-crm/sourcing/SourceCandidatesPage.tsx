@@ -177,11 +177,6 @@ export const SourceCandidatesPage = ({
                 ))}
               </ul>
             )}
-            {s.backgroundSaving && (
-              <p className="text-xs text-muted-foreground mt-1">
-                Saving candidates to your pipeline in the background...
-              </p>
-            )}
           </div>
 
           <CalibrationSection s={s} />

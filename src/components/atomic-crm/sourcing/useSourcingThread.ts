@@ -43,9 +43,16 @@ export const useSourcingThread = ({
   // in place as its steps progress) -- typed against that variant
   // specifically rather than Partial<ThreadItem>, so a patch can't
   // silently smuggle in fields that don't belong to this item's kind.
-  const patchSourcingItem = (id: string, patch: Partial<Omit<SourcingThreadItem, "kind" | "id">>) =>
+  const patchSourcingItem = (
+    id: string,
+    patch: Partial<Omit<SourcingThreadItem, "kind" | "id">>,
+  ) =>
     setThread((prev) =>
-      prev.map((item) => (item.kind === "sourcing" && item.id === id ? { ...item, ...patch } : item)),
+      prev.map((item) =>
+        item.kind === "sourcing" && item.id === id
+          ? { ...item, ...patch }
+          : item,
+      ),
     );
 
   const submit = useCallback(
@@ -64,7 +71,8 @@ export const useSourcingThread = ({
         });
 
         if (parsed.action === "continue_sourcing" && parsed.deal_id != null) {
-          const dealName = openDeals.find((d) => d.id === parsed.deal_id)?.name ?? "that role";
+          const dealName =
+            openDeals.find((d) => d.id === parsed.deal_id)?.name ?? "that role";
           const sourcingId = makeId();
           appendItem({
             kind: "sourcing",
@@ -74,37 +82,87 @@ export const useSourcingThread = ({
           });
 
           try {
-            const result = await dataProvider.continueSourcingForDeal(parsed.deal_id);
+            const result = await dataProvider.continueSourcingForDeal(
+              parsed.deal_id,
+            );
             const doneSteps: SourcingStep[] = [
-              { key: "parse", label: "Understanding your request", status: "done" },
-              { key: "portals", label: "Developer & community search", status: "done" },
+              {
+                key: "parse",
+                label: "Understanding your request",
+                status: "done",
+              },
+              {
+                key: "portals",
+                label: "Developer & community search",
+                status: "done",
+              },
               { key: "exa", label: "Web search", status: "done" },
               { key: "filter", label: "Checking relevance", status: "done" },
             ];
-            patchSourcingItem(sourcingId, { steps: doneSteps, result });
+            patchSourcingItem(sourcingId, {
+              steps: doneSteps,
+              result: {
+                foundCount: result.foundCount,
+                filteredCount: result.filteredCount,
+              },
+            });
           } catch (error) {
             patchSourcingItem(sourcingId, {
-              error: error instanceof Error ? error.message : "Sourcing failed for this role.",
+              error:
+                error instanceof Error
+                  ? error.message
+                  : "Sourcing failed for this role.",
             });
           }
-        } else if (parsed.action === "relax_criterion" && parsed.criterion_id != null) {
+        } else if (
+          parsed.action === "relax_criterion" &&
+          parsed.criterion_id != null
+        ) {
           await dataProvider.relaxLearnedCriterion(parsed.criterion_id);
-          queryClient.invalidateQueries({ queryKey: ["inbox_per_deal_signals"] });
-          appendItem({ kind: "assistant", id: makeId(), text: parsed.explanation, tone: "success" });
-        } else if (parsed.action === "show_candidates" && parsed.deal_id != null) {
-          appendItem({ kind: "assistant", id: makeId(), text: parsed.explanation, tone: "success" });
+          queryClient.invalidateQueries({
+            queryKey: ["inbox_per_deal_signals"],
+          });
+          appendItem({
+            kind: "assistant",
+            id: makeId(),
+            text: parsed.explanation,
+            tone: "success",
+          });
+        } else if (
+          parsed.action === "show_candidates" &&
+          parsed.deal_id != null
+        ) {
+          appendItem({
+            kind: "assistant",
+            id: makeId(),
+            text: parsed.explanation,
+            tone: "success",
+          });
           onNavigate(`/canvas/${parsed.deal_id}`);
         } else if (parsed.action === "show_roles") {
-          appendItem({ kind: "assistant", id: makeId(), text: parsed.explanation, tone: "success" });
+          appendItem({
+            kind: "assistant",
+            id: makeId(),
+            text: parsed.explanation,
+            tone: "success",
+          });
           onNavigate("/deals");
         } else {
-          appendItem({ kind: "assistant", id: makeId(), text: parsed.explanation, tone: "info" });
+          appendItem({
+            kind: "assistant",
+            id: makeId(),
+            text: parsed.explanation,
+            tone: "info",
+          });
         }
       } catch (error) {
         appendItem({
           kind: "assistant",
           id: makeId(),
-          text: error instanceof Error ? error.message : "Something went wrong running that.",
+          text:
+            error instanceof Error
+              ? error.message
+              : "Something went wrong running that.",
           tone: "error",
         });
       } finally {

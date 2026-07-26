@@ -122,10 +122,10 @@ export const InboxPage = () => {
             : "";
         updateActivityEntry(logId, {
           status: "success",
-          summary: `${dealName}: found ${result.foundCount}, saved ${result.savedCount} to pipeline${filteredNote}`,
+          summary: `${dealName}: found ${result.foundCount} candidates${filteredNote}`,
         });
         toast.success(
-          `Found ${result.foundCount}, saved ${result.savedCount} new candidates for ${dealName}${filteredNote}`,
+          `Found ${result.foundCount} candidate${result.foundCount === 1 ? "" : "s"} for ${dealName}${filteredNote} — open the role to add to pipeline`,
         );
       } else if (
         parsed.action === "relax_criterion" &&

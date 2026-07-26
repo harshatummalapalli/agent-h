@@ -587,18 +587,14 @@ const getDataProviderWithCustomMethods = () => {
     // a role's pipeline; anything beyond that is still visible by running
     // the same search manually from the Sourcing screen.
     //
-    // Relevance pre-filter (2026-07-20): free-portal/Exa search matches on
-    // loose keyword overlap (e.g. "Python"), which let through irrelevant
-    // Hugging Face/Kaggle model-author "candidates" on the AI Engineer role
-    // during live testing -- title/skills mentioned Python, nothing else
-    // about the role. Before saving, each candidate must clear
-    // isCandidateRelevantToDeal() against the deal's own required_skills/
-    // must_have_keywords/excluded_companies/exclusion_keywords -- the same
-    // criteria the recruiter already set on the role, not a new concept.
-    // Filtered-out candidates are still reported (filteredCount) rather than
-    // silently dropped, so the recruiter can tell the filter did something.
+    // Discover candidates via free portals + Exa for a role, apply a
+    // relevance filter, and return the results WITHOUT auto-saving to
+    // deal_candidates.  Explicit "Add to pipeline" click is the only path
+    // that creates a deal_candidates row (T1: stop automatic linking).
+    //
+    // Returns `candidates` for callers that want to show found results, plus
+    // `foundCount` / `filteredCount` for summary messages.
     async continueSourcingForDeal(dealId: Identifier) {
-      const MAX_AUTO_SAVE = 15;
       const [dealResult, freePortalResult, exaResult] = await Promise.all([
         baseDataProvider
           .getOne("deals", { id: dealId })
@@ -644,10 +640,6 @@ const getDataProviderWithCustomMethods = () => {
         | null
         | undefined;
 
-      // No deal criteria to filter against (fetch failed, or the role has no
-      // required_skills/must_have_keywords set at all) -- fall back to
-      // saving everything found, same as before this filter existed, rather
-      // than blocking the whole command on a missing deal record.
       const relevant = deal
         ? deduped.filter((candidate) =>
             isCandidateRelevantToDeal(candidate, deal),
@@ -655,43 +647,10 @@ const getDataProviderWithCustomMethods = () => {
         : deduped;
       const filteredCount = deduped.length - relevant.length;
 
-      const toSave = relevant.slice(0, MAX_AUTO_SAVE);
-      let savedCount = 0;
-      // Agent H, sourcing sidebar (2026-07-21): the UI needs more than a
-      // bare count to render result cards as candidates come in -- collect
-      // the minimal display fields (name/title/company) for each candidate
-      // that actually saved, rather than making the sidebar do a second
-      // round-trip to re-fetch deal_candidates after the fact.
-      const savedCandidates: Array<{
-        id: number;
-        fullName: string;
-        title: string | null;
-        company: string | null;
-      }> = [];
-      for (const candidate of toSave) {
-        try {
-          const result = await this.saveSourcedCandidate(dealId, candidate);
-          savedCount += 1;
-          savedCandidates.push({
-            id: result.candidate_id,
-            fullName: candidate.full_name ?? "Unnamed candidate",
-            title: candidate.job_title ?? null,
-            company: candidate.job_company_name ?? null,
-          });
-        } catch (error) {
-          console.error(
-            "continueSourcingForDeal: failed to save candidate",
-            candidate.id,
-            error,
-          );
-        }
-      }
-
       return {
         foundCount: deduped.length,
         filteredCount,
-        savedCount,
-        savedCandidates,
+        candidates: relevant,
         notes: [
           ...(freePortalResult?.notes ?? []),
           ...(exaResult?.notes ?? []),

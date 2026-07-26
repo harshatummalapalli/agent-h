@@ -1,4 +1,6 @@
-import { useGetList } from "ra-core";
+import { useGetList, useDataProvider, useNotify } from "ra-core";
+import { useState } from "react";
+import type { CrmDataProvider } from "../providers/types";
 import type { RoleConversationTurn } from "../types";
 import {
   type ConversationTurnMetadata,
@@ -11,10 +13,14 @@ function CandidateCardTurn({
   metadata,
   onCalibrationYes,
   onCalibrationNo,
+  onAddToPipeline,
+  pipelineSaveState,
 }: {
   metadata: NonNullable<ConversationTurnMetadata["candidate_card"]>;
   onCalibrationYes?: () => void;
   onCalibrationNo?: () => void;
+  onAddToPipeline?: () => void;
+  pipelineSaveState?: "idle" | "saving" | "saved";
 }) {
   return (
     <li className="border rounded-md p-3 flex flex-col gap-1.5 text-sm bg-muted/20">
@@ -30,7 +36,9 @@ function CandidateCardTurn({
         <div className="text-xs text-muted-foreground">{metadata.headline}</div>
       )}
       {metadata.why_fit && (
-        <div className="text-xs text-muted-foreground italic">{metadata.why_fit}</div>
+        <div className="text-xs text-muted-foreground italic">
+          {metadata.why_fit}
+        </div>
       )}
       {metadata.linkedin_url && (
         <a
@@ -66,28 +74,46 @@ function CandidateCardTurn({
           ))}
         </ul>
       )}
-      {(onCalibrationYes || onCalibrationNo) && (
-        <div className="flex gap-2 mt-2">
-          {onCalibrationYes && (
-            <button
-              type="button"
-              className="text-xs border rounded px-2 py-1 hover:bg-muted transition-colors text-green-700 border-green-200 bg-green-50/60"
-              onClick={onCalibrationYes}
-            >
-              ✓ Yes, show more like this
-            </button>
-          )}
-          {onCalibrationNo && (
-            <button
-              type="button"
-              className="text-xs border rounded px-2 py-1 hover:bg-muted transition-colors text-muted-foreground"
-              onClick={onCalibrationNo}
-            >
-              ✗ Not a fit
-            </button>
-          )}
-        </div>
-      )}
+      <div className="flex gap-2 mt-2 flex-wrap">
+        {onAddToPipeline && (
+          <button
+            type="button"
+            className="text-xs border rounded px-2 py-1 transition-colors text-blue-700 border-blue-200 bg-blue-50/60 hover:bg-blue-100 disabled:opacity-50"
+            onClick={onAddToPipeline}
+            disabled={
+              pipelineSaveState === "saving" || pipelineSaveState === "saved"
+            }
+          >
+            {pipelineSaveState === "saved"
+              ? "✓ Added to pipeline"
+              : pipelineSaveState === "saving"
+                ? "Adding…"
+                : "+ Add to pipeline"}
+          </button>
+        )}
+        {(onCalibrationYes || onCalibrationNo) && (
+          <>
+            {onCalibrationYes && (
+              <button
+                type="button"
+                className="text-xs border rounded px-2 py-1 hover:bg-muted transition-colors text-green-700 border-green-200 bg-green-50/60"
+                onClick={onCalibrationYes}
+              >
+                ✓ Yes, show more like this
+              </button>
+            )}
+            {onCalibrationNo && (
+              <button
+                type="button"
+                className="text-xs border rounded px-2 py-1 hover:bg-muted transition-colors text-muted-foreground"
+                onClick={onCalibrationNo}
+              >
+                ✗ Not a fit
+              </button>
+            )}
+          </>
+        )}
+      </div>
     </li>
   );
 }
@@ -128,6 +154,36 @@ export const RoleConversationTranscript = ({
     sort: { field: "created_at", order: "ASC" },
     pagination: { page: 1, perPage: 100 },
   });
+
+  const dataProvider = useDataProvider<CrmDataProvider>();
+  const notify = useNotify();
+  const [pipelineSaveStates, setPipelineSaveStates] = useState<
+    Record<string, "idle" | "saving" | "saved">
+  >({});
+
+  const handleAddToPipeline = async (
+    cardMeta: NonNullable<ConversationTurnMetadata["candidate_card"]>,
+  ) => {
+    const extId = cardMeta.calibration_external_id;
+    if (!extId) return;
+    setPipelineSaveStates((prev) => ({ ...prev, [extId]: "saving" }));
+    try {
+      await dataProvider.saveSourcedCandidate(cardMeta.deal_id, {
+        id: extId,
+        full_name: cardMeta.name,
+        linkedin_url: cardMeta.linkedin_url ?? null,
+        // headline is "title at company" — store as job_title for display
+        job_title: cardMeta.headline ?? null,
+      });
+      setPipelineSaveStates((prev) => ({ ...prev, [extId]: "saved" }));
+      notify("Added to pipeline", { type: "success" });
+    } catch (error: unknown) {
+      setPipelineSaveStates((prev) => ({ ...prev, [extId]: "idle" }));
+      const msg =
+        error instanceof Error ? error.message : "Failed to add to pipeline";
+      notify(msg, { type: "error" });
+    }
+  };
 
   const list = turns ?? [];
 
@@ -192,19 +248,28 @@ export const RoleConversationTranscript = ({
             ) {
               // Only the LAST candidate card turn shows the Yes/No buttons
               // so the recruiter acts on the batch as a whole rather than per-card.
-              const isLastCard = list
-                .filter(
-                  (t) =>
-                    (t.metadata as ConversationTurnMetadata | undefined)?.kind ===
-                    "candidate_card",
-                )
-                .at(-1)?.id === turn.id;
+              const isLastCard =
+                list
+                  .filter(
+                    (t) =>
+                      (t.metadata as ConversationTurnMetadata | undefined)
+                        ?.kind === "candidate_card",
+                  )
+                  .at(-1)?.id === turn.id;
+              const card = metadata.candidate_card;
+              const extId = card.calibration_external_id;
               return (
                 <CandidateCardTurn
                   key={turn.id}
-                  metadata={metadata.candidate_card}
+                  metadata={card}
                   onCalibrationYes={isLastCard ? onCalibrationYes : undefined}
                   onCalibrationNo={isLastCard ? onCalibrationNo : undefined}
+                  onAddToPipeline={
+                    extId ? () => handleAddToPipeline(card) : undefined
+                  }
+                  pipelineSaveState={
+                    extId ? (pipelineSaveStates[extId] ?? "idle") : undefined
+                  }
                 />
               );
             }

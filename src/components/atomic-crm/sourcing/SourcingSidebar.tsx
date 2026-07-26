@@ -59,8 +59,6 @@ const StepRow = ({ step }: { step: SourcingStep }) => (
 );
 
 const ThreadEntry = ({ item }: { item: ThreadItem }) => {
-  const navigate = useNavigate();
-
   if (item.kind === "user") {
     return (
       <div
@@ -121,36 +119,18 @@ const ThreadEntry = ({ item }: { item: ThreadItem }) => {
       </div>
 
       {item.result && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           <div style={{ fontSize: 12, color: "var(--ah-text-3)" }}>
-            Found {item.result.foundCount}, saved {item.result.savedCount}
+            Found {item.result.foundCount}
             {item.result.filteredCount > 0
               ? `, ${item.result.filteredCount} filtered as not relevant`
               : ""}
           </div>
-          {item.result.savedCandidates.map((candidate) => (
-            <div
-              key={candidate.id}
-              onClick={() => navigate(`/candidates/${candidate.id}/show`)}
-              className="ah-glass-card"
-              style={{ padding: "10px 13px", cursor: "pointer" }}
-            >
-              <div style={{ fontSize: 13, fontWeight: 600 }}>
-                {candidate.fullName}
-              </div>
-              <div
-                style={{
-                  fontSize: 12,
-                  color: "var(--ah-text-3)",
-                  marginTop: 2,
-                }}
-              >
-                {[candidate.title, candidate.company]
-                  .filter(Boolean)
-                  .join(" · ") || "No details yet"}
-              </div>
+          {item.result.foundCount > 0 && (
+            <div style={{ fontSize: 12, color: "var(--ah-text-3)" }}>
+              Open the role to review and add candidates to your pipeline.
             </div>
-          ))}
+          )}
         </div>
       )}
     </div>

@@ -226,17 +226,16 @@ export const CanvasPage = () => {
         const result = await dataProvider.continueSourcingForDeal(
           parsed.deal_id,
         );
-        invalidateCandidates();
         const filteredNote =
           result.filteredCount > 0
             ? `, ${result.filteredCount} filtered as not relevant`
             : "";
         updateActivityEntry(logId, {
           status: "success",
-          summary: `Found ${result.foundCount}, saved ${result.savedCount} to pipeline${filteredNote}`,
+          summary: `Found ${result.foundCount} candidates${filteredNote}`,
         });
         toast.success(
-          `Found ${result.foundCount}, saved ${result.savedCount} new candidates${filteredNote}`,
+          `Found ${result.foundCount} candidate${result.foundCount === 1 ? "" : "s"}${filteredNote} — open the role to add to pipeline`,
         );
       } else if (
         parsed.action === "relax_criterion" &&

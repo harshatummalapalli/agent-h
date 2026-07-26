@@ -69,10 +69,6 @@ export type DiscoverySearchDeps = {
   resetSearchUiState: () => void;
   loadRoleBriefContext: (id: string) => void;
   applySourcingSnapshot: (snap: any, source: "session" | "server") => void;
-  autoSaveAllCandidates: (
-    candidates: PdlCandidate[],
-    dealId: number,
-  ) => Promise<void>;
 };
 
 export function createDiscoverySearchHandlers(d: DiscoverySearchDeps) {
@@ -303,7 +299,6 @@ export function createDiscoverySearchHandlers(d: DiscoverySearchDeps) {
           .filter((c) => !seededDbIds[c.id])
           .map((c) => handleDiscoveryEvidence(c)),
       );
-      void d.autoSaveAllCandidates(data.candidates, Number(d.selectedId));
       // LLM pre-rank (fire-and-forget; annotates top 25 and re-sorts candidates state)
       void applyLlmRanks(sorted);
     } catch (error: any) {
@@ -379,7 +374,6 @@ export function createDiscoverySearchHandlers(d: DiscoverySearchDeps) {
           .filter((c) => !seededDbIds[c.id])
           .map((c) => handleDiscoveryEvidence(c)),
       );
-      void d.autoSaveAllCandidates(data.candidates, Number(d.selectedId));
       // LLM pre-rank (fire-and-forget; annotates top 25 and re-sorts candidates state)
       void applyLlmRanks(sorted);
     } catch (error: any) {
@@ -421,7 +415,6 @@ export function createDiscoverySearchHandlers(d: DiscoverySearchDeps) {
       }
       d.setSaveStates((prev) => ({ ...prev, ...seeded }));
       d.setCandidateDbIds((prev) => ({ ...prev, ...seededDbIds }));
-      void d.autoSaveAllCandidates(data.candidates, Number(d.selectedId));
     } catch (error: any) {
       d.notify(error?.message || "Failed to fetch more candidates", {
         type: "error",

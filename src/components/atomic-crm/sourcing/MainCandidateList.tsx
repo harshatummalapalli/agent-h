@@ -120,9 +120,6 @@ export function MainCandidateList({
               : s.candidates.some((c) => typeof c._match_score === "number")
                 ? "Sorted by match score (highest first)."
                 : "Candidates shown in discovery order."}{" "}
-            {s.backgroundSaving && (
-              <span>Saving {s.candidates.length} candidates…</span>
-            )}
           </p>
           {s.bulkSelected.size > 0 && (
             <div className="flex items-center gap-2">

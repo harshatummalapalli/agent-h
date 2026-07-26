@@ -58,7 +58,6 @@ export function useCandidateSourcing({
   const [roleBriefs, setRoleBriefs] = useState<RoleBriefOption[]>([]);
   const [selectedId, setSelectedId] = useState<string>("");
   const [size, setSize] = useState(100);
-  const [backgroundSaving, setBackgroundSaving] = useState(false);
 
   const [stage, setStage] = useState<Stage>("idle");
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -327,32 +326,6 @@ export function useCandidateSourcing({
     }
   };
 
-  const autoSaveAllCandidates = async (
-    newCandidates: PdlCandidate[],
-    dealId: number,
-  ) => {
-    const unsaved = newCandidates.filter(
-      (c) => !c._already_saved && !candidateDbIds[c.id],
-    );
-    if (unsaved.length === 0) return;
-    setBackgroundSaving(true);
-    const results = await Promise.allSettled(
-      unsaved.map((c) => dataProvider.saveSourcedCandidate(dealId, c)),
-    );
-    const newDbIds: Record<string, number> = {};
-    const newSaveStates: Record<string, SaveState> = {};
-    unsaved.forEach((c, i) => {
-      const r = results[i];
-      if (r.status === "fulfilled" && r.value.candidate_id) {
-        newDbIds[c.id] = r.value.candidate_id;
-        newSaveStates[c.id] = "saved";
-      }
-    });
-    setCandidateDbIds((prev) => ({ ...prev, ...newDbIds }));
-    setSaveStates((prev) => ({ ...prev, ...newSaveStates }));
-    setBackgroundSaving(false);
-  };
-
   // -------------------------------------------------------------------------
   // Effects
   // -------------------------------------------------------------------------
@@ -492,7 +465,6 @@ export function useCandidateSourcing({
     resetSearchUiState,
     loadRoleBriefContext,
     applySourcingSnapshot,
-    autoSaveAllCandidates,
   });
 
   const freePortalHandlers = createFreePortalAndXrayHandlers({
@@ -604,7 +576,6 @@ export function useCandidateSourcing({
     selectedId,
     size,
     setSize,
-    backgroundSaving,
     stage,
     previewLoading,
     fetchLoading,

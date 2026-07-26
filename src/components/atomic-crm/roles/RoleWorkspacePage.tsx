@@ -50,9 +50,7 @@ import type {
   CalibrationCandidate,
 } from "../providers/supabase/dataProvider.ts";
 import { useConfigurationContext } from "../root/ConfigurationContext";
-import { AgentHShell } from "../shell/AgentHShell";
 import { RoleConversationTranscript } from "../shell/RoleConversationTranscript";
-import { useRoleShellContext } from "../shell/useShellContext";
 import {
   approveTier3Proposal,
   dispatchCalibrationRerank,
@@ -145,13 +143,6 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
       ) as string[];
     }),
   );
-
-  const shellContext = useRoleShellContext({
-    deal,
-    dealStages,
-    pipelineCount,
-    isPending: !deal || pipelinePending,
-  });
 
   const orchestratorDeps: RoleAgentOrchestratorDeps = {
     dealId,
@@ -343,16 +334,9 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
     !!deal?.role_brief_last_scroll_query || lastBatch !== null;
 
   return (
-    <AgentHShell
-      context={shellContext}
-      commandBar={{
-        placeholder: "Tell Agent H what you need for this role",
-        hint: "Try: \u201cfind more candidates like these\u201d or \u201crelax the Python requirement\u201d.",
-        slashActions: [
-          { cmd: "/relax", label: "Relax a criterion on this role" },
-        ],
-        onSubmit: runFreeTextCommand,
-      }}
+    <div
+      className="flex flex-col"
+      style={{ minHeight: "calc(100dvh - 8rem)" }}
     >
       {/* 3-pane: memory panel (desktop) + main content */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
@@ -474,8 +458,8 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
                 {hasSearchRun ? (
                   <>
                     <p className="text-sm text-muted-foreground max-w-sm">
-                      Use the command bar below to refine your search, or add
-                      candidates manually with the{" "}
+                      Use the <strong>Refine</strong> panel on the left to
+                      adjust criteria, or add candidates manually with the{" "}
                       <strong>Add candidates</strong> button above.
                     </p>
                     {hasCacheToken && (
@@ -492,7 +476,7 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
                 ) : (
                   <>
                     <p className="text-sm text-muted-foreground max-w-sm">
-                      No search run yet. Ask Agent H to start sourcing, or add
+                      No search run yet. Start sourcing below, or add
                       candidates manually.
                     </p>
                     <div className="flex gap-2 flex-wrap justify-center">
@@ -595,7 +579,7 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
           onOpenChange={setSettingsOpen}
         />
       )}
-    </AgentHShell>
+    </div>
   );
 };
 

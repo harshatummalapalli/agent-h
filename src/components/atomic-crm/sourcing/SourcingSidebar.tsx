@@ -258,8 +258,22 @@ export const SourcingSidebar = ({
               padding: "8px 2px",
             }}
           >
-            Tell me who you're looking for — paste a JD, describe the role, or
-            ask me to keep sourcing for one that's open.
+            <p style={{ marginBottom: 8 }}>
+              Use this chat to refine your search criteria — say things like:
+            </p>
+            <ul
+              style={{
+                paddingLeft: 16,
+                display: "flex",
+                flexDirection: "column",
+                gap: 4,
+              }}
+            >
+              <li>"Relax the company size requirement"</li>
+              <li>"We also need Kubernetes experience"</li>
+              <li>"Remove the Python requirement"</li>
+              <li>"Continue sourcing for [role name]"</li>
+            </ul>
           </div>
         )}
         {thread.map((item) => (
@@ -304,7 +318,7 @@ export const SourcingSidebar = ({
           value={value}
           disabled={isBusy}
           placeholder={
-            isBusy ? "Working on it…" : "Relax the company size a bit"
+            isBusy ? "Working on it…" : "Tighten, loosen, or refine the search…"
           }
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => {

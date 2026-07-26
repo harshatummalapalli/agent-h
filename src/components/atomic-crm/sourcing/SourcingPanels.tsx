@@ -151,184 +151,123 @@ export function RoleBriefPanel({
 }
 
 // ---------------------------------------------------------------------------
-// SourcingControlPanel — steering input + learned-criteria impact
-// Now positioned as the "chat sidebar on page" — sidebar is primary for
-// sourcing refinement; this is the inline fallback when sidebar is hidden.
+// SourcingControlPanel — learned-criteria impact only.
+// Criteria refinement (tighten / loosen / add) is handled by the
+// SourcingSidebar chat — type there rather than duplicating an input here.
 // ---------------------------------------------------------------------------
 
 export function SourcingControlPanel({
   s,
   embedded,
+  onOpenSidebar,
 }: {
   s: SourcingContext;
   embedded: boolean;
+  onOpenSidebar?: () => void;
 }) {
   if (!s.selectedId) return null;
+  // Nothing to show if criteria impact is disabled and nothing is loaded
+  const hasCriteria = s.criteriaImpact && s.criteriaImpact.criteria.length > 0;
+  if (!hasCriteria && !s.criteriaImpactLoading && !CRITERIA_IMPACT_DISABLED)
+    return null;
+
   return (
     <div
       ref={s.controlPanelRef}
       className={sourcingPanelClass(embedded, "flex flex-col gap-2 p-4")}
     >
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-medium">Refine search</h3>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={s.handleRefreshCriteriaImpact}
-          disabled={s.criteriaImpactLoading || CRITERIA_IMPACT_DISABLED}
-        >
-          {CRITERIA_IMPACT_DISABLED
-            ? "Temporarily disabled"
-            : s.criteriaImpactLoading
+        <h3 className="text-sm font-medium">Learned criteria</h3>
+        {!CRITERIA_IMPACT_DISABLED && (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={s.handleRefreshCriteriaImpact}
+            disabled={s.criteriaImpactLoading}
+          >
+            {s.criteriaImpactLoading
               ? "Computing..."
               : s.criteriaImpact
                 ? "Refresh"
                 : "Load"}
-        </Button>
+          </Button>
+        )}
       </div>
-      {CRITERIA_IMPACT_DISABLED && (
-        <p className="text-xs ah-text-warn">
-          Temporarily disabled to stop unbounded discovery API spend (one live
-          search per learned criterion, every refresh). Being fixed server-side.
+
+      {onOpenSidebar && (
+        <p className="text-xs text-muted-foreground">
+          To tighten or loosen the search, type in the chat sidebar.{" "}
+          <button
+            type="button"
+            onClick={onOpenSidebar}
+            className="underline cursor-pointer"
+          >
+            Open sidebar
+          </button>
         </p>
       )}
 
-      <div className="flex flex-col gap-2 border-t pt-3">
-        <label className="text-xs font-medium">
-          Describe a change to this search
-        </label>
-        <div className="flex gap-2">
-          <input
-            ref={s.steeringInputRef}
-            type="text"
-            className="flex-1 border border-input bg-background text-foreground rounded-md h-9 px-2 text-sm"
-            placeholder="e.g. we also need Kubernetes now"
-            value={s.steeringText}
-            onChange={(e) => s.setSteeringText(e.target.value)}
-            disabled={s.steeringState === "loading"}
-          />
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={s.handleSteeringContextualize}
-            disabled={s.steeringState === "loading" || !s.steeringText.trim()}
-          >
-            {s.steeringState === "loading" ? "Checking..." : "Check"}
-          </Button>
-        </div>
-        <p className="text-xs text-muted-foreground">
-          Checking costs a couple of search credits (a before/after preview) —
-          nothing is applied to future searches until you review and confirm
-          below.
-        </p>
-
-        {s.steeringState === "done" &&
-          s.steeringResult &&
-          !s.steeringResult.applicable && (
-            <p className="text-xs text-muted-foreground">
-              That doesn't map onto a concrete, checkable criterion — nothing
-              was applied.
-            </p>
-          )}
-
-        {s.steeringResult?.applicable && s.steeringResult.criterion && (
-          <div className="border rounded-md p-2 flex flex-col gap-1.5 bg-muted/30">
-            <p className="text-xs">{s.steeringResult.criterion.label}</p>
-            <p className="text-xs text-muted-foreground">
-              {s.steeringResult.current_total ?? "?"} candidates currently match
-              &rarr; {s.steeringResult.projected_total ?? "?"} if applied
-              {typeof s.steeringResult.rejected_count === "number"
-                ? ` (excludes ${s.steeringResult.rejected_count})`
-                : ""}
-              .
-            </p>
-            <Button
-              size="sm"
-              onClick={s.handleApplySteeringCriterion}
-              disabled={
-                s.steeringApplyState === "applying" ||
-                s.steeringApplyState === "applied"
-              }
-              className="self-start"
-            >
-              {s.steeringApplyState === "applied"
-                ? "Applied"
-                : s.steeringApplyState === "applying"
-                  ? "Applying..."
-                  : "Apply"}
-            </Button>
-          </div>
-        )}
-      </div>
-
-      {!CRITERIA_IMPACT_DISABLED &&
-        !s.criteriaImpact &&
-        !s.criteriaImpactLoading && (
-          <p className="text-xs text-muted-foreground">
-            Shows every criterion learned from calibration feedback for this
-            role, with how many candidates each one is currently excluding — and
-            lets you undo any single one.
-          </p>
-        )}
       {s.criteriaImpact && (
         <>
-          <p className="text-xs text-muted-foreground">
-            {s.criteriaImpact.base_total ?? "?"} candidates currently match this
-            role brief's full search (JD fields + active learned criteria).
-          </p>
           {s.criteriaImpact.criteria.length === 0 ? (
             <p className="text-xs text-muted-foreground">
               No criteria learned from calibration feedback yet.
             </p>
           ) : (
-            <ul className="flex flex-col gap-1.5">
-              {s.criteriaImpact.criteria.map((c) => {
-                const actionState = s.criteriaActionStates[c.id] ?? "idle";
-                return (
-                  <li
-                    key={c.id}
-                    className="flex items-center justify-between gap-3 text-xs border rounded-md p-2"
-                  >
-                    <div className="flex flex-col gap-0.5">
-                      <span
-                        className={
-                          c.status === "relaxed"
-                            ? "text-muted-foreground line-through"
-                            : ""
+            <>
+              <p className="text-xs text-muted-foreground">
+                {s.criteriaImpact.base_total ?? "?"} candidates match · active
+                learned criteria below.
+              </p>
+              <ul className="flex flex-col gap-1.5">
+                {s.criteriaImpact.criteria.map((c) => {
+                  const actionState = s.criteriaActionStates[c.id] ?? "idle";
+                  return (
+                    <li
+                      key={c.id}
+                      className="flex items-center justify-between gap-3 text-xs border rounded-md p-2"
+                    >
+                      <div className="flex flex-col gap-0.5">
+                        <span
+                          className={
+                            c.status === "relaxed"
+                              ? "text-muted-foreground line-through"
+                              : ""
+                          }
+                        >
+                          {c.label}
+                        </span>
+                        <span className="text-muted-foreground">
+                          {c.status === "active"
+                            ? c.rejected_count !== null
+                              ? `${c.rejected_count} rejected`
+                              : "reject count unavailable"
+                            : c.rejected_count !== null
+                              ? `would reject ${c.rejected_count} if reapplied`
+                              : "reapply impact unavailable"}
+                        </span>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={actionState === "working"}
+                        onClick={() =>
+                          c.status === "active"
+                            ? s.handleRelaxCriterion(c.id)
+                            : s.handleReapplyCriterion(c.id)
                         }
                       >
-                        {c.label}
-                      </span>
-                      <span className="text-muted-foreground">
-                        {c.status === "active"
-                          ? c.rejected_count !== null
-                            ? `${c.rejected_count} rejected`
-                            : "reject count unavailable"
-                          : c.rejected_count !== null
-                            ? `would reject ${c.rejected_count} if reapplied`
-                            : "reapply impact unavailable"}
-                      </span>
-                    </div>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={actionState === "working"}
-                      onClick={() =>
-                        c.status === "active"
-                          ? s.handleRelaxCriterion(c.id)
-                          : s.handleReapplyCriterion(c.id)
-                      }
-                    >
-                      {actionState === "working"
-                        ? "Working..."
-                        : c.status === "active"
-                          ? "Relax"
-                          : "Reapply"}
-                    </Button>
-                  </li>
-                );
-              })}
-            </ul>
+                        {actionState === "working"
+                          ? "Working..."
+                          : c.status === "active"
+                            ? "Relax"
+                            : "Reapply"}
+                      </Button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </>
           )}
         </>
       )}

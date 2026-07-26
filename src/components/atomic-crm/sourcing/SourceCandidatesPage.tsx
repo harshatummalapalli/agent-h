@@ -28,10 +28,13 @@ export const SourceCandidatesPage = ({
   initialRoleBriefId,
   onCandidateSaved,
   simplified = false,
+  onOpenSidebar,
 }: {
   initialRoleBriefId?: string;
   onCandidateSaved?: (candidateId: number, name: string) => void;
   simplified?: boolean;
+  /** Called when the user clicks "Relax"/"Tighten" — caller opens the sidebar chat. */
+  onOpenSidebar?: () => void;
 } = {}) => {
   const embedded = Boolean(initialRoleBriefId);
 
@@ -138,9 +141,12 @@ export const SourceCandidatesPage = ({
         </div>
       )}
 
-      {/* Refine panel — steering input + learned criteria (sidebar is primary
-          on the workspace; this is the inline fallback for standalone use) */}
-      <SourcingControlPanel s={s} embedded={embedded} />
+      {/* Learned criteria panel — sidebar chat is primary for refinement */}
+      <SourcingControlPanel
+        s={s}
+        embedded={embedded}
+        onOpenSidebar={onOpenSidebar}
+      />
 
       {/* Search actions: preview + restore + Advanced › (X-ray, free portals) */}
       <SearchActionsSection s={s} simplified={simplified} />
@@ -193,6 +199,7 @@ export const SourceCandidatesPage = ({
               visibleCount={visibleCount}
               showMore={showMore}
               embedded={embedded}
+              onOpenSidebar={onOpenSidebar}
             />
           )}
         </div>

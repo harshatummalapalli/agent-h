@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { parseLocationForFilter } from "./crustdataClient";
+import {
+  classifyPlace,
+  parseLocationForFilter,
+  COUNTRY_ALIASES,
+} from "./crustdataClient";
 
 describe("parseLocationForFilter", () => {
   it("extracts India from 'Remote, India'", () => {
@@ -69,5 +73,68 @@ describe("parseLocationForFilter", () => {
       place: null,
       remoteOnly: false,
     });
+  });
+});
+
+describe("classifyPlace", () => {
+  it("routes 'India' to the country field with exact match", () => {
+    const result = classifyPlace("India");
+    expect(result.field).toBe("basic_profile.location.country");
+    expect(result.type).toBe("=");
+    expect(result.value).toBe("India");
+  });
+
+  it("routes 'india' (lowercase) correctly", () => {
+    const result = classifyPlace("india");
+    expect(result.field).toBe("basic_profile.location.country");
+    expect(result.value).toBe("India");
+  });
+
+  it("routes 'US' alias to United States on country field", () => {
+    const result = classifyPlace("US");
+    expect(result.field).toBe("basic_profile.location.country");
+    expect(result.type).toBe("=");
+    expect(result.value).toBe("United States");
+  });
+
+  it("routes 'usa' alias to United States", () => {
+    expect(classifyPlace("usa").value).toBe("United States");
+  });
+
+  it("routes 'UK' alias to United Kingdom", () => {
+    const result = classifyPlace("UK");
+    expect(result.field).toBe("basic_profile.location.country");
+    expect(result.value).toBe("United Kingdom");
+  });
+
+  it("routes 'UAE' to United Arab Emirates", () => {
+    expect(classifyPlace("UAE").value).toBe("United Arab Emirates");
+  });
+
+  it("routes 'Dubai' to United Arab Emirates", () => {
+    expect(classifyPlace("Dubai").value).toBe("United Arab Emirates");
+  });
+
+  it("routes 'Bangalore' to the city field with contains match", () => {
+    const result = classifyPlace("Bangalore");
+    expect(result.field).toBe("basic_profile.location.city");
+    expect(result.type).toBe("(.)");
+    expect(result.value).toBe("Bangalore");
+  });
+
+  it("routes 'New York' to city field", () => {
+    const result = classifyPlace("New York");
+    expect(result.field).toBe("basic_profile.location.city");
+    expect(result.type).toBe("(.)");
+  });
+
+  it("routes 'San Francisco' to city field", () => {
+    expect(classifyPlace("San Francisco").field).toBe(
+      "basic_profile.location.city",
+    );
+  });
+
+  it("COUNTRY_ALIASES has India entry", () => {
+    expect(COUNTRY_ALIASES["india"]).toBe("India");
   });
 });

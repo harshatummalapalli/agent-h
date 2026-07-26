@@ -22,9 +22,90 @@ const F = {
   currentTitle: "experience.employment_details.current.title",
   currentSeniority: "experience.employment_details.current.seniority_level",
   locationCity: "basic_profile.location.city",
+  locationCountry: "basic_profile.location.country",
   yearsOfExperience: "years_of_experience",
   currentSkills: "skills.professional_network_skills",
 } as const;
+
+// ── Country alias map ─────────────────────────────────────────────────────
+// Maps common aliases (lowercase) → Crustdata's canonical full country name.
+// Used by classifyPlace() to route known countries to the country field with
+// an exact "=" match instead of the city contains "(.)".
+
+export const COUNTRY_ALIASES: Record<string, string> = {
+  india: "India",
+  "united states": "United States",
+  us: "United States",
+  usa: "United States",
+  america: "United States",
+  "united kingdom": "United Kingdom",
+  uk: "United Kingdom",
+  britain: "United Kingdom",
+  "great britain": "United Kingdom",
+  england: "United Kingdom",
+  canada: "Canada",
+  germany: "Germany",
+  deutschland: "Germany",
+  singapore: "Singapore",
+  australia: "Australia",
+  "united arab emirates": "United Arab Emirates",
+  uae: "United Arab Emirates",
+  dubai: "United Arab Emirates",
+  france: "France",
+  netherlands: "Netherlands",
+  holland: "Netherlands",
+  brazil: "Brazil",
+  japan: "Japan",
+  "south korea": "South Korea",
+  korea: "South Korea",
+  china: "China",
+  israel: "Israel",
+  ireland: "Ireland",
+  sweden: "Sweden",
+  norway: "Norway",
+  denmark: "Denmark",
+  finland: "Finland",
+  switzerland: "Switzerland",
+  poland: "Poland",
+  spain: "Spain",
+  portugal: "Portugal",
+  italy: "Italy",
+  mexico: "Mexico",
+  colombia: "Colombia",
+  argentina: "Argentina",
+  nigeria: "Nigeria",
+  kenya: "Kenya",
+  "south africa": "South Africa",
+  indonesia: "Indonesia",
+  malaysia: "Malaysia",
+  philippines: "Philippines",
+  vietnam: "Vietnam",
+  pakistan: "Pakistan",
+  bangladesh: "Bangladesh",
+  "new zealand": "New Zealand",
+};
+
+/**
+ * Classify a geographic place as either a Crustdata country filter (exact "=")
+ * or a city filter (contains "(.)").  Exported so the discovery query-builder
+ * can reuse the same logic without re-implementing the alias map.
+ *
+ * Examples:
+ *   classifyPlace("India")      → { field: locationCountry, type: "=", value: "India" }
+ *   classifyPlace("US")         → { field: locationCountry, type: "=", value: "United States" }
+ *   classifyPlace("Bangalore")  → { field: locationCity,   type: "(.)"}
+ */
+export function classifyPlace(place: string): {
+  field: string;
+  type: "=" | "(.)";
+  value: string;
+} {
+  const canonical = COUNTRY_ALIASES[place.toLowerCase().trim()];
+  if (canonical) {
+    return { field: F.locationCountry, type: "=", value: canonical };
+  }
+  return { field: F.locationCity, type: "(.)", value: place };
+}
 
 // ── Filter types (minimal subset) ────────────────────────────────────────
 
@@ -124,18 +205,16 @@ export function buildCalibrationFilters(
     conditions.push({ field: F.currentTitle, type: "(.)", value: title });
   }
 
-  // Location — extract the geographic place even when "remote" is mentioned.
+  // Location — extract the geographic place even when "remote" is mentioned,
+  // then route to country (exact "=") or city (contains "(.)")  so that
+  // "India" queries the country field rather than the city field.
   const location =
     typeof brief.location === "string" ? brief.location.trim() : null;
   const { place } = location
     ? parseLocationForFilter(location)
     : { place: null };
   if (place) {
-    conditions.push({
-      field: F.locationCity,
-      type: "(.)",
-      value: place,
-    });
+    conditions.push(classifyPlace(place));
   }
 
   // Seniority
@@ -247,8 +326,11 @@ export function normalizeCrustdataProfile(
     string,
     unknown
   >;
+  // Prefer social_handles.professional_network_identifier.profile_url; fall
+  // back to any top-level linkedin_url field some Crustdata response shapes provide.
   const rawLinkedin =
-    typeof pni.profile_url === "string" ? pni.profile_url : null;
+    (typeof pni.profile_url === "string" ? pni.profile_url : null) ??
+    (typeof raw.linkedin_url === "string" ? raw.linkedin_url : null);
 
   const personId =
     typeof raw.crustdata_person_id === "number" ||
@@ -275,6 +357,43 @@ export function normalizeCrustdataProfile(
   };
 }
 
+// ── Soft country safety net ───────────────────────────────────────────────
+
+// Per-country patterns that location_name must contain at least one of.
+// Only applied when the place is a known country (COUNTRY_ALIASES hit).
+const COUNTRY_LOCATION_PATTERNS: Record<string, RegExp> = {
+  India:
+    /\b(india|IN|bengaluru|bangalore|mumbai|delhi|hyderabad|chennai|pune|kolkata|calcutta|ahmedabad|jaipur|surat|lucknow|kanpur|nagpur|visakhapatnam|indore|thane|bhopal|patna|vadodara|ghaziabad|ludhiana|agra|nashik|faridabad|meerut|rajkot|kalyan|vasai|srinagar|aurangabad|dhanbad|amritsar|navi mumbai)\b/i,
+  "United States":
+    /\b(united states|usa|us\b|new york|los angeles|san francisco|chicago|houston|phoenix|philadelphia|san antonio|san diego|dallas|san jose|austin|jacksonville|fort worth|columbus|charlotte|indianapolis|seattle|denver|boston|el paso|detroit|nashville|portland|las vegas|memphis|louisville|baltimore|milwaukee|albuquerque|tucson|fresno|sacramento|mesa|kansas city|atlanta|omaha|colorado springs|raleigh|long beach|virginia beach|minneapolis|tampa|new orleans|arlington|wichita|bakersfield|aurora|anaheim|santa ana|corpus christi|riverside|st louis|lexington|pittsburgh|anchorage|stockton|cincinnati|st paul|toledo|greensboro|newark|plano|henderson|lincoln|buffalo|fort wayne|jersey city|chula vista|orlando|st petersburg|norfolk|chandler|laredo|madison|durham|lubbock|winston|garland|glendale|hialeah|reno|baton rouge|irvine|chesapeake|scottsdale|north las vegas|fremont|gilbert|san bernardino|birmingham|rochester|richmond|spokane|des moines|montgomery|modesto|fayetteville|tacoma|shreveport|san jose|akron|salt lake city|huntsville|grand rapids|tallahassee|worcester|knoxville|newport news|brownsville|santa clarita|providence|garden grove|oceanside|fort lauderdale|rancho cucamonga|tempe|ontario|springfield|cape coral|sioux falls|peoria|elk grove|pembroke pines|corona|eugene|cary|fort collins|jackson|alexandria|hayward|lancaster|salinas|palmdale|sunnyvale|pomona|escondido|surprise|roseville|kansas city|savannah|clarksville|paterson|torrance|bridgeport|mcallen|joliet|syracuse|pasadena|rockford|hollywood|macon|kansas city|fontana|moreno valley|glendale|akron|yonkers|amarillo|worcester|aurora|little rock|columbus|huntington beach|tallahassee|grand prairie|overland park|columbus|olympia)\b/i,
+  "United Kingdom":
+    /\b(united kingdom|uk\b|england|wales|scotland|northern ireland|london|manchester|birmingham|leeds|glasgow|sheffield|bradford|edinburgh|liverpool|bristol|cardiff|belfast|leicester|wakefield|coventry|nottingham|newcastle|sunderland|brighton|hull|plymouth|stoke|wolverhampton|derby|swansea|southampton|salford|aberdeen|westminster|portsmouth|york|peterborough|dundee|lancaster|oxford|cambridge|bath|exeter|chester|gloucester|cheltenham|northampton|milton keynes|reading|slough|swindon|ipswich|norwich|luton|bolton|stockport|blackpool|oldham|rotherham|middlesbrough|telford|worthing|huddersfield|poole|eastbourne)\b/i,
+};
+
+// Fallback for countries not in COUNTRY_LOCATION_PATTERNS: require location_name
+// to contain the canonical country name.
+function locationMatchesCountry(
+  locationName: string | null,
+  canonicalCountry: string,
+): boolean {
+  if (!locationName) return true; // don't over-filter null locations
+  const pattern = COUNTRY_LOCATION_PATTERNS[canonicalCountry];
+  if (pattern) return pattern.test(locationName);
+  // Generic fallback: case-insensitive substring match on country name.
+  return locationName.toLowerCase().includes(canonicalCountry.toLowerCase());
+}
+
+/** Drop profiles whose location_name clearly contradicts the expected country.
+ *  Only active when place resolved to a known country (COUNTRY_ALIASES hit). */
+export function filterByCountry(
+  candidates: RawCalibrationCandidate[],
+  canonicalCountry: string,
+): RawCalibrationCandidate[] {
+  return candidates.filter((c) =>
+    locationMatchesCountry(c.location_name, canonicalCountry),
+  );
+}
+
 // ── HTTP search ───────────────────────────────────────────────────────────
 
 /** Search Crustdata for candidates matching a role brief.
@@ -286,6 +405,16 @@ export async function searchCrustdataForRoleBrief(
 ): Promise<RawCalibrationCandidate[]> {
   const filters = buildCalibrationFilters(roleBrief);
   if (!filters) return [];
+
+  // Determine canonical country for post-filter (if location is a known country).
+  const location =
+    typeof roleBrief.location === "string" ? roleBrief.location.trim() : null;
+  const { place } = location
+    ? parseLocationForFilter(location)
+    : { place: null };
+  const canonicalCountry = place
+    ? (COUNTRY_ALIASES[place.toLowerCase().trim()] ?? null)
+    : null;
 
   try {
     const response = await fetch(CRUSTDATA_SEARCH_URL, {
@@ -301,7 +430,10 @@ export async function searchCrustdataForRoleBrief(
     const result = (await response.json()) as {
       profiles?: Array<Record<string, unknown>>;
     };
-    return (result.profiles ?? []).map(normalizeCrustdataProfile);
+    const normalized = (result.profiles ?? []).map(normalizeCrustdataProfile);
+    return canonicalCountry
+      ? filterByCountry(normalized, canonicalCountry)
+      : normalized;
   } catch {
     return [];
   }

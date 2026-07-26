@@ -98,7 +98,7 @@ const EXTRACTION_TOOL = {
       location: {
         type: "string",
         description:
-          "Primary work location as stated or implied (city/region/country, or 'Remote').",
+          "Primary work location as stated or implied. When remote work is offered but a geographic location is also specified (e.g. 'remote based in India', 'remote candidates from Bangalore only', 'UK remote'), store as 'Remote, <place>' (e.g. 'Remote, India', 'Remote, Bangalore', 'Remote, UK'). Use bare 'Remote' only when no geography is mentioned at all.",
       },
       industry: {
         type: ["string", "null"],
@@ -157,7 +157,8 @@ const EXTRACTION_TOOL = {
             keywords: {
               type: "array",
               items: { type: "string" },
-              description: "The concrete skills/qualifications that define this specific tier.",
+              description:
+                "The concrete skills/qualifications that define this specific tier.",
             },
             condition: {
               type: ["string", "null"],

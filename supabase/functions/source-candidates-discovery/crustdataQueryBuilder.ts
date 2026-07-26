@@ -4,6 +4,14 @@
 // dragging in index.ts's "jsr:@panva/jose@6" / edge-runtime imports (Deno-
 // only, not resolvable under Node/Vitest). See crustdataQueryBuilder.test.ts.
 //
+// crustdataClient.ts (_shared) is imported for parseLocationForFilter and
+// classifyPlace -- it has zero imports of its own (no Deno-specific deps),
+// so importing it here does not break Vitest testability.
+import {
+  classifyPlace,
+  parseLocationForFilter,
+} from "../_shared/crustdataClient.ts";
+//
 // Crustdata second-provider addition (2026-07-23): added alongside the
 // existing coresignalProvider so the platform can switch or fall back
 // between vendors without an architectural rewrite -- see the
@@ -119,6 +127,9 @@ export type CrustdataSearchCriteria = {
   learnedCriteria: CrustdataLearnedCriterion[] | null;
 };
 
+// REMOTE_PATTERN kept for the "log a note when skipping" branch only; location
+// routing now goes through parseLocationForFilter + classifyPlace (imported above)
+// so Remote+India correctly applies a country filter rather than being skipped.
 const REMOTE_PATTERN = /remote/i;
 
 // Same honest-gap principle as SENIORITY_TO_PDL_LEVELS / SENIORITY_TO_
@@ -332,23 +343,44 @@ export function buildCrustdataFilters(
     );
   }
 
-  // --- Location: skip entirely for remote roles, same convention as
-  // buildPdlQuery/coresignalProvider. ---
-  if (criteria.location && !REMOTE_PATTERN.test(criteria.location)) {
-    const city = criteria.location.split(",")[0].trim();
-    const condition = buildContainsCondition(CRUSTDATA_FIELDS.locationCity, [
-      city,
-    ]);
-    if (condition) {
-      conditions.push(condition);
+  // --- Location: extract the geographic place even when "remote" appears
+  // (e.g. "Remote, India" → place="India"), then route to the country field
+  // (exact "=") for known countries or the city field ("(.)") for cities.
+  // This supersedes the old "skip if remote" convention: "Remote, India" must
+  // still filter to India, not return worldwide results. ---
+  if (criteria.location) {
+    const { place, remoteOnly } = parseLocationForFilter(criteria.location);
+    if (place) {
+      const classified = classifyPlace(place);
+      // City comes through decomposeSearchPhrase for better literal matching;
+      // country uses an exact "=" so skip decomposition.
+      let condition: CrustdataFilterCondition | CrustdataFilterGroup | null =
+        null;
+      if (classified.type === "=") {
+        condition = {
+          field: classified.field,
+          type: "=",
+          value: classified.value,
+        };
+        notes.push(
+          `Requiring location country "${classified.value}" (matched against the country field with exact "=").`,
+        );
+      } else {
+        // For city filtering, take only the first comma-separated token so
+        // "Hyderabad, Telangana, India" → "Hyderabad" (avoids pipe-joining
+        // the state/country parts which have no meaning in the city field).
+        const cityToken = place.split(",")[0].trim();
+        condition = buildContainsCondition(classified.field, [cityToken]);
+        notes.push(
+          `Requiring location "${cityToken}" (matched against the city field).`,
+        );
+      }
+      if (condition) conditions.push(condition);
+    } else if (remoteOnly || REMOTE_PATTERN.test(criteria.location)) {
       notes.push(
-        `Requiring location "${city}" (matched against the city field).`,
+        "Role marked remote/location-flexible -- no location constraint applied.",
       );
     }
-  } else if (criteria.location) {
-    notes.push(
-      "Role marked remote/location-flexible -- no location constraint applied.",
-    );
   }
 
   // --- Skills: top skill is a real (decomposed) requirement, same

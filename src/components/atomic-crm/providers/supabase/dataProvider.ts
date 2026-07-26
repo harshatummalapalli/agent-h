@@ -69,6 +69,11 @@ const processCompanyLogo = async (params: any) => {
   };
 };
 
+// Temporary sourcing kill-switches for Crustdata E2E testing.
+// Set both to `true` to re-enable free-portal and Exa sourcing.
+const FREE_PORTALS_ENABLED = false;
+const CHEAP_CLIENT_SOURCES_ENABLED = false; // disables Exa
+
 const getDataProviderWithCustomMethods = () => {
   const baseDataProvider = getBaseDataProvider();
 
@@ -605,17 +610,24 @@ const getDataProviderWithCustomMethods = () => {
             );
             return null;
           }),
-        this.sourceFreePortalCandidates(dealId).catch((error: Error) => {
-          console.error(
-            "continueSourcingForDeal: free-portal search failed",
-            error,
-          );
-          return null;
-        }),
-        this.sourceExaCandidates(dealId).catch((error: Error) => {
-          console.error("continueSourcingForDeal: Exa search failed", error);
-          return null;
-        }),
+        FREE_PORTALS_ENABLED
+          ? this.sourceFreePortalCandidates(dealId).catch((error: Error) => {
+              console.error(
+                "continueSourcingForDeal: free-portal search failed",
+                error,
+              );
+              return null;
+            })
+          : Promise.resolve(null),
+        CHEAP_CLIENT_SOURCES_ENABLED
+          ? this.sourceExaCandidates(dealId).catch((error: Error) => {
+              console.error(
+                "continueSourcingForDeal: Exa search failed",
+                error,
+              );
+              return null;
+            })
+          : Promise.resolve(null),
       ]);
 
       const found = [
@@ -1818,8 +1830,12 @@ const getDataProviderWithCustomMethods = () => {
       // Fetch deal for role brief + pull vendor candidates in parallel.
       const [dealResult, freePortalResult, exaResult] = await Promise.all([
         baseDataProvider.getOne("deals", { id: dealId }).catch(() => null),
-        this.sourceFreePortalCandidates(dealId).catch(() => null),
-        this.sourceExaCandidates(dealId).catch(() => null),
+        FREE_PORTALS_ENABLED
+          ? this.sourceFreePortalCandidates(dealId).catch(() => null)
+          : Promise.resolve(null),
+        CHEAP_CLIENT_SOURCES_ENABLED
+          ? this.sourceExaCandidates(dealId).catch(() => null)
+          : Promise.resolve(null),
       ]);
 
       const raw = [
@@ -1991,6 +2007,11 @@ const getDataProviderWithCustomMethods = () => {
           | "send_first_outreach"
           | "send_offer"
           | "send_booking_link"
+          | "calibration_yes"
+          | "calibration_no"
+          | "start_sourcing"
+          | "show_more_like_this"
+          | "relax_and_research"
           | "unknown";
         deal_id: number | null;
         criterion_id: number | null;

@@ -568,6 +568,52 @@ export async function proposeOutreachAfterPipelineAdd(
   }
 }
 
+// Calibration No button: append recruiter turn and ask the follow-up question.
+// Bypasses parse-agent-command — button intent is unambiguous.
+// The caller sets pendingCalibrationQuestion so the next free-text goes to
+// dispatchCalibrationRerank instead of the LLM router.
+export async function dispatchCalibrationNo(
+  deps: RoleAgentOrchestratorDeps,
+): Promise<void> {
+  await appendRecruiterTurn(deps, "Not a fit", { kind: "command" });
+  await appendAgentTurn(
+    deps,
+    "Got it — what didn't fit? (e.g. seniority, location, company size, tech stack)",
+    { kind: "calibration_question" },
+  );
+  deps.invalidateTranscript();
+}
+
+// Calibration Yes button: show the next batch of candidates.
+// Bypasses parse-agent-command — button intent is unambiguous.
+// Returns early (no-op) when sourcing is paused; caller shows the toast.
+export async function dispatchCalibrationYes(
+  deps: RoleAgentOrchestratorDeps,
+): Promise<void> {
+  if (deps.deal?.sourcing_paused) return;
+  await appendRecruiterTurn(deps, "Yes, show more like this", {
+    kind: "command",
+  });
+  const batch = await deps.dataProvider.calibrationNextBatch(deps.dealId);
+  if (batch.pool_exhausted && batch.candidates.length === 0) {
+    await appendAgentTurn(
+      deps,
+      "I've shown everyone in the current pool. Say 'relax and search again' to widen the criteria, or 'start sourcing' to pull a fresh batch.",
+      { kind: "result", action: "calibration_yes", status: "executed" },
+    );
+  } else {
+    await appendAgentTurn(
+      deps,
+      batch.pool_exhausted
+        ? `Last ${batch.candidates.length} from the current pool:`
+        : `Here are the next ${batch.candidates.length}:`,
+      { kind: "result", action: "calibration_yes", status: "executed" },
+    );
+    void appendCalibrationCardTurns(deps, batch);
+  }
+  deps.invalidateTranscript();
+}
+
 // Called when the recruiter answers the "What didn't fit?" calibration question.
 // Bypasses parse-agent-command — the context makes intent unambiguous.
 // Best-effort: after reranking, tries to promote the reason into

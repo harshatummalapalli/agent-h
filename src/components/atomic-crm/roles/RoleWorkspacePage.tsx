@@ -54,7 +54,9 @@ import { RoleConversationTranscript } from "../shell/RoleConversationTranscript"
 import { useRoleShellContext } from "../shell/useShellContext";
 import {
   approveTier3Proposal,
+  dispatchCalibrationNo,
   dispatchCalibrationRerank,
+  dispatchCalibrationYes,
   dispatchJdPasteCommand,
   dispatchRoleAgentCommand,
   proposeOutreachAfterPipelineAdd,
@@ -191,11 +193,7 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
   };
 
   const runFreeTextCommand = async (commandText: string) => {
-    const sourcingCommands = ["calibration_yes", "calibration_no"];
-    if (
-      deal?.sourcing_paused &&
-      (sourcingCommands.includes(commandText) || commandText.length < 200)
-    ) {
+    if (deal?.sourcing_paused && commandText.length < 200) {
       toast.info("Sourcing is paused — resume it before running new searches.");
       return;
     }
@@ -284,11 +282,14 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
     ) {
       autostartFiredRef.current = true;
       // Remove the query param so a manual refresh doesn't re-trigger.
-      setSearchParams((prev) => {
-        const next = new URLSearchParams(prev);
-        next.delete("autostart");
-        return next;
-      }, { replace: true });
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete("autostart");
+          return next;
+        },
+        { replace: true },
+      );
       void handleContinueSearch();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -336,10 +337,32 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
     }
   };
 
-  const handleCalibrationYes = () => void runFreeTextCommand("calibration_yes");
+  const handleCalibrationYes = () => {
+    if (deal?.sourcing_paused) {
+      toast.info("Sourcing is paused — resume it before continuing.");
+      return;
+    }
+    setCommandBusy(true);
+    void dispatchCalibrationYes(orchestratorDeps)
+      .catch((error: unknown) =>
+        toast.error(
+          error instanceof Error
+            ? error.message
+            : "Couldn't show more candidates",
+        ),
+      )
+      .finally(() => setCommandBusy(false));
+  };
   const handleCalibrationNo = () => {
     setPendingCalibrationQuestion(true);
-    void runFreeTextCommand("calibration_no");
+    setCommandBusy(true);
+    void dispatchCalibrationNo(orchestratorDeps)
+      .catch((error: unknown) =>
+        toast.error(
+          error instanceof Error ? error.message : "Couldn't process that",
+        ),
+      )
+      .finally(() => setCommandBusy(false));
   };
 
   const handleApproveProposal = async (

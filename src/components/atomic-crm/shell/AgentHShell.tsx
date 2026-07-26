@@ -5,7 +5,7 @@ import type { AgentHShellCommandBarProps, ShellContext } from "./types";
 
 type AgentHShellProps = {
   context: ShellContext;
-  commandBar: AgentHShellCommandBarProps;
+  commandBar?: AgentHShellCommandBarProps;
   children: ReactNode;
 };
 
@@ -19,7 +19,7 @@ export const AgentHShell = ({
       className="ah-scope"
       style={{
         display: "grid",
-        gridTemplateRows: "auto 1fr auto",
+        gridTemplateRows: commandBar ? "auto 1fr auto" : "auto 1fr",
         minHeight: "calc(100dvh - 8rem)",
       }}
     >
@@ -34,12 +34,14 @@ export const AgentHShell = ({
       >
         {children}
       </div>
-      <CommandBar
-        placeholder={commandBar.placeholder}
-        hint={commandBar.hint}
-        slashActions={commandBar.slashActions}
-        onSubmit={commandBar.onSubmit}
-      />
+      {commandBar && (
+        <CommandBar
+          placeholder={commandBar.placeholder}
+          hint={commandBar.hint}
+          slashActions={commandBar.slashActions}
+          onSubmit={commandBar.onSubmit}
+        />
+      )}
     </div>
   );
 };

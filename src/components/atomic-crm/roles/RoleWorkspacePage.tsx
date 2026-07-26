@@ -5,7 +5,6 @@
 import { isValid } from "date-fns";
 import {
   Archive,
-  BookOpen,
   ChevronLeft,
   ChevronRight,
   Settings,
@@ -386,17 +385,7 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
     !!deal?.role_brief_last_scroll_query || lastBatch !== null;
 
   return (
-    <AgentHShell
-      context={shellContext}
-      commandBar={{
-        placeholder: "Tell Agent H what you need for this role",
-        hint: "Try: \u201cfind more candidates like these\u201d or \u201crelax the Python requirement\u201d.",
-        slashActions: [
-          { cmd: "/relax", label: "Relax a criterion on this role" },
-        ],
-        onSubmit: runFreeTextCommand,
-      }}
-    >
+    <AgentHShell context={shellContext}>
       {/* 3-pane: memory panel (desktop) + main content */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
         {/* Role Memory Panel — desktop left sidebar */}
@@ -518,7 +507,7 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
                 {hasSearchRun ? (
                   <>
                     <p className="text-sm text-muted-foreground max-w-sm">
-                      Use the command bar below to refine your search, or add
+                      Use the Role Memory panel to refine your search, or add
                       candidates manually with the{" "}
                       <strong>Add candidates</strong> button above.
                     </p>
@@ -663,7 +652,7 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
           </div>
         </DialogContent>
       </Dialog>
-    </div>
+    </AgentHShell>
   );
 };
 
@@ -1135,232 +1124,6 @@ const BulkResumeUploadPanel = ({ dealId }: { dealId: string }) => {
 };
 
 /* ------------------------------------------------------------------ */
-/* Understand Sourcing Dialog                                          */
-/* ------------------------------------------------------------------ */
-
-const UnderstandSourcingDialog = ({
-  dealId,
-  deal,
-  open,
-  onOpenChange,
-  lastBatch,
-}: {
-  dealId: string;
-  deal: Deal | undefined;
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
-  lastBatch: CalibrationBatch | null;
-}) => {
-  const dataProvider = useDataProvider<CrmDataProvider>();
-
-  const { data: learnedCriteria = [] } = useQuery({
-    queryKey: ["role_brief_learned_criteria", dealId],
-    queryFn: () => dataProvider.getRoleBriefLearnedCriteria(dealId),
-    enabled: open,
-  });
-
-  const { data: calibrationFeedback = [] } = useQuery({
-    queryKey: ["calibration_feedback", dealId],
-    queryFn: () => dataProvider.getCalibrationFeedback(dealId),
-    enabled: open,
-  });
-
-  const activeCriteria = learnedCriteria.filter(
-    (c: Record<string, unknown>) => c.status === "active" || !c.status,
-  );
-  const relaxedCriteria = learnedCriteria.filter(
-    (c: Record<string, unknown>) => c.status === "relaxed",
-  );
-  const negativeFeedback = (
-    calibrationFeedback as Record<string, unknown>[]
-  ).filter((f) => f.judgment === "not_a_fit" || f.judgment === "no");
-
-  const dealRecord = deal as unknown as Record<string, unknown> | undefined;
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <BookOpen className="h-4 w-4" />
-            Understand sourcing
-          </DialogTitle>
-        </DialogHeader>
-        <Tabs defaultValue="criteria" className="mt-2">
-          <TabsList className="grid w-full grid-cols-3">
-            <TabsTrigger value="criteria">Criteria</TabsTrigger>
-            <TabsTrigger value="rejection">Rejections</TabsTrigger>
-            <TabsTrigger value="pool">Pool</TabsTrigger>
-          </TabsList>
-
-          {/* Criteria tab */}
-          <TabsContent value="criteria" className="mt-4 space-y-3">
-            {/* Deal must-haves */}
-            {(dealRecord?.required_skills as string[] | undefined)?.length ? (
-              <div>
-                <p className="text-xs font-semibold uppercase text-muted-foreground mb-1.5">
-                  Required skills
-                </p>
-                <div className="flex flex-wrap gap-1.5">
-                  {(
-                    (dealRecord?.required_skills as string[] | undefined) ?? []
-                  ).map((s) => (
-                    <Badge key={s} variant="secondary" className="text-xs">
-                      {s}
-                    </Badge>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-            {(dealRecord?.must_have_keywords as string[] | undefined)
-              ?.length ? (
-              <div>
-                <p className="text-xs font-semibold uppercase text-muted-foreground mb-1.5">
-                  Must-haves
-                </p>
-                <div className="flex flex-wrap gap-1.5">
-                  {(
-                    (dealRecord?.must_have_keywords as string[] | undefined) ??
-                    []
-                  ).map((k) => (
-                    <Badge key={k} variant="outline" className="text-xs">
-                      {k}
-                    </Badge>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-            {/* Learned active criteria */}
-            {activeCriteria.length > 0 && (
-              <div>
-                <p className="text-xs font-semibold uppercase text-muted-foreground mb-1.5">
-                  Learned from calibration
-                </p>
-                <ul className="space-y-1">
-                  {activeCriteria.map((c: Record<string, unknown>) => (
-                    <li
-                      key={c.id as string}
-                      className="text-sm flex items-center gap-2"
-                    >
-                      <Badge variant="default" className="text-xs">
-                        {c.criterion_type as string}
-                      </Badge>
-                      <span>{c.label as string}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-            {!activeCriteria.length &&
-              !(dealRecord?.required_skills as string[] | undefined)?.length &&
-              !(dealRecord?.must_have_keywords as string[] | undefined)
-                ?.length && (
-                <p className="text-sm text-muted-foreground">
-                  No criteria refined yet. Run a calibration session to teach
-                  Agent H what you're looking for.
-                </p>
-              )}
-          </TabsContent>
-
-          {/* Rejection tab */}
-          <TabsContent value="rejection" className="mt-4 space-y-3">
-            {negativeFeedback.length > 0 && (
-              <div>
-                <p className="text-xs font-semibold uppercase text-muted-foreground mb-1.5">
-                  Not-a-fit reasons from calibration
-                </p>
-                <ul className="space-y-1">
-                  {negativeFeedback.map((f, i) => (
-                    <li key={i} className="text-sm text-muted-foreground">
-                      • {(f.rejection_reason ?? f.reason ?? "—") as string}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-            {relaxedCriteria.length > 0 && (
-              <div>
-                <p className="text-xs font-semibold uppercase text-muted-foreground mb-1.5">
-                  Relaxed criteria (no longer active)
-                </p>
-                <ul className="space-y-1">
-                  {relaxedCriteria.map((c: Record<string, unknown>) => (
-                    <li
-                      key={c.id as string}
-                      className="text-sm text-muted-foreground line-through"
-                    >
-                      {c.label as string}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-            {!negativeFeedback.length && !relaxedCriteria.length && (
-              <p className="text-sm text-muted-foreground">
-                No rejection learnings yet. Calibrate candidates to build up
-                rejection patterns.
-              </p>
-            )}
-          </TabsContent>
-
-          {/* Pool tab */}
-          <TabsContent value="pool" className="mt-4 space-y-3">
-            {lastBatch ? (
-              <dl className="space-y-2 text-sm">
-                <div className="flex justify-between">
-                  <dt className="text-muted-foreground">Pool size</dt>
-                  <dd className="font-medium">{lastBatch.pool_size}</dd>
-                </div>
-                <div className="flex justify-between">
-                  <dt className="text-muted-foreground">Reviewed so far</dt>
-                  <dd className="font-medium">{lastBatch.cursor}</dd>
-                </div>
-                <div className="flex justify-between">
-                  <dt className="text-muted-foreground">Remaining</dt>
-                  <dd className="font-medium">
-                    {Math.max(0, lastBatch.pool_size - lastBatch.cursor)}
-                  </dd>
-                </div>
-                <div className="flex justify-between">
-                  <dt className="text-muted-foreground">Status</dt>
-                  <dd
-                    className={
-                      lastBatch.pool_exhausted
-                        ? "text-muted-foreground"
-                        : "text-green-600 dark:text-green-400 font-medium"
-                    }
-                  >
-                    {lastBatch.pool_exhausted
-                      ? "Pool exhausted"
-                      : "More available"}
-                  </dd>
-                </div>
-                {lastBatch.bench_note && (
-                  <div className="pt-2 border-t">
-                    <p className="text-xs text-muted-foreground">
-                      {lastBatch.bench_note}
-                    </p>
-                  </div>
-                )}
-              </dl>
-            ) : deal?.role_brief_last_scroll_token ? (
-              <p className="text-sm text-muted-foreground">
-                A search pool exists from your last run — click{" "}
-                <strong>Show more candidates</strong> to see the next batch.
-              </p>
-            ) : (
-              <p className="text-sm text-muted-foreground">
-                No search pool yet. Start sourcing to fill the pool.
-              </p>
-            )}
-          </TabsContent>
-        </Tabs>
-      </DialogContent>
-    </Dialog>
-  );
-};
-
-/* ------------------------------------------------------------------ */
 /* Role Settings Dialog (expanded)                                     */
 /* ------------------------------------------------------------------ */
 
@@ -1673,7 +1436,11 @@ const RoleMemoryPanel = ({
               </p>
               <div className="flex flex-wrap gap-1">
                 {(dealRecord!.must_have_keywords as string[]).map((k) => (
-                  <Badge key={k} variant="outline" className="text-xs py-0 break-words max-w-full">
+                  <Badge
+                    key={k}
+                    variant="outline"
+                    className="text-xs py-0 break-words max-w-full"
+                  >
                     {k}
                   </Badge>
                 ))}
@@ -1715,16 +1482,24 @@ const RoleMemoryPanel = ({
               <dl className="space-y-1 text-xs">
                 <div className="flex justify-between">
                   <dt className="text-muted-foreground">Pool size</dt>
-                  <dd className="font-medium tabular-nums">{lastBatch.pool_size}</dd>
+                  <dd className="font-medium tabular-nums">
+                    {lastBatch.pool_size}
+                  </dd>
                 </div>
                 <div className="flex justify-between">
                   <dt className="text-muted-foreground">Reviewed</dt>
-                  <dd className="font-medium tabular-nums">{lastBatch.cursor}</dd>
+                  <dd className="font-medium tabular-nums">
+                    {lastBatch.cursor}
+                  </dd>
                 </div>
                 <div className="flex justify-between">
                   <dt className="text-muted-foreground">Remaining</dt>
-                  <dd className={`font-medium tabular-nums ${lastBatch.pool_exhausted ? "text-muted-foreground" : "text-green-600"}`}>
-                    {lastBatch.pool_exhausted ? "Exhausted" : Math.max(0, lastBatch.pool_size - lastBatch.cursor)}
+                  <dd
+                    className={`font-medium tabular-nums ${lastBatch.pool_exhausted ? "text-muted-foreground" : "text-green-600"}`}
+                  >
+                    {lastBatch.pool_exhausted
+                      ? "Exhausted"
+                      : Math.max(0, lastBatch.pool_size - lastBatch.cursor)}
                   </dd>
                 </div>
               </dl>

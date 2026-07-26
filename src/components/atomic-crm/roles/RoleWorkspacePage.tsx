@@ -392,7 +392,8 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
         });
       }
       toast.success("Role archived");
-      navigate("/roles");
+      queryClient.invalidateQueries({ queryKey: ["deals"] });
+      navigate("/");
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Couldn't archive this role",

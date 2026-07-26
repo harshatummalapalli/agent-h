@@ -81,21 +81,36 @@ async function executeReversibleOrRead(
   if (parsed.action === "start_sourcing") {
     const batch = await deps.dataProvider.startCalibrationSourcing(deps.dealId);
     if (batch.candidates.length === 0) {
-      return { summary: "I couldn't find candidates to show right now. Try relaxing the criteria or searching again." };
+      return {
+        summary:
+          "I couldn't find candidates to show right now. Try relaxing the criteria or searching again.",
+      };
     }
     void appendCalibrationCardTurns(deps, batch);
+    // Surface Talent Bench note when saved search results were reused.
+    const prefix = batch.bench_note ? `${batch.bench_note} ` : "";
     return {
-      summary: `Searching… found ${batch.pool_size} candidates. Here are the top ${batch.candidates.length}:`,
+      summary: `${prefix}Found ${batch.pool_size} candidates. Here are the top ${batch.candidates.length}:`,
     };
   }
 
-  if (parsed.action === "calibration_yes" || parsed.action === "show_more_like_this") {
+  if (
+    parsed.action === "calibration_yes" ||
+    parsed.action === "show_more_like_this"
+  ) {
     const batch = await deps.dataProvider.calibrationNextBatch(deps.dealId);
     if (batch.pool_exhausted && batch.candidates.length === 0) {
-      return { summary: "I've shown everyone in the current pool. Say 'relax and search again' to widen the criteria, or 'start sourcing' to pull a fresh batch." };
+      return {
+        summary:
+          "I've shown everyone in the current pool. Say 'relax and search again' to widen the criteria, or 'start sourcing' to pull a fresh batch.",
+      };
     }
     void appendCalibrationCardTurns(deps, batch);
-    return { summary: batch.pool_exhausted ? `Last ${batch.candidates.length} from the current pool:` : `Here are the next ${batch.candidates.length}:` };
+    return {
+      summary: batch.pool_exhausted
+        ? `Last ${batch.candidates.length} from the current pool:`
+        : `Here are the next ${batch.candidates.length}:`,
+    };
   }
 
   if (parsed.action === "calibration_no") {
@@ -111,10 +126,18 @@ async function executeReversibleOrRead(
   if (parsed.action === "relax_and_research") {
     const batch = await deps.dataProvider.startCalibrationSourcing(deps.dealId);
     if (batch.candidates.length === 0) {
-      return { summary: "Searched with wider criteria but still found no new candidates. Try adjusting the role requirements." };
+      return {
+        summary:
+          "Searched with wider criteria but still found no new candidates. Try adjusting the role requirements.",
+      };
     }
     void appendCalibrationCardTurns(deps, batch);
-    return { summary: `Searching with wider criteria… here are the top ${batch.candidates.length} from a fresh pull:` };
+    const prefix = batch.bench_note
+      ? `${batch.bench_note} `
+      : "Searching with wider criteria… ";
+    return {
+      summary: `${prefix}Here are the top ${batch.candidates.length} from a fresh pull:`,
+    };
   }
 
   if (parsed.action === "show_roles") {
@@ -532,7 +555,9 @@ export async function dispatchCalibrationRerank(
   reason: string,
 ): Promise<void> {
   await appendRecruiterTurn(deps, reason, { kind: "command" });
-  const batch = await deps.dataProvider.calibrationRerank(deps.dealId, reason).catch(() => null);
+  const batch = await deps.dataProvider
+    .calibrationRerank(deps.dealId, reason)
+    .catch(() => null);
   if (!batch || batch.candidates.length === 0) {
     await appendAgentTurn(
       deps,

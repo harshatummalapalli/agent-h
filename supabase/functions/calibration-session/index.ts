@@ -29,6 +29,7 @@
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import * as jose from "jsr:@panva/jose@6";
+import { searchCrustdataForRoleBrief } from "../_shared/crustdataClient.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY");
@@ -37,8 +38,13 @@ const SUPABASE_JWT_ISSUER =
 const SUPABASE_JWT_KEYS = jose.createRemoteJWKSet(
   new URL(`${SUPABASE_URL}/auth/v1/.well-known/jwks.json`),
 );
+const CRUSTDATA_API_KEY = Deno.env.get("CRUSTDATA_API_KEY");
 
 const BATCH_SIZE = 5;
+// Pull Crustdata server-side when bench + cheap pool is below this floor.
+// BATCH_SIZE * 3 = 15 ensures we have enough for a few calibration batches
+// before presenting thinly-sourced results to the recruiter.
+const CRUSTDATA_POOL_FLOOR = BATCH_SIZE * 3;
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -297,7 +303,7 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({ error: "deal_id (number) required" }, 400);
   }
 
-  // ── start: merge bench candidates, rank, persist, return first batch ──
+  // ── start: merge bench + cheap pool, gate Crustdata, rank, persist ──
   if (action === "start") {
     const rawCandidates = body.raw_candidates ?? [];
     const roleBrief = body.role_brief ?? {};
@@ -305,7 +311,8 @@ Deno.serve(async (req: Request) => {
     // Talent Bench: pull non-expired candidates from other deals in tenant.
     const benchCandidates = await fetchBenchCandidates(deal_id, authHeader);
 
-    // Merge bench + vendor candidates, deduping by linkedin_url then id.
+    // Merge bench + cheap (free-portal + Exa) candidates passed by the client,
+    // deduping by linkedin_url then id.
     const seen = new Set<string>();
     const merged: RawCandidate[] = [];
     for (const c of [...benchCandidates, ...rawCandidates]) {
@@ -313,6 +320,24 @@ Deno.serve(async (req: Request) => {
       if (seen.has(key)) continue;
       seen.add(key);
       merged.push(c);
+    }
+
+    // Crustdata gate: if bench + cheap pool is thin, call Crustdata server-side.
+    // This keeps Crustdata off the client (no key exposure) and off cheap searches
+    // where we already have enough candidates for calibration.
+    if (merged.length < CRUSTDATA_POOL_FLOOR && CRUSTDATA_API_KEY) {
+      const crustdataCandidates = await searchCrustdataForRoleBrief(
+        roleBrief,
+        // Request enough to fill the gap; cap at 30 to stay within API budget.
+        Math.min(CRUSTDATA_POOL_FLOOR - merged.length + 10, 30),
+        CRUSTDATA_API_KEY,
+      );
+      for (const c of crustdataCandidates) {
+        const key = c.linkedin_url || c.id;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        merged.push(c);
+      }
     }
 
     const ranked = await rankCandidates(merged, roleBrief, authHeader);

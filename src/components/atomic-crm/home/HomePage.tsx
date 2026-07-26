@@ -1,11 +1,8 @@
-// Home page (2026-07-26): conversational new-role entry as the primary path.
-// User types a role description (or pastes a JD) in the command bar;
-// parseJobDescription parses it, the agent asks clarifying questions, and
-// the user clicks "Start sourcing" to create the role and navigate.
-// The roles list and integrations strip remain for quick access to existing roles.
+// Home page: conversational new-role interview as the primary path.
+// One clarifying question at a time; roles list hidden during active conversation.
 import { useRef, useState } from "react";
 import { useNavigate, Link } from "react-router";
-import { Search, Linkedin, Mail, ChevronRight, Send } from "lucide-react";
+import { Linkedin, Mail, ChevronRight, Send, Search } from "lucide-react";
 import {
   useGetIdentity,
   useGetList,
@@ -21,6 +18,7 @@ import { cn } from "@/lib/utils";
 import type { Deal } from "../types";
 import type { CrmDataProvider } from "../providers/types";
 import type { UnipileLinkedInAccount } from "../settings/UnipileLinkedInConnectionCard";
+import type { CalibrationCandidate } from "../providers/supabase/dataProvider";
 import "../inbox/agent-h-theme.css";
 
 type ConvTurn = { role: "user" | "agent"; text: string };
@@ -52,6 +50,40 @@ type ParsedBrief = {
   past_companies?: string[];
 };
 
+const JD_QUESTION =
+  "Do you have a formal job description, or anything specific you want me to screen for — technical tests, culture fit signals, deal-breakers?";
+
+const EXPECTATION_TURN =
+  "One thing to set expectations on — I'll look for people who might be open. Notice period and compensation we confirm directly with them once they're engaged. Passive outreach can't guarantee immediate joiners or a specific CTC, but we'll surface the best fits and verify the details in conversation.";
+
+function checkUnrealisticConstraints(text: string): boolean {
+  return (
+    /immediate\s+joiner|join\s+immediately|available\s+immediately|notice\s+period.*\b0\b|no\s+notice\s+period/i.test(
+      text,
+    ) || /\b\d+\s*(lpa|lakh|lac|ctc|k\b|thousand|usd|inr)\b/i.test(text)
+  );
+}
+
+function buildSummary(result: ParsedBrief): string {
+  const skillsSummary =
+    (
+      (result.required_skills ?? result.must_have_keywords ?? []) as string[]
+    )
+      .slice(0, 5)
+      .join(", ") || "not specified";
+  const expSummary =
+    result.years_experience_min != null || result.years_experience_max != null
+      ? `${result.years_experience_min ?? 0}–${result.years_experience_max ?? "∞"} years`
+      : "not specified";
+  return [
+    `Role: ${result.title || "untitled"}`,
+    `Seniority: ${result.seniority || "not specified"}`,
+    `Location: ${result.location || "not specified"}`,
+    `Experience: ${expSummary}`,
+    `Key skills: ${skillsSummary}`,
+  ].join("\n");
+}
+
 export const HomePage = () => {
   const navigate = useNavigate();
   const notify = useNotify();
@@ -61,10 +93,12 @@ export const HomePage = () => {
   const [input, setInput] = useState("");
   const [turns, setTurns] = useState<ConvTurn[]>([]);
   const [parsed, setParsed] = useState<ParsedBrief | null>(null);
+  const [pendingQuestions, setPendingQuestions] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [creating, setCreating] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const expectationShownRef = useRef(false);
 
   const { data: deals = [], isLoading } = useGetList<Deal>("deals", {
     pagination: { page: 1, perPage: 50 },
@@ -92,43 +126,71 @@ export const HomePage = () => {
     setInput("");
     addTurn({ role: "user", text });
     setBusy(true);
+
     try {
+      const isFirstMessage = turns.length === 0;
+
       // Multi-turn merge: when a prior brief exists, prefix it so the
-      // LLM can update specific fields rather than re-parse from scratch.
+      // LLM updates only the affected fields.
       const inputForParse = parsed
         ? `[Existing role brief — update only the fields affected by the hiring manager's follow-up, keep all other fields as-is]\n${JSON.stringify(parsed)}\n\nHiring manager follow-up: ${text}`
         : text;
+
       const result = await dataProvider.parseJobDescription(inputForParse);
       setParsed(result as ParsedBrief);
-      const skillsSummary =
-        (
-          (result.required_skills ??
-            result.must_have_keywords ??
-            []) as string[]
-        )
-          .slice(0, 5)
-          .join(", ") || "not specified";
-      const expSummary =
-        result.years_experience_min != null ||
-        result.years_experience_max != null
-          ? `${result.years_experience_min ?? 0}–${result.years_experience_max ?? "∞"} years`
-          : "not specified";
-      const summaryLines = [
-        `**Role:** ${result.title || "untitled"}`,
-        `**Seniority:** ${result.seniority || "not specified"}`,
-        `**Location:** ${result.location || "not specified"}`,
-        `**Experience:** ${expSummary}`,
-        `**Key skills:** ${skillsSummary}`,
-      ].join("\n");
-      const questionsBlock = (
-        result.clarifying_questions as string[] | undefined
-      )?.length
-        ? `\n\nA few things I want to confirm:\n${(result.clarifying_questions as string[]).map((q) => `• ${q}`).join("\n")}\n\nAnswer any of these, or click "Start sourcing" when you're ready.`
-        : '\n\nEverything looks clear — click "Start sourcing" when you\'re ready, or tell me anything to adjust.';
-      addTurn({
-        role: "agent",
-        text: `Got it — here's what I understood:\n\n${summaryLines}${questionsBlock}`,
-      });
+
+      // Expectation setting: fire once per conversation if unrealistic
+      // constraints are detected (immediate joiner, hard salary band).
+      if (
+        checkUnrealisticConstraints(text) &&
+        !expectationShownRef.current
+      ) {
+        expectationShownRef.current = true;
+        addTurn({ role: "agent", text: EXPECTATION_TURN });
+      }
+
+      if (isFirstMessage) {
+        const clarifyingQs =
+          (result.clarifying_questions as string[] | undefined) ?? [];
+
+        // Inject JD question at the front when the user didn't paste a full JD.
+        const hasJdSignal =
+          text.length >= 300 ||
+          /responsibilities|requirements|qualifications/i.test(text);
+        const fullQueue: string[] = hasJdSignal
+          ? clarifyingQs
+          : [JD_QUESTION, ...clarifyingQs];
+
+        const [firstQ, ...remainingQs] = fullQueue;
+        const summary = buildSummary(result as ParsedBrief);
+
+        if (firstQ) {
+          addTurn({
+            role: "agent",
+            text: `Got it — here's what I understood:\n\n${summary}\n\n${firstQ}`,
+          });
+          setPendingQuestions(remainingQs);
+        } else {
+          addTurn({
+            role: "agent",
+            text: `Got it — here's what I understood:\n\n${summary}\n\nLooks clear. Click "Start sourcing" when you're ready, or tell me anything to adjust.`,
+          });
+          setPendingQuestions([]);
+        }
+      } else {
+        // Follow-up: advance through the question queue.
+        const nextQ = pendingQuestions[0] ?? null;
+
+        if (nextQ) {
+          addTurn({ role: "agent", text: nextQ });
+          setPendingQuestions((prev) => prev.slice(1));
+        } else {
+          addTurn({
+            role: "agent",
+            text: "Got it — I've updated the brief. We're good to go whenever you're ready.",
+          });
+        }
+      }
     } catch {
       addTurn({
         role: "agent",
@@ -173,8 +235,58 @@ export const HomePage = () => {
           contact_ids: [],
         },
       });
-      notify("Role created", { type: "success" });
-      navigate(`/roles/${created.data.id}`);
+      const dealId = created.data.id;
+
+      // Seed the transcript and kick off sourcing before navigating
+      // so the user arrives at a role page with content, not a blank screen.
+      try {
+        await dataProvider.appendAgentConversationTurn(dealId, {
+          content:
+            "Starting sourcing — searching for people who match your brief…",
+          metadata: { kind: "agent" },
+        });
+
+        const batch = await dataProvider.startCalibrationSourcing(dealId);
+
+        if (batch.candidates.length > 0) {
+          const prefix = batch.bench_note ? `${batch.bench_note} ` : "";
+          await dataProvider.appendAgentConversationTurn(dealId, {
+            content: `${prefix}Found ${batch.pool_size ?? batch.candidates.length} people. Here are the first ${batch.candidates.length}:`,
+            metadata: { kind: "agent" },
+          });
+          // Seed one candidate-card turn per result.
+          for (const c of batch.candidates as CalibrationCandidate[]) {
+            await dataProvider.appendAgentConversationTurn(dealId, {
+              content: `${c.name}${c.headline ? ` — ${c.headline}` : ""}${c.why_fit ? `\n${c.why_fit}` : ""}`,
+              metadata: {
+                kind: "candidate_card",
+                candidate_card: {
+                  candidate_id: 0,
+                  deal_id: Number(dealId),
+                  name: c.name,
+                  headline: c.headline ?? null,
+                  linkedin_url: c.linkedin_url ?? null,
+                  match_score: c.match_score ?? null,
+                  must_haves: [],
+                  calibration_external_id: c.external_id,
+                  why_fit: c.why_fit ?? null,
+                },
+              },
+            });
+          }
+        } else {
+          await dataProvider.appendAgentConversationTurn(dealId, {
+            content:
+              "I couldn't find candidates right now — try relaxing the criteria once inside.",
+            metadata: { kind: "agent" },
+          });
+        }
+      } catch {
+        // Transcript seeding failed — navigate anyway; sourcing can be
+        // triggered from the role page.
+      }
+
+      navigate(`/roles/${dealId}`);
     } catch {
       notify("Couldn't create the role — please try again", { type: "error" });
       setCreating(false);
@@ -196,16 +308,27 @@ export const HomePage = () => {
       <div className="overflow-y-auto">
         <div className="max-w-2xl mx-auto px-6 pt-12 pb-4 flex flex-col gap-10">
           {/* Greeting */}
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight text-foreground">
-              {greeting}
-            </h1>
-            <p className="mt-1 text-sm text-muted-foreground">
-              What are you hiring for today?
-            </p>
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <h1 className="text-2xl font-semibold tracking-tight text-foreground">
+                {greeting}
+              </h1>
+              <p className="mt-1 text-sm text-muted-foreground">
+                What are you hiring for today?
+              </p>
+            </div>
+            {/* Compact roles link — replaces full list during conversation */}
+            {hasConversation && deals.length > 0 && (
+              <Link
+                to="/"
+                onClick={() => setTurns([])}
+                className="shrink-0 flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground mt-1 no-underline"
+              >
+                Your roles
+                <ChevronRight className="h-3 w-3" />
+              </Link>
+            )}
           </div>
-
-          {/* Secondary "paste full JD" lives in the command bar footer hint below */}
 
           {/* Conversation transcript */}
           {hasConversation && (
@@ -234,51 +357,50 @@ export const HomePage = () => {
                   onClick={handleStartSourcing}
                   disabled={creating}
                 >
-                  {creating ? "Creating role…" : "Start sourcing →"}
+                  {creating ? "Searching…" : "Start sourcing →"}
                 </Button>
               )}
               <div ref={bottomRef} />
             </div>
           )}
 
-          {/* Search + roles list — always visible */}
-          <div className="flex flex-col gap-3">
-            <div className="relative">
-              <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground pointer-events-none" />
-              <Input
-                placeholder="Search your roles…"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="pl-9 h-10"
-              />
-            </div>
+          {/* Roles search + list — hidden while conversation is active */}
+          {!hasConversation && (
+            <div className="flex flex-col gap-3">
+              <div className="relative">
+                <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground pointer-events-none" />
+                <Input
+                  placeholder="Search your roles…"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="pl-9 h-10"
+                />
+              </div>
 
-            {!isLoading && filtered.length > 0 && (
-              <ul className="flex flex-col divide-y divide-border rounded-lg border border-border overflow-hidden">
-                {filtered.slice(0, 8).map((deal) => (
-                  <RoleRow key={deal.id} deal={deal} />
-                ))}
-              </ul>
-            )}
-            {!isLoading && filtered.length === 0 && search && (
-              <p className="text-sm text-muted-foreground text-center py-4">
-                No roles match "{search}"
-              </p>
-            )}
-            {!isLoading &&
-              deals.length === 0 &&
-              !search &&
-              !hasConversation && (
+              {!isLoading && filtered.length > 0 && (
+                <ul className="flex flex-col divide-y divide-border rounded-lg border border-border overflow-hidden">
+                  {filtered.slice(0, 8).map((deal) => (
+                    <RoleRow key={deal.id} deal={deal} />
+                  ))}
+                </ul>
+              )}
+              {!isLoading && filtered.length === 0 && search && (
+                <p className="text-sm text-muted-foreground text-center py-4">
+                  No roles match &ldquo;{search}&rdquo;
+                </p>
+              )}
+              {!isLoading && deals.length === 0 && !search && (
                 <div className="text-center py-8 flex flex-col gap-3 text-muted-foreground">
                   <p className="text-sm">
                     No open roles yet — describe one below.
                   </p>
                 </div>
               )}
-          </div>
+            </div>
+          )}
 
-          {/* Integrations strip */}
-          <IntegrationsStrip />
+          {/* Integrations strip — hidden during active conversation */}
+          {!hasConversation && <IntegrationsStrip />}
         </div>
       </div>
 
@@ -298,7 +420,7 @@ export const HomePage = () => {
             }}
             placeholder={
               hasConversation
-                ? "Answer a question or adjust anything…"
+                ? "Reply here…"
                 : 'Describe a role — e.g. "Senior backend engineer, Python, remote, 5+ years"'
             }
             disabled={busy || creating}

@@ -6,13 +6,15 @@ import {
 } from "./agentActionTiers";
 import { PendingApprovalCard } from "./PendingApprovalCard";
 
-// TASK-003: inline candidate card rendered in the transcript after sourcing.
+// Loop B calibration: inline candidate card with Yes/No quick actions.
 function CandidateCardTurn({
   metadata,
-  onAddToPipeline,
+  onCalibrationYes,
+  onCalibrationNo,
 }: {
   metadata: NonNullable<ConversationTurnMetadata["candidate_card"]>;
-  onAddToPipeline?: (candidateId: number, dealId: number, name: string) => void;
+  onCalibrationYes?: () => void;
+  onCalibrationNo?: () => void;
 }) {
   return (
     <li className="border rounded-md p-3 flex flex-col gap-1.5 text-sm bg-muted/20">
@@ -26,6 +28,9 @@ function CandidateCardTurn({
       </div>
       {metadata.headline && (
         <div className="text-xs text-muted-foreground">{metadata.headline}</div>
+      )}
+      {metadata.why_fit && (
+        <div className="text-xs text-muted-foreground italic">{metadata.why_fit}</div>
       )}
       {metadata.linkedin_url && (
         <a
@@ -61,20 +66,27 @@ function CandidateCardTurn({
           ))}
         </ul>
       )}
-      {onAddToPipeline && (
-        <button
-          type="button"
-          className="text-xs text-blue-700 underline text-left mt-1 w-fit"
-          onClick={() =>
-            onAddToPipeline(
-              metadata.candidate_id,
-              metadata.deal_id,
-              metadata.name,
-            )
-          }
-        >
-          View in sourcing panel ↓
-        </button>
+      {(onCalibrationYes || onCalibrationNo) && (
+        <div className="flex gap-2 mt-2">
+          {onCalibrationYes && (
+            <button
+              type="button"
+              className="text-xs border rounded px-2 py-1 hover:bg-muted transition-colors text-green-700 border-green-200 bg-green-50/60"
+              onClick={onCalibrationYes}
+            >
+              ✓ Yes, show more like this
+            </button>
+          )}
+          {onCalibrationNo && (
+            <button
+              type="button"
+              className="text-xs border rounded px-2 py-1 hover:bg-muted transition-colors text-muted-foreground"
+              onClick={onCalibrationNo}
+            >
+              ✗ Not a fit
+            </button>
+          )}
+        </div>
       )}
     </li>
   );
@@ -94,6 +106,8 @@ type RoleConversationTranscriptProps = {
     linkedinPreview?: ConversationTurnMetadata["linkedin_preview"],
   ) => void | Promise<void>;
   actionBusy?: boolean;
+  onCalibrationYes?: () => void;
+  onCalibrationNo?: () => void;
 };
 
 export const RoleConversationTranscript = ({
@@ -102,6 +116,8 @@ export const RoleConversationTranscript = ({
   onStop,
   onRefine,
   actionBusy = false,
+  onCalibrationYes,
+  onCalibrationNo,
 }: RoleConversationTranscriptProps) => {
   const {
     data: turns,
@@ -121,14 +137,10 @@ export const RoleConversationTranscript = ({
         <h3 className="text-sm font-medium tracking-wide uppercase text-muted-foreground">
           Conversation
         </h3>
-        <p className="text-xs text-muted-foreground mt-1">
-          Shared with everyone assigned to this role. Tier 3 actions block here
-          until you approve or stop.
-        </p>
       </div>
 
       {isPending ? (
-        <p className="text-sm text-muted-foreground">Loading conversation…</p>
+        <p className="text-sm text-muted-foreground">Loading…</p>
       ) : isError ? (
         <p className="text-sm text-muted-foreground">
           Conversation history is not available yet — apply the latest database
@@ -136,10 +148,10 @@ export const RoleConversationTranscript = ({
         </p>
       ) : !list.length ? (
         <p className="text-sm text-muted-foreground">
-          Ask Agent H anything about this role using the command bar below.
+          Use the command bar below to start sourcing candidates for this role.
         </p>
       ) : (
-        <ul className="flex flex-col gap-3 max-h-80 overflow-y-auto">
+        <ul className="flex flex-col gap-3 max-h-[60vh] overflow-y-auto">
           {list.map((turn) => {
             const metadata = turn.metadata as
               | ConversationTurnMetadata
@@ -178,11 +190,35 @@ export const RoleConversationTranscript = ({
               metadata?.kind === "candidate_card" &&
               metadata.candidate_card
             ) {
+              // Only the LAST candidate card turn shows the Yes/No buttons
+              // so the recruiter acts on the batch as a whole rather than per-card.
+              const isLastCard = list
+                .filter(
+                  (t) =>
+                    (t.metadata as ConversationTurnMetadata | undefined)?.kind ===
+                    "candidate_card",
+                )
+                .at(-1)?.id === turn.id;
               return (
                 <CandidateCardTurn
                   key={turn.id}
                   metadata={metadata.candidate_card}
+                  onCalibrationYes={isLastCard ? onCalibrationYes : undefined}
+                  onCalibrationNo={isLastCard ? onCalibrationNo : undefined}
                 />
+              );
+            }
+
+            if (metadata?.kind === "calibration_question") {
+              return (
+                <li key={turn.id} className="flex flex-col gap-1 text-sm">
+                  <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    Agent H
+                  </span>
+                  <span className="whitespace-pre-wrap text-foreground">
+                    {turn.content}
+                  </span>
+                </li>
               );
             }
 

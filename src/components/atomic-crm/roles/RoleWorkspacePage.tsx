@@ -13,7 +13,7 @@ import {
   UserPlus,
   X,
 } from "lucide-react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   InfiniteListBase,
   ShowBase,
@@ -21,7 +21,7 @@ import {
   useGetList,
   useRecordContext,
 } from "ra-core";
-import { useNavigate, useParams } from "react-router";
+import { useNavigate, useParams, useSearchParams } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -81,6 +81,7 @@ type WorkspaceTab = "sourcing" | "review";
 
 const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const dataProvider = useDataProvider<CrmDataProvider>();
   const queryClient = useQueryClient();
   const { dealStages } = useConfigurationContext();
@@ -100,6 +101,9 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
   const [memoryPanelOpen, setMemoryPanelOpen] = useState(true);
   // Track the latest calibration batch so we can offer "Add N confident candidates"
   const [lastBatch, setLastBatch] = useState<CalibrationBatch | null>(null);
+  // True while a sourcing call is in flight (prevents double-trigger).
+  const [sourcingInFlight, setSourcingInFlight] = useState(false);
+  const autostartFiredRef = useRef(false);
 
   const { data: openDeals } = useGetList<Deal>("deals", {
     pagination: { page: 1, perPage: 20 },
@@ -226,6 +230,8 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
       toast.info("Sourcing is paused for this role — resume it to continue.");
       return;
     }
+    if (sourcingInFlight || commandBusy) return;
+    setSourcingInFlight(true);
     setCommandBusy(true);
     try {
       // If cache exists, get next batch; otherwise start fresh sourcing
@@ -235,6 +241,11 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
         queryClient.invalidateQueries({
           queryKey: ["role_conversation_turns"],
         });
+        if (batch.candidates.length === 0) {
+          toast.info(
+            "No more candidates in the current pool. Try relaxing the criteria in Role Memory.",
+          );
+        }
       } else {
         const batch = await dataProvider.startCalibrationSourcing(dealId);
         setLastBatch(batch);
@@ -242,15 +253,46 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
           queryKey: ["role_conversation_turns"],
         });
         queryClient.invalidateQueries({ queryKey: ["deals", dealId] });
+        if (batch.candidates.length === 0) {
+          toast.info(
+            "No candidates found right now. Try relaxing the criteria in Role Memory.",
+          );
+        }
       }
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : "Couldn't start search",
+        error instanceof Error
+          ? error.message
+          : "Search ran but found no candidates — try relaxing the criteria or starting again.",
       );
     } finally {
+      setSourcingInFlight(false);
       setCommandBusy(false);
     }
   };
+
+  // Autostart: when the role page loads with ?autostart=1 and no prior search,
+  // trigger sourcing once. Home seeds the transcript before navigating, so this
+  // is a safety net for page refreshes.
+  useEffect(() => {
+    if (
+      !autostartFiredRef.current &&
+      searchParams.get("autostart") === "1" &&
+      deal &&
+      !deal.role_brief_last_scroll_query &&
+      !lastBatch
+    ) {
+      autostartFiredRef.current = true;
+      // Remove the query param so a manual refresh doesn't re-trigger.
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete("autostart");
+        return next;
+      }, { replace: true });
+      void handleContinueSearch();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deal]);
 
   const handleAddNConfident = async (candidates: CalibrationCandidate[]) => {
     const toAdd = candidates
@@ -455,7 +497,7 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
               pipelineCount={pipelineCount}
               hasCacheToken={hasCacheToken}
               hasSearchRun={hasSearchRun}
-              commandBusy={commandBusy}
+              commandBusy={commandBusy || sourcingInFlight}
               nConfident={nConfident}
               confidentCandidates={confidentCandidates}
               onAddCandidates={() => setAddCandidatesOpen(true)}
@@ -538,7 +580,12 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
               className="flex-1 mt-0 overflow-y-auto"
             >
               <div className="max-w-4xl mx-auto px-6 py-8 flex flex-col items-center gap-4 text-center">
-                {hasSearchRun ? (
+                {sourcingInFlight ? (
+                  <p className="text-sm text-muted-foreground max-w-sm animate-pulse">
+                    Sourcing candidates — this can take 30–90 seconds. You can
+                    stay on this page; no need to refresh.
+                  </p>
+                ) : hasSearchRun ? (
                   <>
                     <p className="text-sm text-muted-foreground max-w-sm">
                       Use the Role Memory panel to refine your search, or add
@@ -549,7 +596,7 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
                       <Button
                         size="sm"
                         onClick={handleContinueSearch}
-                        disabled={commandBusy}
+                        disabled={commandBusy || sourcingInFlight}
                       >
                         <Sparkles className="h-4 w-4 mr-1.5" />
                         Show more from search
@@ -559,17 +606,17 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
                 ) : (
                   <>
                     <p className="text-sm text-muted-foreground max-w-sm">
-                      No search run yet. Ask Agent H to start sourcing, or add
-                      candidates manually.
+                      No search run yet. Start sourcing to find candidates, or
+                      add them manually.
                     </p>
                     <div className="flex gap-2 flex-wrap justify-center">
                       <Button
                         size="sm"
                         onClick={handleContinueSearch}
-                        disabled={commandBusy}
+                        disabled={commandBusy || sourcingInFlight}
                       >
                         <Sparkles className="h-4 w-4 mr-1.5" />
-                        Start sourcing
+                        {sourcingInFlight ? "Sourcing…" : "Start sourcing"}
                       </Button>
                       <Button
                         size="sm"

@@ -159,7 +159,9 @@ The project uses TypeScript path aliases configured in `tsconfig.json` and `comp
 When modifying contact or company data structures:
 1. Edit the relevant schema file in `supabase/schemas/` (table in `01_tables.sql`, views in `03_views.sql`, etc.)
 2. Generate a migration: `npx supabase db diff --local -f <name>`
-3. Apply it: `npx supabase migration up --local`
+3. Apply it:
+   - **With Docker (local):** `npx supabase migration up --local`
+   - **Without Docker (hosted project):** `npx supabase db push` (see `docs/deploy-supabase-without-docker.md`)
 4. Update the sample CSV: `src/components/atomic-crm/contacts/contacts_export.csv`
 5. Update the import function: `src/components/atomic-crm/contacts/useContactImport.tsx`
 6. If using FakeRest, update data generators in `src/components/atomic-crm/providers/fakerest/dataGenerator/`

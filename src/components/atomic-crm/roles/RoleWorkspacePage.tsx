@@ -25,7 +25,7 @@ import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 
-import { DealCandidatesSection } from "../deals/DealCandidatesSection";
+import { CandidateReviewTable } from "../deals/CandidateReviewTable";
 import { findDealLabel, formatISODateString } from "../deals/dealUtils";
 import { NoteCreate } from "../notes/NoteCreate";
 import { NotesIterator } from "../notes/NotesIterator";
@@ -320,6 +320,7 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
 
               <SourceCandidatesPage
                 initialRoleBriefId={dealId}
+                simplified
                 onCandidateSaved={(candidateId, name) => {
                   void proposeOutreachAfterPipelineAdd(
                     orchestratorDeps,
@@ -341,7 +342,16 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
           <TabsContent value="review" className="flex-1 mt-0 overflow-y-auto">
             <div className="max-w-4xl mx-auto px-6 py-6 flex flex-col gap-6">
               <div className="ah-panel p-6">
-                <DealCandidatesSection dealId={dealId} />
+                <CandidateReviewTable
+                  dealId={dealId}
+                  onContactRequested={async (candidateId, name) => {
+                    await proposeOutreachAfterPipelineAdd(
+                      orchestratorDeps,
+                      Number(candidateId),
+                      name,
+                    );
+                  }}
+                />
               </div>
 
               <div className="ah-panel p-6">
@@ -369,7 +379,7 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
             className="flex-1 mt-0 overflow-y-auto"
           >
             <div className="max-w-2xl mx-auto px-6 py-8">
-              <CoordinatorPlaceholder />
+              <CoordinatorSettings dealId={dealId} />
             </div>
           </TabsContent>
 
@@ -451,13 +461,51 @@ const RoleWorkspaceHeader = () => {
 };
 
 /* ------------------------------------------------------------------ */
-/* Coordinator placeholder                                             */
+/* Coordinator settings — persisted to the deal row                    */
 /* ------------------------------------------------------------------ */
 
-const CoordinatorPlaceholder = () => {
-  const [knowledgeBase, setKnowledgeBase] = useState("");
-  const [calendarLink, setCalendarLink] = useState("");
-  const [mode, setMode] = useState<"draft" | "auto">("draft");
+const CoordinatorSettings = ({ dealId }: { dealId: string }) => {
+  const dataProvider = useDataProvider();
+  const queryClient = useQueryClient();
+  const deal = useRecordContext<Deal>();
+
+  const saved = deal?.coordinator_settings ?? {};
+  const [knowledgeBase, setKnowledgeBase] = useState(
+    saved.knowledge_base ?? "",
+  );
+  const [calendarLink, setCalendarLink] = useState(saved.calendar_link ?? "");
+  const [mode, setMode] = useState<"draft" | "auto">(
+    saved.reply_mode ?? "draft",
+  );
+  const [saving, setSaving] = useState(false);
+  const [savedOk, setSavedOk] = useState(false);
+
+  const handleSave = async () => {
+    setSaving(true);
+    setSavedOk(false);
+    try {
+      await dataProvider.update("deals", {
+        id: dealId,
+        data: {
+          coordinator_settings: {
+            knowledge_base: knowledgeBase,
+            calendar_link: calendarLink,
+            reply_mode: mode,
+          },
+        },
+        previousData: deal ?? { id: dealId },
+      });
+      void queryClient.invalidateQueries({ queryKey: ["deals", dealId] });
+      setSavedOk(true);
+      setTimeout(() => setSavedOk(false), 3000);
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Couldn't save settings",
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <div className="flex flex-col gap-8">
@@ -465,12 +513,13 @@ const CoordinatorPlaceholder = () => {
         <h2 className="text-lg font-semibold">Coordinator setup</h2>
         <p className="text-sm text-muted-foreground mt-1">
           Configure how Agent H handles candidate communication for this role.
+          Drafts are always held for your approval.
         </p>
       </div>
 
       <div className="flex flex-col gap-4">
         <div className="flex flex-col gap-1.5">
-          <label className="text-sm font-medium" htmlFor="kb">
+          <label className="text-sm font-medium" htmlFor="coord-kb">
             Knowledge base
           </label>
           <p className="text-xs text-muted-foreground">
@@ -478,7 +527,7 @@ const CoordinatorPlaceholder = () => {
             process steps, important details.
           </p>
           <Textarea
-            id="kb"
+            id="coord-kb"
             placeholder="e.g. This is a full-time remote role. Interview process: recruiter screen → technical → founder chat. Salary: $120k–$150k…"
             rows={6}
             value={knowledgeBase}
@@ -487,11 +536,11 @@ const CoordinatorPlaceholder = () => {
         </div>
 
         <div className="flex flex-col gap-1.5">
-          <label className="text-sm font-medium" htmlFor="cal">
+          <label className="text-sm font-medium" htmlFor="coord-cal">
             Calendar link
           </label>
           <Input
-            id="cal"
+            id="coord-cal"
             type="url"
             placeholder="https://cal.com/your-link"
             value={calendarLink}
@@ -514,21 +563,28 @@ const CoordinatorPlaceholder = () => {
                 }`}
               >
                 <div className="font-medium">
-                  {m === "draft" ? "Draft for approval" : "Send automatically"}
+                  {m === "draft"
+                    ? "Drafts held for approval"
+                    : "Send automatically (coming soon)"}
                 </div>
                 <div className="text-xs text-muted-foreground mt-0.5">
                   {m === "draft"
-                    ? "Agent H drafts a reply; you approve before it sends."
-                    : "Agent H sends replies without approval (coming soon)."}
+                    ? "Agent H drafts every reply — you review and approve before it sends."
+                    : "Agent H sends replies automatically without approval — not yet available."}
                 </div>
               </button>
             ))}
           </div>
         </div>
 
-        <Button className="self-start" disabled>
-          Save (coming soon)
-        </Button>
+        <div className="flex items-center gap-3">
+          <Button className="self-start" onClick={handleSave} disabled={saving}>
+            {saving ? "Saving…" : "Save"}
+          </Button>
+          {savedOk && (
+            <span className="text-sm text-muted-foreground">Saved.</span>
+          )}
+        </div>
       </div>
     </div>
   );

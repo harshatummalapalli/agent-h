@@ -2252,11 +2252,15 @@ const sourcingPanelClass = (
 export const SourceCandidatesPage = ({
   initialRoleBriefId,
   onCandidateSaved,
+  simplified,
 }: {
   initialRoleBriefId?: string;
   // TASK-004: called after a candidate is added to the pipeline so the
   // parent (RoleWorkspacePage) can propose outreach in the transcript.
   onCandidateSaved?: (candidateId: number, name: string) => void;
+  // Phase 2: when true, show one primary "Source candidates" CTA and
+  // collapse Preview/Fetch/Calibrate/Free portals/X-ray into an accordion.
+  simplified?: boolean;
 } = {}) => {
   const dataProvider = useDataProvider<CrmDataProvider>();
   const notify = useNotify();
@@ -2876,6 +2880,80 @@ export const SourceCandidatesPage = ({
       notify(error?.message || "Failed to fetch candidates", {
         type: "error",
       });
+    } finally {
+      setFetchLoading(false);
+    }
+  };
+
+  // Phase 2 simplified mode: preview (count only) then immediately fetch
+  // with a sensible default (≤25 shown, up to 100 saved) in one click.
+  const handleSourceCandidates = async () => {
+    if (!selectedId) return;
+    setPreviewLoading(true);
+    setCandidates([]);
+    setScrollToken(null);
+    setSaveStates({});
+    try {
+      const preview = (await dataProvider.sourceCandidates(
+        Number(selectedId),
+        1,
+        null,
+        true,
+      )) as SourceResult;
+      setRoleBriefTitle(preview.role_brief.title);
+      setTotal(preview.total);
+      setNotes(preview.notes);
+      setStage("previewed");
+    } catch (error: any) {
+      notify(error?.message || "Failed to search for candidates", {
+        type: "error",
+      });
+      setPreviewLoading(false);
+      return;
+    }
+    setPreviewLoading(false);
+    // Immediately fetch up to 25 (shown) / up to 100 (saved)
+    setFetchLoading(true);
+    try {
+      const data = (await dataProvider.sourceCandidates(
+        Number(selectedId),
+        25,
+      )) as SourceResult;
+      setCandidates(
+        sortCandidatesForDisplay(
+          data.candidates,
+          sortField,
+          sortByMatchEvidence,
+          sortByYearsExperience,
+          sortByCompanySize,
+        ),
+      );
+      setScrollToken(data.scroll_token);
+      setTotal(data.total);
+      setTotalMatchesAll(data.total_matches_all);
+      setNotes(data.notes);
+      const seeded: Record<string, SaveState> = {};
+      const seededDbIds: Record<string, number> = {};
+      for (const candidate of data.candidates) {
+        if (candidate._already_saved) seeded[candidate.id] = "saved";
+        if (candidate._candidate_id)
+          seededDbIds[candidate.id] = candidate._candidate_id;
+      }
+      setSaveStates(seeded);
+      setCandidateDbIds((prev) => ({ ...prev, ...seededDbIds }));
+      setStage("fetched");
+      setVisibleCount(DISPLAY_PAGE_SIZE);
+      setEvidenceExpanded(
+        Object.fromEntries(data.candidates.map((c) => [c.id, true])),
+      );
+      void Promise.allSettled(
+        data.candidates
+          .filter((c) => !seededDbIds[c.id])
+          .map((c) => handleDiscoveryEvidence(c)),
+      );
+      void autoSaveAllCandidates(data.candidates, Number(selectedId));
+    } catch (error: any) {
+      notify(error?.message || "Failed to fetch candidates", { type: "error" });
     } finally {
       setFetchLoading(false);
     }
@@ -4430,11 +4508,35 @@ export const SourceCandidatesPage = ({
         </div>
       )}
 
+      {/* Phase 2: simplified mode — primary "Source candidates" CTA shown
+          when the role is selected and no fetch has happened yet. */}
+      {simplified && selectedId && stage === "idle" && (
+        <div className="flex flex-col gap-2">
+          <Button
+            size="lg"
+            onClick={handleSourceCandidates}
+            disabled={previewLoading || fetchLoading}
+            className="self-start"
+          >
+            {previewLoading
+              ? "Searching…"
+              : fetchLoading
+                ? "Fetching candidates…"
+                : "Source candidates"}
+          </Button>
+          <p className="text-xs text-muted-foreground">
+            Finds people matching this role and saves them to your pipeline (up
+            to 25 shown, all saved).
+          </p>
+        </div>
+      )}
+
       {/* Real calibration loop: Control Panel -- every criterion learned
           from calibration feedback for this role, with a live "N rejected"
           count and a Relax/Reapply toggle (Noon's Control Panel pattern).
           Loaded on demand since computing it spends a few cheap Coresignal
-          preview calls -- not shown until the recruiter asks for it. */}
+          preview calls -- not shown until the recruiter asks for it.
+          Phase 2: in simplified mode, entire control panel is secondary. */}
       {selectedId && (
         <div
           ref={controlPanelRef}
@@ -4616,34 +4718,140 @@ export const SourceCandidatesPage = ({
         </div>
       )}
 
-      <div className="flex flex-col gap-2">
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            onClick={handlePreview}
-            disabled={previewLoading || !selectedId}
-          >
-            {previewLoading ? "Searching..." : "Preview matches"}
-          </Button>
-          {selectedId && candidates.length === 0 && (
+      {simplified ? (
+        <details className="group">
+          <summary className="cursor-pointer text-sm text-muted-foreground hover:text-foreground list-none flex items-center gap-1.5 select-none py-1">
+            <span className="transition-transform group-open:rotate-90 inline-block text-base leading-none">
+              ›
+            </span>
+            More ways to search
+          </summary>
+          <div className="mt-3 flex flex-col gap-4 pl-4 border-l border-border">
+            <div className="flex flex-col gap-2">
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                Paid discovery search
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  onClick={handlePreview}
+                  disabled={previewLoading || !selectedId}
+                  variant="outline"
+                  size="sm"
+                >
+                  {previewLoading ? "Searching..." : "Preview match count"}
+                </Button>
+                {selectedId && candidates.length === 0 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleRestoreLastSearch}
+                    disabled={
+                      restoreLoading ||
+                      previewLoading ||
+                      fetchLoading ||
+                      !selectedId
+                    }
+                  >
+                    {restoreLoading ? "Restoring..." : "Restore last search"}
+                  </Button>
+                )}
+              </div>
+              {selectedId && candidates.length === 0 && (
+                <p className="text-xs text-muted-foreground max-w-xl">
+                  Restore last search reloads candidates from this session
+                  without a new discovery call.
+                </p>
+              )}
+            </div>
+            <div className="flex flex-col gap-2">
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                Free &amp; low-cost sources
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleSearchFreePortals}
+                  disabled={freePortalLoading}
+                >
+                  {freePortalLoading
+                    ? "Searching..."
+                    : freePortalSearched
+                      ? "Search again (GitHub, Stack Exchange, Exa)"
+                      : "Search GitHub, Stack Exchange, Exa"}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleSearchXray}
+                  disabled={xrayLoading}
+                >
+                  {xrayLoading ? "Searching..." : "Run X-ray search (LinkedIn)"}
+                </Button>
+              </div>
+              {freePortalNotes.length > 0 && (
+                <ul className="text-muted-foreground text-xs list-disc pl-4">
+                  {freePortalNotes.map((note, i) => (
+                    <li key={i}>{note}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            {roleBriefDetail && (
+              <div className="flex flex-col gap-1.5">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  X-ray links (manual)
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {buildXrayQueries(roleBriefDetail).map((q) => (
+                    <a
+                      key={q.url}
+                      href={q.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-xs underline text-muted-foreground hover:text-foreground"
+                    >
+                      {q.label}
+                    </a>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </details>
+      ) : (
+        <div className="flex flex-col gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Button
-              variant="outline"
-              onClick={handleRestoreLastSearch}
-              disabled={
-                restoreLoading || previewLoading || fetchLoading || !selectedId
-              }
+              onClick={handlePreview}
+              disabled={previewLoading || !selectedId}
             >
-              {restoreLoading ? "Restoring..." : "Restore last search"}
+              {previewLoading ? "Searching..." : "Preview matches"}
             </Button>
+            {selectedId && candidates.length === 0 && (
+              <Button
+                variant="outline"
+                onClick={handleRestoreLastSearch}
+                disabled={
+                  restoreLoading ||
+                  previewLoading ||
+                  fetchLoading ||
+                  !selectedId
+                }
+              >
+                {restoreLoading ? "Restoring..." : "Restore last search"}
+              </Button>
+            )}
+          </div>
+          {selectedId && candidates.length === 0 && (
+            <p className="text-xs text-muted-foreground max-w-xl">
+              Lost fetched candidates after a refresh? Restore last search
+              reloads them from this browser session or from saved search ids
+              (one profile lookup each, not a new discovery search).
+            </p>
           )}
         </div>
-        {selectedId && candidates.length === 0 && (
-          <p className="text-xs text-muted-foreground max-w-xl">
-            Lost fetched candidates after a refresh? Restore last search reloads
-            them from this browser session or from saved search ids (one profile
-            lookup each, not a new discovery search).
-          </p>
-        )}
-      </div>
+      )}
 
       {/* Free-portal sourcing (2026-07-19): GitHub/Stack Overflow via their
           own free official APIs -- a separate path from Coresignal, tried
@@ -4659,8 +4867,10 @@ export const SourceCandidatesPage = ({
           against unrelated numeric-computing kernels). Kept in the edge
           function, unused by default -- worth turning back on per-role for
           ML-heavy searches, or as an on-demand lookup when a candidate's
-          own resume already links to a Kaggle/HF profile (not built yet). */}
-      {selectedId && (
+          own resume already links to a Kaggle/HF profile (not built yet).
+          Phase 2: in simplified mode, shown only inside the "More ways to
+          search" accordion that wraps all secondary search options. */}
+      {selectedId && !simplified && (
         <div className="flex flex-col gap-3 border rounded-lg p-4">
           <div className="flex items-center justify-between">
             <div>

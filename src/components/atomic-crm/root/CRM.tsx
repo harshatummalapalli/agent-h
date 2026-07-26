@@ -6,7 +6,7 @@ import type {
 } from "ra-core";
 import { CustomRoutes, localStorageStore, Resource } from "ra-core";
 import { useEffect, useMemo } from "react";
-import { Route } from "react-router";
+import { Navigate, Route } from "react-router";
 import { QueryClient } from "@tanstack/react-query";
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
 import { createAsyncStoragePersister } from "@tanstack/query-async-storage-persister";
@@ -29,6 +29,8 @@ import { ImportPage } from "../misc/ImportPage";
 import { ChangelogPage } from "../misc/ChangelogPage";
 import { JdIntakePage } from "../jd-intake/JdIntakePage";
 import { RoleWorkspacePage } from "../roles/RoleWorkspacePage";
+import { AnalyticsPage } from "../analytics/AnalyticsPage";
+import { TemplatesPage } from "../templates/TemplatesPage";
 import { CandidateApplicationPage } from "../apply/CandidateApplicationPage";
 import {
   getAuthProvider as defaultAuthProviderBuilder,
@@ -276,6 +278,9 @@ const DesktopAdmin = (
         <Route path={JdIntakePage.path} element={<JdIntakePage />} />
         <Route path={RoleWorkspacePage.path} element={<RoleWorkspacePage />} />
         <Route path={CanvasPage.path} element={<CanvasPage />} />
+        <Route path={AnalyticsPage.path} element={<AnalyticsPage />} />
+        <Route path={TemplatesPage.path} element={<TemplatesPage />} />
+        <Route path="/deals" element={<RedirectToHome />} />
       </CustomRoutes>
       <Resource name="deals" {...deals} />
       <Resource name="contacts" {...contacts} />
@@ -372,6 +377,9 @@ const MobileAdmin = (
             element={<RoleWorkspacePage />}
           />
           <Route path={CanvasPage.path} element={<CanvasPage />} />
+          <Route path={AnalyticsPage.path} element={<AnalyticsPage />} />
+          <Route path={TemplatesPage.path} element={<TemplatesPage />} />
+          <Route path="/deals" element={<RedirectToHome />} />
         </CustomRoutes>
         <Resource name="deals" {...deals} />
         <Resource name="candidates" {...candidates} />
@@ -389,3 +397,7 @@ const MobileAdmin = (
     </PersistQueryClientProvider>
   );
 };
+
+// Phase 2: demote /deals — redirect to Home so the Kanban is not the primary
+// entry point. Roles list in the sidebar is now primary navigation.
+const RedirectToHome = () => <Navigate to="/" replace />;

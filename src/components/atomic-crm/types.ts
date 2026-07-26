@@ -158,6 +158,12 @@ export type Deal = {
   role_brief_last_scroll_token?: string | null;
   role_brief_last_scroll_query?: string | null;
   role_brief_last_scroll_updated_at?: string | null;
+  // Phase 2: Coordinator tab settings persisted to the deal row.
+  coordinator_settings?: {
+    knowledge_base?: string;
+    calendar_link?: string;
+    reply_mode?: "draft" | "auto";
+  } | null;
 } & Pick<RaRecord, "id">;
 
 // See docs/adr/ADR-617f-phase-b-role-conversation-turns.md
@@ -246,6 +252,12 @@ export type DealCandidate = {
   contacted_at?: string | null;
   responded_at?: string | null;
   reply_text?: string | null;
+  // Phase 4 Unipile outreach tracking (schema 34).
+  outreach_channel?: "email" | "linkedin_connection" | "linkedin_inmail" | null;
+  outreach_message_body?: string | null;
+  outreach_approved_at?: string | null;
+  outreach_sent_at?: string | null;
+  linkedin_provider_id?: string | null;
 } & Pick<RaRecord, "id">;
 
 export type Task = {

@@ -152,9 +152,8 @@ function RailBottom() {
       <RailIcon
         to="/analytics"
         icon={<BarChart2 className="h-4 w-4" />}
-        label="Analytics (coming soon)"
-        active={false}
-        disabled
+        label="Analytics"
+        active={location.pathname.startsWith("/analytics")}
       />
       <RailIcon
         to="/preferences"
@@ -215,11 +214,18 @@ function RailIcon({
 
 function ProfileMenuItem() {
   return (
-    <DropdownMenuItem asChild>
-      <Link to="/profile" className="flex items-center gap-2">
-        Profile
-      </Link>
-    </DropdownMenuItem>
+    <>
+      <DropdownMenuItem asChild>
+        <Link to="/profile" className="flex items-center gap-2">
+          Profile
+        </Link>
+      </DropdownMenuItem>
+      <DropdownMenuItem asChild>
+        <Link to="/templates" className="flex items-center gap-2">
+          Templates
+        </Link>
+      </DropdownMenuItem>
+    </>
   );
 }
 

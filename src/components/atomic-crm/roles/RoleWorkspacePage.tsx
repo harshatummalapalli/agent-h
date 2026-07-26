@@ -7,7 +7,6 @@ import {
   BookOpen,
   ChevronLeft,
   ChevronRight,
-  Info,
   Settings,
   Sparkles,
   Upload,
@@ -50,7 +49,9 @@ import type {
   CalibrationCandidate,
 } from "../providers/supabase/dataProvider.ts";
 import { useConfigurationContext } from "../root/ConfigurationContext";
+import { AgentHShell } from "../shell/AgentHShell";
 import { RoleConversationTranscript } from "../shell/RoleConversationTranscript";
+import { useRoleShellContext } from "../shell/useShellContext";
 import {
   approveTier3Proposal,
   dispatchCalibrationRerank,
@@ -94,7 +95,6 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
       sessionStorage.getItem("linkedin_banner_dismissed") === "1",
   );
   const [addCandidatesOpen, setAddCandidatesOpen] = useState(false);
-  const [understandOpen, setUnderstandOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [memoryPanelOpen, setMemoryPanelOpen] = useState(true);
   // Track the latest calibration batch so we can offer "Add N confident candidates"
@@ -144,6 +144,13 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
     }),
   );
 
+  const shellContext = useRoleShellContext({
+    deal,
+    dealStages,
+    pipelineCount,
+    isPending: !deal || pipelinePending,
+  });
+
   const orchestratorDeps: RoleAgentOrchestratorDeps = {
     dealId,
     deal,
@@ -159,14 +166,6 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
   };
 
   const runFreeTextCommand = async (commandText: string) => {
-    const sourcingCommands = ["calibration_yes", "calibration_no"];
-    if (
-      deal?.sourcing_paused &&
-      (sourcingCommands.includes(commandText) || commandText.length < 200)
-    ) {
-      toast.info("Sourcing is paused — resume it before running new searches.");
-      return;
-    }
     setCommandBusy(true);
     try {
       if (pendingCalibrationQuestion) {
@@ -193,27 +192,7 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
     }
   };
 
-  const handleToggleSourcingPause = async () => {
-    if (!deal) return;
-    const next = !deal.sourcing_paused;
-    try {
-      await dataProvider.update("deals", {
-        id: dealId,
-        data: { sourcing_paused: next },
-        previousData: deal,
-      });
-      queryClient.invalidateQueries({ queryKey: ["deals", dealId] });
-      toast.success(next ? "Sourcing paused" : "Sourcing resumed");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Couldn't update sourcing status");
-    }
-  };
-
   const handleContinueSearch = async () => {
-    if (deal?.sourcing_paused) {
-      toast.info("Sourcing is paused for this role — resume it to continue.");
-      return;
-    }
     setCommandBusy(true);
     try {
       // If cache exists, get next batch; otherwise start fresh sourcing
@@ -362,9 +341,16 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
     !!deal?.role_brief_last_scroll_query || lastBatch !== null;
 
   return (
-    <div
-      className="flex flex-col"
-      style={{ minHeight: "calc(100dvh - 8rem)" }}
+    <AgentHShell
+      context={shellContext}
+      commandBar={{
+        placeholder: "Tell Agent H what you need for this role",
+        hint: "Try: \u201cfind more candidates like these\u201d or \u201crelax the Python requirement\u201d.",
+        slashActions: [
+          { cmd: "/relax", label: "Relax a criterion on this role" },
+        ],
+        onSubmit: runFreeTextCommand,
+      }}
     >
       {/* 3-pane: memory panel (desktop) + main content */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
@@ -378,6 +364,7 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
               onRefine={runFreeTextCommand}
               commandBusy={commandBusy}
               onClose={() => setMemoryPanelOpen(false)}
+              lastBatch={lastBatch}
             />
           </aside>
         ) : (
@@ -407,9 +394,7 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
               onAddCandidates={() => setAddCandidatesOpen(true)}
               onContinueSearch={handleContinueSearch}
               onAddNConfident={() => handleAddNConfident(confidentCandidates)}
-              onUnderstandSourcing={() => setUnderstandOpen(true)}
               onSettings={() => setSettingsOpen(true)}
-              onToggleSourcingPause={handleToggleSourcingPause}
             />
 
             {showLinkedInBanner && (
@@ -487,8 +472,8 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
                 {hasSearchRun ? (
                   <>
                     <p className="text-sm text-muted-foreground max-w-sm">
-                      Use the <strong>Refine</strong> panel on the left to
-                      adjust criteria, or add candidates manually with the{" "}
+                      Use the command bar below to refine your search, or add
+                      candidates manually with the{" "}
                       <strong>Add candidates</strong> button above.
                     </p>
                     {hasCacheToken && (
@@ -505,7 +490,7 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
                 ) : (
                   <>
                     <p className="text-sm text-muted-foreground max-w-sm">
-                      No search run yet. Start sourcing below, or add
+                      No search run yet. Ask Agent H to start sourcing, or add
                       candidates manually.
                     </p>
                     <div className="flex gap-2 flex-wrap justify-center">
@@ -590,15 +575,6 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
       />
 
       {/* Understand sourcing dialog */}
-      {understandOpen && (
-        <UnderstandSourcingDialog
-          dealId={dealId}
-          deal={deal}
-          open={understandOpen}
-          onOpenChange={setUnderstandOpen}
-          lastBatch={lastBatch}
-        />
-      )}
 
       {/* Role settings dialog */}
       {settingsOpen && (
@@ -608,7 +584,7 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
           onOpenChange={setSettingsOpen}
         />
       )}
-    </div>
+    </AgentHShell>
   );
 };
 
@@ -628,9 +604,7 @@ type RoleWorkspaceHeaderProps = {
   onAddCandidates: () => void;
   onContinueSearch: () => void;
   onAddNConfident: () => void;
-  onUnderstandSourcing: () => void;
   onSettings: () => void;
-  onToggleSourcingPause: () => void;
 };
 
 const RoleWorkspaceHeader = ({
@@ -643,9 +617,7 @@ const RoleWorkspaceHeader = ({
   onAddCandidates,
   onContinueSearch,
   onAddNConfident,
-  onUnderstandSourcing,
   onSettings,
-  onToggleSourcingPause,
 }: RoleWorkspaceHeaderProps) => {
   const [linkCopied, setLinkCopied] = useState(false);
   if (!deal) return null;
@@ -672,11 +644,6 @@ const RoleWorkspaceHeader = ({
           <Badge variant="outline" className="text-xs">
             {findDealLabel(dealStages, deal.stage)}
           </Badge>
-          {deal.sourcing_paused && (
-            <Badge variant="secondary" className="text-xs text-amber-700 bg-amber-100 border-amber-200">
-              Sourcing paused
-            </Badge>
-          )}
           {deal.expected_closing_date &&
             isValid(new Date(deal.expected_closing_date)) && (
               <span>
@@ -725,28 +692,7 @@ const RoleWorkspaceHeader = ({
           Add candidates
         </Button>
 
-        {/* Pause / Resume sourcing */}
-        <Button
-          size="sm"
-          variant={deal.sourcing_paused ? "destructive" : "ghost"}
-          onClick={onToggleSourcingPause}
-          className="text-xs px-2"
-          title={deal.sourcing_paused ? "Resume sourcing" : "Pause sourcing"}
-        >
-          {deal.sourcing_paused ? "Resume sourcing" : "Pause sourcing"}
-        </Button>
-
-        {/* Understand sourcing */}
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={onUnderstandSourcing}
-          className="text-xs px-2"
-          title="Understand sourcing"
-        >
-          <Info className="h-3.5 w-3.5" />
-          <span className="hidden sm:inline ml-1">Sourcing</span>
-        </Button>
+        {/* Sourcing details are in the Role Memory sidebar */}
 
         {/* Copy application link */}
         {deal.public_application_token && (
@@ -1493,11 +1439,6 @@ const AutopilotSettings = () => (
       Candidates remain in your review queue. Agent H drafts outreach for your
       approval — nothing sends automatically.
     </p>
-    <p className="text-xs text-muted-foreground">
-      When Autopilot is enabled, it will respect the{" "}
-      <strong>Pause sourcing</strong> toggle — paused roles will be skipped
-      during automatic sourcing passes.
-    </p>
   </div>
 );
 
@@ -1512,6 +1453,7 @@ const RoleMemoryPanel = ({
   onRefine,
   commandBusy,
   onClose,
+  lastBatch,
 }: {
   dealId: string;
   deal: Deal | undefined;
@@ -1519,6 +1461,7 @@ const RoleMemoryPanel = ({
   onRefine: (text: string) => void;
   commandBusy: boolean;
   onClose: () => void;
+  lastBatch: CalibrationBatch | null;
 }) => {
   const dataProvider = useDataProvider<CrmDataProvider>();
   const queryClient = useQueryClient();
@@ -1637,7 +1580,7 @@ const RoleMemoryPanel = ({
               </p>
               <div className="flex flex-wrap gap-1">
                 {(dealRecord!.must_have_keywords as string[]).map((k) => (
-                  <Badge key={k} variant="outline" className="text-xs py-0">
+                  <Badge key={k} variant="outline" className="text-xs py-0 break-words max-w-full">
                     {k}
                   </Badge>
                 ))}
@@ -1658,12 +1601,40 @@ const RoleMemoryPanel = ({
                 {negativeFeedback.map((f, i) => (
                   <li
                     key={i}
-                    className="text-xs text-muted-foreground leading-snug"
+                    className="text-xs text-muted-foreground leading-snug break-words"
                   >
                     • {(f.rejection_reason ?? f.reason ?? "—") as string}
                   </li>
                 ))}
               </ul>
+            </div>
+          </>
+        )}
+
+        {/* Search pool stats */}
+        {lastBatch && (
+          <>
+            <Separator />
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
+                Search pool
+              </p>
+              <dl className="space-y-1 text-xs">
+                <div className="flex justify-between">
+                  <dt className="text-muted-foreground">Pool size</dt>
+                  <dd className="font-medium tabular-nums">{lastBatch.pool_size}</dd>
+                </div>
+                <div className="flex justify-between">
+                  <dt className="text-muted-foreground">Reviewed</dt>
+                  <dd className="font-medium tabular-nums">{lastBatch.cursor}</dd>
+                </div>
+                <div className="flex justify-between">
+                  <dt className="text-muted-foreground">Remaining</dt>
+                  <dd className={`font-medium tabular-nums ${lastBatch.pool_exhausted ? "text-muted-foreground" : "text-green-600"}`}>
+                    {lastBatch.pool_exhausted ? "Exhausted" : Math.max(0, lastBatch.pool_size - lastBatch.cursor)}
+                  </dd>
+                </div>
+              </dl>
             </div>
           </>
         )}

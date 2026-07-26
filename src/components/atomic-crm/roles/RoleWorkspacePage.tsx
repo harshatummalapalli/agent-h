@@ -4,6 +4,7 @@
 // All T1-T6 behaviour preserved.
 import { isValid } from "date-fns";
 import {
+  Archive,
   BookOpen,
   ChevronLeft,
   ChevronRight,
@@ -50,7 +51,9 @@ import type {
   CalibrationCandidate,
 } from "../providers/supabase/dataProvider.ts";
 import { useConfigurationContext } from "../root/ConfigurationContext";
+import { AgentHShell } from "../shell/AgentHShell";
 import { RoleConversationTranscript } from "../shell/RoleConversationTranscript";
+import { useRoleShellContext } from "../shell/useShellContext";
 import {
   approveTier3Proposal,
   dispatchCalibrationRerank,
@@ -96,6 +99,7 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
   const [addCandidatesOpen, setAddCandidatesOpen] = useState(false);
   const [understandOpen, setUnderstandOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
   const [memoryPanelOpen, setMemoryPanelOpen] = useState(true);
   // Track the latest calibration batch so we can offer "Add N confident candidates"
   const [lastBatch, setLastBatch] = useState<CalibrationBatch | null>(null);
@@ -144,6 +148,13 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
     }),
   );
 
+  const shellContext = useRoleShellContext({
+    deal,
+    dealStages,
+    pipelineCount,
+    isPending: !deal || pipelinePending,
+  });
+
   const orchestratorDeps: RoleAgentOrchestratorDeps = {
     dealId,
     deal,
@@ -159,14 +170,6 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
   };
 
   const runFreeTextCommand = async (commandText: string) => {
-    const sourcingCommands = ["calibration_yes", "calibration_no"];
-    if (
-      deal?.sourcing_paused &&
-      (sourcingCommands.includes(commandText) || commandText.length < 200)
-    ) {
-      toast.info("Sourcing is paused — resume it before running new searches.");
-      return;
-    }
     setCommandBusy(true);
     try {
       if (pendingCalibrationQuestion) {
@@ -193,27 +196,7 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
     }
   };
 
-  const handleToggleSourcingPause = async () => {
-    if (!deal) return;
-    const next = !deal.sourcing_paused;
-    try {
-      await dataProvider.update("deals", {
-        id: dealId,
-        data: { sourcing_paused: next },
-        previousData: deal,
-      });
-      queryClient.invalidateQueries({ queryKey: ["deals", dealId] });
-      toast.success(next ? "Sourcing paused" : "Sourcing resumed");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Couldn't update sourcing status");
-    }
-  };
-
   const handleContinueSearch = async () => {
-    if (deal?.sourcing_paused) {
-      toast.info("Sourcing is paused for this role — resume it to continue.");
-      return;
-    }
     setCommandBusy(true);
     try {
       // If cache exists, get next batch; otherwise start fresh sourcing
@@ -345,6 +328,49 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
     }
   };
 
+  const handleArchiveRole = async () => {
+    try {
+      // 1. Set archived_at on the deal
+      await dataProvider.update("deals", {
+        id: dealId,
+        data: { archived_at: new Date().toISOString() },
+        previousData: deal ?? { id: dealId },
+      });
+      // 2. Remove all deal_candidates links for this role
+      //    (candidates rows are never deleted — GDPR: keep on platform)
+      const { data: links } = await dataProvider.getList("deal_candidates", {
+        filter: { deal_id: dealId },
+        sort: { field: "id", order: "ASC" },
+        pagination: { page: 1, perPage: 1000 },
+      });
+      if (links.length > 0) {
+        await dataProvider.deleteMany("deal_candidates", {
+          ids: links.map((l: { id: string | number }) => l.id),
+        });
+      }
+      // 3. Clear role_discovery_cache for this deal
+      const { data: cacheRows } = await dataProvider.getList(
+        "role_discovery_cache",
+        {
+          filter: { deal_id: dealId },
+          sort: { field: "id", order: "ASC" },
+          pagination: { page: 1, perPage: 100 },
+        },
+      );
+      if (cacheRows.length > 0) {
+        await dataProvider.deleteMany("role_discovery_cache", {
+          ids: cacheRows.map((r: { id: string | number }) => r.id),
+        });
+      }
+      toast.success("Role archived");
+      navigate("/roles");
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Couldn't archive this role",
+      );
+    }
+  };
+
   const defaultTab: WorkspaceTab =
     !pipelinePending && pipelineCount > 0 ? "review" : "sourcing";
 
@@ -362,9 +388,16 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
     !!deal?.role_brief_last_scroll_query || lastBatch !== null;
 
   return (
-    <div
-      className="flex flex-col"
-      style={{ minHeight: "calc(100dvh - 8rem)" }}
+    <AgentHShell
+      context={shellContext}
+      commandBar={{
+        placeholder: "Tell Agent H what you need for this role",
+        hint: "Try: \u201cfind more candidates like these\u201d or \u201crelax the Python requirement\u201d.",
+        slashActions: [
+          { cmd: "/relax", label: "Relax a criterion on this role" },
+        ],
+        onSubmit: runFreeTextCommand,
+      }}
     >
       {/* 3-pane: memory panel (desktop) + main content */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
@@ -409,7 +442,7 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
               onAddNConfident={() => handleAddNConfident(confidentCandidates)}
               onUnderstandSourcing={() => setUnderstandOpen(true)}
               onSettings={() => setSettingsOpen(true)}
-              onToggleSourcingPause={handleToggleSourcingPause}
+              onArchive={() => setArchiveConfirmOpen(true)}
             />
 
             {showLinkedInBanner && (
@@ -487,8 +520,8 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
                 {hasSearchRun ? (
                   <>
                     <p className="text-sm text-muted-foreground max-w-sm">
-                      Use the <strong>Refine</strong> panel on the left to
-                      adjust criteria, or add candidates manually with the{" "}
+                      Use the command bar below to refine your search, or add
+                      candidates manually with the{" "}
                       <strong>Add candidates</strong> button above.
                     </p>
                     {hasCacheToken && (
@@ -505,7 +538,7 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
                 ) : (
                   <>
                     <p className="text-sm text-muted-foreground max-w-sm">
-                      No search run yet. Start sourcing below, or add
+                      No search run yet. Ask Agent H to start sourcing, or add
                       candidates manually.
                     </p>
                     <div className="flex gap-2 flex-wrap justify-center">
@@ -608,7 +641,40 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
           onOpenChange={setSettingsOpen}
         />
       )}
-    </div>
+
+      {/* Archive confirm dialog */}
+      <Dialog open={archiveConfirmOpen} onOpenChange={setArchiveConfirmOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Archive this role?</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            The role and all its sourcing history will be archived. Candidates
+            already on the platform are kept — only the link to this role is
+            removed.
+          </p>
+          <div className="flex justify-end gap-2 mt-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setArchiveConfirmOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() => {
+                setArchiveConfirmOpen(false);
+                void handleArchiveRole();
+              }}
+            >
+              Archive role
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </AgentHShell>
   );
 };
 
@@ -630,7 +696,7 @@ type RoleWorkspaceHeaderProps = {
   onAddNConfident: () => void;
   onUnderstandSourcing: () => void;
   onSettings: () => void;
-  onToggleSourcingPause: () => void;
+  onArchive: () => void;
 };
 
 const RoleWorkspaceHeader = ({
@@ -645,7 +711,7 @@ const RoleWorkspaceHeader = ({
   onAddNConfident,
   onUnderstandSourcing,
   onSettings,
-  onToggleSourcingPause,
+  onArchive,
 }: RoleWorkspaceHeaderProps) => {
   const [linkCopied, setLinkCopied] = useState(false);
   if (!deal) return null;
@@ -672,11 +738,6 @@ const RoleWorkspaceHeader = ({
           <Badge variant="outline" className="text-xs">
             {findDealLabel(dealStages, deal.stage)}
           </Badge>
-          {deal.sourcing_paused && (
-            <Badge variant="secondary" className="text-xs text-amber-700 bg-amber-100 border-amber-200">
-              Sourcing paused
-            </Badge>
-          )}
           {deal.expected_closing_date &&
             isValid(new Date(deal.expected_closing_date)) && (
               <span>
@@ -725,17 +786,6 @@ const RoleWorkspaceHeader = ({
           Add candidates
         </Button>
 
-        {/* Pause / Resume sourcing */}
-        <Button
-          size="sm"
-          variant={deal.sourcing_paused ? "destructive" : "ghost"}
-          onClick={onToggleSourcingPause}
-          className="text-xs px-2"
-          title={deal.sourcing_paused ? "Resume sourcing" : "Pause sourcing"}
-        >
-          {deal.sourcing_paused ? "Resume sourcing" : "Pause sourcing"}
-        </Button>
-
         {/* Understand sourcing */}
         <Button
           size="sm"
@@ -769,6 +819,18 @@ const RoleWorkspaceHeader = ({
           className="px-2"
         >
           <Settings className="h-4 w-4" />
+        </Button>
+
+        {/* Archive role */}
+        <Button
+          variant="ghost"
+          size="sm"
+          aria-label="Archive role"
+          onClick={onArchive}
+          className="px-2 text-muted-foreground hover:text-destructive"
+          title="Archive role"
+        >
+          <Archive className="h-4 w-4" />
         </Button>
 
         <EditButton />
@@ -1492,11 +1554,6 @@ const AutopilotSettings = () => (
     <p className="text-sm text-muted-foreground">
       Candidates remain in your review queue. Agent H drafts outreach for your
       approval — nothing sends automatically.
-    </p>
-    <p className="text-xs text-muted-foreground">
-      When Autopilot is enabled, it will respect the{" "}
-      <strong>Pause sourcing</strong> toggle — paused roles will be skipped
-      during automatic sourcing passes.
     </p>
   </div>
 );

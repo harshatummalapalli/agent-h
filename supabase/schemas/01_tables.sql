@@ -76,7 +76,8 @@ create table public.deals (
     archived_at timestamp with time zone,
     expected_closing_date date,
     sales_id bigint,
-    index smallint
+    index smallint,
+    sourcing_paused boolean not null default false
 );
 
 create table public.deal_notes (

@@ -44,10 +44,10 @@ const SUPABASE_JWT_KEYS = jose.createRemoteJWKSet(
 );
 const CRUSTDATA_API_KEY = Deno.env.get("CRUSTDATA_API_KEY");
 
-const BATCH_SIZE = 5;
+const BATCH_SIZE = 3;
 // Pull Crustdata server-side when bench + cheap pool is below this floor.
-// BATCH_SIZE * 3 = 15 ensures we have enough for a few calibration batches
-// before presenting thinly-sourced results to the recruiter.
+// BATCH_SIZE * 3 = 9 — enough for ~3 calibration rounds before the pool
+// runs thin. Raise to 15 explicitly if sourcing quality proves too variable.
 const CRUSTDATA_POOL_FLOOR = BATCH_SIZE * 3;
 
 // Temporary: Crustdata E2E testing flag.
@@ -124,6 +124,11 @@ type CacheRow = {
   expires_at?: string;
 };
 
+type MustHaveCheck = {
+  label: string;
+  status: "found" | "inferred" | "missing";
+};
+
 type CalibrationCandidate = {
   external_id: string;
   name: string;
@@ -133,7 +138,77 @@ type CalibrationCandidate = {
   linkedin_url: string | null;
   location_name: string | null;
   from_bench: boolean;
+  must_haves: MustHaveCheck[];
 };
+
+// Common keyword aliases for must-have matching (expand as needed).
+const KW_ALIASES: Record<string, string[]> = {
+  ".net": ["c#", "csharp", "dotnet", "asp.net"],
+  "c#": [".net", "dotnet", "asp.net", "csharp"],
+  dotnet: [".net", "c#", "asp.net"],
+  "asp.net": [".net", "c#", "dotnet"],
+  "node.js": ["nodejs", "node js"],
+  nodejs: ["node.js", "node js"],
+  javascript: ["js", "ecmascript"],
+  typescript: ["ts"],
+  python: ["py"],
+  golang: ["go lang"],
+  kubernetes: ["k8s"],
+  postgresql: ["postgres", "pg"],
+};
+
+function checkMustHave(
+  keyword: string,
+  raw: RawCandidate,
+  whyFit: string,
+): "found" | "inferred" | "missing" {
+  const haystack = [
+    ...(raw.skills ?? []),
+    raw.job_title ?? "",
+    raw.job_company_name ?? "",
+    raw.location_name ?? "",
+    whyFit,
+  ]
+    .join(" ")
+    .toLowerCase();
+  const kw = keyword.toLowerCase();
+  if (haystack.includes(kw)) return "found";
+  const aliases = KW_ALIASES[kw] ?? [];
+  if (aliases.some((a) => haystack.includes(a))) return "inferred";
+  return "missing";
+}
+
+function synthWhyFit(
+  raw: RawCandidate,
+  roleBrief: Record<string, unknown>,
+): string {
+  const parts: string[] = [];
+  if (raw.job_title)
+    parts.push(
+      raw.job_title +
+        (raw.job_company_name ? ` at ${raw.job_company_name}` : ""),
+    );
+  if (raw.location_name) parts.push(`based in ${raw.location_name}`);
+  const required = [
+    ...((roleBrief.required_skills as string[] | null) ?? []),
+    ...((roleBrief.must_have_keywords as string[] | null) ?? []),
+  ];
+  const skills = raw.skills ?? [];
+  const overlap = skills.filter((s) =>
+    required.some(
+      (r) =>
+        s.toLowerCase().includes(r.toLowerCase()) ||
+        r.toLowerCase().includes(s.toLowerCase()),
+    ),
+  );
+  if (overlap.length > 0)
+    parts.push(`skills include ${overlap.slice(0, 3).join(", ")}`);
+  else if (skills.length > 0)
+    parts.push(`skills: ${skills.slice(0, 3).join(", ")}`);
+  return (
+    parts.join("; ") || "Profile available — no summary returned by ranking."
+  );
+}
 
 async function fetchCacheRow(
   dealId: number,
@@ -251,22 +326,35 @@ function buildBatch(
       : cache.payload.map((c) => c.id);
   const whyFitById = new Map(cache.ranked.map((r) => [r.id, r.why_fit]));
 
+  const roleBrief = cache.role_brief_snapshot;
+  const mustHaveLabels: string[] = [
+    ...((roleBrief.required_skills as string[] | null) ?? []),
+    ...((roleBrief.must_have_keywords as string[] | null) ?? []),
+  ].slice(0, 5);
+
   const slice = orderedIds.slice(cache.cursor, cache.cursor + batchSize);
   const candidates: CalibrationCandidate[] = slice
     .map((id) => {
       const raw = rawById.get(id);
       if (!raw) return null;
+      const rankedWhyFit = whyFitById.get(id) ?? "";
+      const why_fit = rankedWhyFit.trim() || synthWhyFit(raw, roleBrief);
+      const must_haves: MustHaveCheck[] = mustHaveLabels.map((label) => ({
+        label,
+        status: checkMustHave(label, raw, why_fit),
+      }));
       return {
         external_id: id,
         name: raw.full_name ?? `Candidate ${id}`,
         headline:
           [raw.job_title, raw.job_company_name].filter(Boolean).join(" at ") ||
           null,
-        why_fit: whyFitById.get(id) ?? "",
+        why_fit,
         match_score: null,
         linkedin_url: raw.linkedin_url ?? null,
         location_name: raw.location_name ?? null,
         from_bench: raw._from_bench ?? false,
+        must_haves,
       };
     })
     .filter((c): c is CalibrationCandidate => c !== null);

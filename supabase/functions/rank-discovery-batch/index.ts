@@ -87,15 +87,19 @@ ${roleLines}
 CANDIDATES (${candidates.length} total):
 ${candidateLines}
 
-TASK: Rank the top 25 best-fit candidates for this role. For each, give a 1-2 sentence explanation of why they fit.
+TASK: Rank the top 25 best-fit candidates for this role.
+For each candidate write a one-sentence why_fit that:
+1. Names at least one concrete piece of evidence from the profile (specific skill, job title, company, or location that matches the role).
+2. If must-haves or required skills are listed, explicitly notes whether each is evidenced or absent — e.g. "no evidence of .NET/C# in profile".
+3. Is never empty. If the profile has very little information, write what IS there (e.g. "AI/ML background; location and skills data sparse").
 
-Respond with ONLY a JSON array (no prose before or after), with objects in rank order (best first):
+Respond with ONLY a JSON array (no prose before or after), in rank order (best first):
 [
   { "id": "<candidate id>", "rank": 1, "why_fit": "..." },
   ...
 ]
 
-Include exactly up to 25 entries. Use only ids from the candidate list above.`;
+Include exactly up to 25 entries. Use only ids from the candidate list above. Every why_fit must be non-empty.`;
 }
 
 async function callClaude(prompt: string): Promise<RankedEntry[]> {
@@ -157,8 +161,21 @@ const handler = async (req: Request) => {
     const ranked = await callClaude(prompt);
     // Validate that returned ids actually came from our batch
     const validIds = new Set(batch.map((c) => c.id));
+    const nameById = new Map(
+      batch.map((c) => [
+        c.id,
+        [c.job_title, c.job_company_name].filter(Boolean).join(" at "),
+      ]),
+    );
     const safe = ranked
       .filter((r) => validIds.has(r.id) && typeof r.rank === "number")
+      .map((r) => ({
+        ...r,
+        // Guarantee non-empty why_fit — fall back to headline if Claude returned "".
+        why_fit:
+          r.why_fit?.trim() ||
+          (nameById.get(r.id) ?? "Profile ranked; no explanation returned."),
+      }))
       .slice(0, 25);
     return jsonResponse({ ranked: safe });
   } catch (error) {

@@ -79,14 +79,8 @@ const DealMiscInputs = () => {
         optionValue="value"
         helperText={false}
       />
-      <NumberInput
-        source="amount"
-        defaultValue={0}
-        helperText={false}
-        validate={required()}
-      />
+      <NumberInput source="amount" defaultValue={0} helperText={false} />
       <DateInput
-        validate={required()}
         source="expected_closing_date"
         helperText={false}
         defaultValue={new Date().toISOString().split("T")[0]}

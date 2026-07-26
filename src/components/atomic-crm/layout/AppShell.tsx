@@ -365,13 +365,6 @@ function RolesSidebar({ onClose }: { onClose: () => void }) {
           </ul>
         )}
       </nav>
-
-      {/* Bottom: credits placeholder */}
-      <div className="px-3 py-2 border-t border-sidebar-border">
-        <div className="text-xs text-sidebar-foreground/40 text-center">
-          Credits: —
-        </div>
-      </div>
     </div>
   );
 }

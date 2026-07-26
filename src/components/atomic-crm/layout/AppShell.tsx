@@ -4,7 +4,7 @@
 // Orange active states (--sidebar-primary) on the rail + sidebar;
 // deep-navy primary CTAs throughout the app via --primary.
 // Mobile: icon rail collapses to a hamburger overlay sheet.
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import {
   BarChart2,
@@ -29,10 +29,25 @@ import { useConfigurationContext } from "../root/ConfigurationContext";
 
 type Tab = "all" | "mine";
 
+const isRoleDetailPath = (path: string) => /^\/roles\/[^/]+/.test(path);
+
 export const AppShell = ({ children }: { children: React.ReactNode }) => {
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [mobileOpen, setMobileOpen] = useState(false);
   const location = useLocation();
+  // Default: collapse the roles rail when viewing a specific role workspace
+  // (gives maximum screen real estate to the 3-pane layout).
+  const [sidebarOpen, setSidebarOpen] = useState(
+    () => !isRoleDetailPath(location.pathname),
+  );
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  // Auto-manage sidebar when navigating between role list and role detail.
+  useEffect(() => {
+    if (isRoleDetailPath(location.pathname)) {
+      setSidebarOpen(false);
+    } else {
+      setSidebarOpen(true);
+    }
+  }, [location.pathname]);
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">

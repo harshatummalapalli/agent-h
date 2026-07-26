@@ -164,6 +164,9 @@ export type Deal = {
     calendar_link?: string;
     reply_mode?: "draft" | "auto";
   } | null;
+  // Pause sourcing toggle — blocks start_sourcing / calibration_next_batch.
+  // Autopilot (when added) will also check this before auto-triggering runs.
+  sourcing_paused?: boolean;
 } & Pick<RaRecord, "id">;
 
 // See docs/adr/ADR-617f-phase-b-role-conversation-turns.md

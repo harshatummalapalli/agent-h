@@ -4,10 +4,10 @@
 // All T1-T6 behaviour preserved.
 import { isValid } from "date-fns";
 import {
+  Archive,
   BookOpen,
   ChevronLeft,
   ChevronRight,
-  Info,
   Settings,
   Sparkles,
   Upload,
@@ -96,8 +96,8 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
       sessionStorage.getItem("linkedin_banner_dismissed") === "1",
   );
   const [addCandidatesOpen, setAddCandidatesOpen] = useState(false);
-  const [understandOpen, setUnderstandOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
   const [memoryPanelOpen, setMemoryPanelOpen] = useState(true);
   // Track the latest calibration batch so we can offer "Add N confident candidates"
   const [lastBatch, setLastBatch] = useState<CalibrationBatch | null>(null);
@@ -326,6 +326,49 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
     }
   };
 
+  const handleArchiveRole = async () => {
+    try {
+      // 1. Set archived_at on the deal
+      await dataProvider.update("deals", {
+        id: dealId,
+        data: { archived_at: new Date().toISOString() },
+        previousData: deal ?? { id: dealId },
+      });
+      // 2. Remove all deal_candidates links for this role
+      //    (candidates rows are never deleted — GDPR: keep on platform)
+      const { data: links } = await dataProvider.getList("deal_candidates", {
+        filter: { deal_id: dealId },
+        sort: { field: "id", order: "ASC" },
+        pagination: { page: 1, perPage: 1000 },
+      });
+      if (links.length > 0) {
+        await dataProvider.deleteMany("deal_candidates", {
+          ids: links.map((l: { id: string | number }) => l.id),
+        });
+      }
+      // 3. Clear role_discovery_cache for this deal
+      const { data: cacheRows } = await dataProvider.getList(
+        "role_discovery_cache",
+        {
+          filter: { deal_id: dealId },
+          sort: { field: "id", order: "ASC" },
+          pagination: { page: 1, perPage: 100 },
+        },
+      );
+      if (cacheRows.length > 0) {
+        await dataProvider.deleteMany("role_discovery_cache", {
+          ids: cacheRows.map((r: { id: string | number }) => r.id),
+        });
+      }
+      toast.success("Role archived");
+      navigate("/roles");
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Couldn't archive this role",
+      );
+    }
+  };
+
   const defaultTab: WorkspaceTab =
     !pipelinePending && pipelineCount > 0 ? "review" : "sourcing";
 
@@ -366,6 +409,7 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
               onRefine={runFreeTextCommand}
               commandBusy={commandBusy}
               onClose={() => setMemoryPanelOpen(false)}
+              lastBatch={lastBatch}
             />
           </aside>
         ) : (
@@ -395,8 +439,8 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
               onAddCandidates={() => setAddCandidatesOpen(true)}
               onContinueSearch={handleContinueSearch}
               onAddNConfident={() => handleAddNConfident(confidentCandidates)}
-              onUnderstandSourcing={() => setUnderstandOpen(true)}
               onSettings={() => setSettingsOpen(true)}
+              onArchive={() => setArchiveConfirmOpen(true)}
             />
 
             {showLinkedInBanner && (
@@ -577,15 +621,6 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
       />
 
       {/* Understand sourcing dialog */}
-      {understandOpen && (
-        <UnderstandSourcingDialog
-          dealId={dealId}
-          deal={deal}
-          open={understandOpen}
-          onOpenChange={setUnderstandOpen}
-          lastBatch={lastBatch}
-        />
-      )}
 
       {/* Role settings dialog */}
       {settingsOpen && (
@@ -595,7 +630,40 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
           onOpenChange={setSettingsOpen}
         />
       )}
-    </AgentHShell>
+
+      {/* Archive confirm dialog */}
+      <Dialog open={archiveConfirmOpen} onOpenChange={setArchiveConfirmOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Archive this role?</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            The role and all its sourcing history will be archived. Candidates
+            already on the platform are kept — only the link to this role is
+            removed.
+          </p>
+          <div className="flex justify-end gap-2 mt-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setArchiveConfirmOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() => {
+                setArchiveConfirmOpen(false);
+                void handleArchiveRole();
+              }}
+            >
+              Archive role
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </div>
   );
 };
 
@@ -615,8 +683,8 @@ type RoleWorkspaceHeaderProps = {
   onAddCandidates: () => void;
   onContinueSearch: () => void;
   onAddNConfident: () => void;
-  onUnderstandSourcing: () => void;
   onSettings: () => void;
+  onArchive: () => void;
 };
 
 const RoleWorkspaceHeader = ({
@@ -629,8 +697,8 @@ const RoleWorkspaceHeader = ({
   onAddCandidates,
   onContinueSearch,
   onAddNConfident,
-  onUnderstandSourcing,
   onSettings,
+  onArchive,
 }: RoleWorkspaceHeaderProps) => {
   const [linkCopied, setLinkCopied] = useState(false);
   if (!deal) return null;
@@ -705,17 +773,7 @@ const RoleWorkspaceHeader = ({
           Add candidates
         </Button>
 
-        {/* Understand sourcing */}
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={onUnderstandSourcing}
-          className="text-xs px-2"
-          title="Understand sourcing"
-        >
-          <Info className="h-3.5 w-3.5" />
-          <span className="hidden sm:inline ml-1">Sourcing</span>
-        </Button>
+        {/* Sourcing details are in the Role Memory sidebar */}
 
         {/* Copy application link */}
         {deal.public_application_token && (
@@ -738,6 +796,18 @@ const RoleWorkspaceHeader = ({
           className="px-2"
         >
           <Settings className="h-4 w-4" />
+        </Button>
+
+        {/* Archive role */}
+        <Button
+          variant="ghost"
+          size="sm"
+          aria-label="Archive role"
+          onClick={onArchive}
+          className="px-2 text-muted-foreground hover:text-destructive"
+          title="Archive role"
+        >
+          <Archive className="h-4 w-4" />
         </Button>
 
         <EditButton />
@@ -1476,6 +1546,7 @@ const RoleMemoryPanel = ({
   onRefine,
   commandBusy,
   onClose,
+  lastBatch,
 }: {
   dealId: string;
   deal: Deal | undefined;
@@ -1483,6 +1554,7 @@ const RoleMemoryPanel = ({
   onRefine: (text: string) => void;
   commandBusy: boolean;
   onClose: () => void;
+  lastBatch: CalibrationBatch | null;
 }) => {
   const dataProvider = useDataProvider<CrmDataProvider>();
   const queryClient = useQueryClient();
@@ -1601,7 +1673,7 @@ const RoleMemoryPanel = ({
               </p>
               <div className="flex flex-wrap gap-1">
                 {(dealRecord!.must_have_keywords as string[]).map((k) => (
-                  <Badge key={k} variant="outline" className="text-xs py-0">
+                  <Badge key={k} variant="outline" className="text-xs py-0 break-words max-w-full">
                     {k}
                   </Badge>
                 ))}
@@ -1622,12 +1694,40 @@ const RoleMemoryPanel = ({
                 {negativeFeedback.map((f, i) => (
                   <li
                     key={i}
-                    className="text-xs text-muted-foreground leading-snug"
+                    className="text-xs text-muted-foreground leading-snug break-words"
                   >
                     • {(f.rejection_reason ?? f.reason ?? "—") as string}
                   </li>
                 ))}
               </ul>
+            </div>
+          </>
+        )}
+
+        {/* Search pool stats */}
+        {lastBatch && (
+          <>
+            <Separator />
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
+                Search pool
+              </p>
+              <dl className="space-y-1 text-xs">
+                <div className="flex justify-between">
+                  <dt className="text-muted-foreground">Pool size</dt>
+                  <dd className="font-medium tabular-nums">{lastBatch.pool_size}</dd>
+                </div>
+                <div className="flex justify-between">
+                  <dt className="text-muted-foreground">Reviewed</dt>
+                  <dd className="font-medium tabular-nums">{lastBatch.cursor}</dd>
+                </div>
+                <div className="flex justify-between">
+                  <dt className="text-muted-foreground">Remaining</dt>
+                  <dd className={`font-medium tabular-nums ${lastBatch.pool_exhausted ? "text-muted-foreground" : "text-green-600"}`}>
+                    {lastBatch.pool_exhausted ? "Exhausted" : Math.max(0, lastBatch.pool_size - lastBatch.cursor)}
+                  </dd>
+                </div>
+              </dl>
             </div>
           </>
         )}

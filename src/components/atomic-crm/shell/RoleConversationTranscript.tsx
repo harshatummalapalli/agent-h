@@ -1,5 +1,5 @@
 import { useGetList, useDataProvider, useNotify } from "ra-core";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import type { CrmDataProvider } from "../providers/types";
 import type { RoleConversationTurn } from "../types";
 import {
@@ -160,6 +160,7 @@ export const RoleConversationTranscript = ({
   const [pipelineSaveStates, setPipelineSaveStates] = useState<
     Record<string, "idle" | "saving" | "saved">
   >({});
+  const [showHistory, setShowHistory] = useState(false);
 
   const handleAddToPipeline = async (
     cardMeta: NonNullable<ConversationTurnMetadata["candidate_card"]>,
@@ -187,12 +188,52 @@ export const RoleConversationTranscript = ({
 
   const list = turns ?? [];
 
+  // Pending approval turns must always be visible.
+  const pendingApprovalIds = useMemo(
+    () =>
+      new Set(
+        list
+          .filter((t) => {
+            const m = t.metadata as ConversationTurnMetadata | undefined;
+            if (!isPendingTier3Proposal(m)) return false;
+            return !list.some(
+              (other) =>
+                other.in_reply_to === t.id &&
+                (other.metadata as ConversationTurnMetadata | undefined)
+                  ?.kind === "decision",
+            );
+          })
+          .map((t) => t.id),
+      ),
+    [list],
+  );
+
+  // In collapsed state: show only the last 2 rendered turns + any pending approvals.
+  const visibleIds = useMemo(() => {
+    if (showHistory) return null; // null = show all
+    const rendered = list.filter((t) => {
+      const m = t.metadata as ConversationTurnMetadata | undefined;
+      return m?.kind !== "decision" && m?.kind !== "refinement";
+    });
+    const lastTwo = rendered.slice(-2).map((t) => t.id);
+    return new Set([...lastTwo, ...pendingApprovalIds]);
+  }, [showHistory, list, pendingApprovalIds]);
+
   return (
     <div className="ah-panel p-4 flex flex-col gap-3">
-      <div>
+      <div className="flex items-center justify-between">
         <h3 className="text-sm font-medium tracking-wide uppercase text-muted-foreground">
           Conversation
         </h3>
+        {list.length > 2 && (
+          <button
+            type="button"
+            className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2"
+            onClick={() => setShowHistory((v) => !v)}
+          >
+            {showHistory ? "Collapse" : `Show history (${list.length})`}
+          </button>
+        )}
       </div>
 
       {isPending ? (
@@ -204,11 +245,12 @@ export const RoleConversationTranscript = ({
         </p>
       ) : !list.length ? (
         <p className="text-sm text-muted-foreground">
-          Use the command bar below to start sourcing candidates for this role.
+          Start sourcing to see Agent H's activity here.
         </p>
       ) : (
         <ul className="flex flex-col gap-3 max-h-[60vh] overflow-y-auto">
           {list.map((turn) => {
+            if (visibleIds !== null && !visibleIds.has(turn.id)) return null;
             const metadata = turn.metadata as
               | ConversationTurnMetadata
               | undefined;

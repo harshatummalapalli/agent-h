@@ -71,6 +71,9 @@ export type ConversationTurnMetadata = {
       label: string;
       status: "found" | "inferred" | "missing";
     }>;
+    // Loop B calibration cards: external vendor id (not yet saved to pipeline).
+    calibration_external_id?: string;
+    why_fit?: string;
   };
 };
 

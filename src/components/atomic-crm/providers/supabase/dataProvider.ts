@@ -23,6 +23,76 @@ import { getIsInitialized } from "./authProvider";
 import { getSupabaseClient } from "./supabase";
 import { isCandidateRelevantToDeal } from "./candidateRelevanceFilter";
 
+// Calibration Loop B: in-memory ranked pool per deal. Cleared on new pull.
+// Shape mirrors rank-discovery-batch output + the raw candidate for display.
+type CalibrationCacheEntry = {
+  raw: Array<{
+    id: string;
+    full_name?: string | null;
+    job_title?: string | null;
+    job_company_name?: string | null;
+    location_name?: string | null;
+    skills?: string[] | null;
+    years_experience?: number | null;
+    linkedin_url?: string | null;
+    _source_vendor?: string;
+  }>;
+  ranked: Array<{ id: string; rank: number; why_fit: string }>;
+  cursor: number;
+  negativeReasons: string[];
+  roleBrief: Record<string, unknown>;
+};
+const calibrationCache = new Map<string, CalibrationCacheEntry>();
+
+export type CalibrationCandidate = {
+  external_id: string;
+  name: string;
+  headline: string | null;
+  why_fit: string;
+  match_score: number | null;
+  linkedin_url?: string | null;
+};
+
+export type CalibrationBatch = {
+  candidates: CalibrationCandidate[];
+  pool_size: number;
+  cursor: number;
+  pool_exhausted?: boolean;
+};
+
+function buildCalibrationBatch(cacheKey: string, batchSize: number): CalibrationBatch {
+  const entry = calibrationCache.get(cacheKey);
+  if (!entry) return { candidates: [], pool_size: 0, cursor: 0, pool_exhausted: true };
+
+  const rawById = new Map(entry.raw.map((c) => [c.id, c]));
+  // Use ranked order if available; otherwise fall back to raw order.
+  const orderedIds: string[] = entry.ranked.length > 0
+    ? entry.ranked.map((r) => r.id)
+    : entry.raw.map((c) => c.id);
+  const whyFitById = new Map(entry.ranked.map((r) => [r.id, r.why_fit]));
+
+  const slice = orderedIds.slice(entry.cursor, entry.cursor + batchSize);
+  const candidates: CalibrationCandidate[] = slice
+    .map((id) => {
+      const raw = rawById.get(id);
+      if (!raw) return null;
+      const name = raw.full_name ?? `Candidate ${id}`;
+      const headline = [raw.job_title, raw.job_company_name].filter(Boolean).join(" at ") || null;
+      return {
+        external_id: id,
+        name,
+        headline,
+        why_fit: whyFitById.get(id) ?? "",
+        match_score: null,
+        linkedin_url: raw.linkedin_url ?? null,
+      };
+    })
+    .filter((c): c is CalibrationCandidate => c !== null);
+
+  const pool_exhausted = entry.cursor + batchSize >= orderedIds.length;
+  return { candidates, pool_size: orderedIds.length, cursor: entry.cursor, pool_exhausted };
+}
+
 const getBaseDataProvider = () =>
   supabaseDataProvider({
     instanceUrl: import.meta.env.VITE_SUPABASE_URL,
@@ -1825,6 +1895,110 @@ const getDataProviderWithCustomMethods = () => {
       });
       return data?.ranked ?? [];
     },
+
+    // Calibration Loop B — pull raw candidates, rank server-side, cache the
+    // pool, return top 3-5. Does NOT auto-save to deal_candidates (cache ≠ pipeline).
+    async startCalibrationSourcing(dealId: Identifier) {
+      const cacheKey = String(dealId);
+      const BATCH_SIZE = 5;
+
+      // Fetch deal for role brief + pull candidates in parallel.
+      const [dealResult, freePortalResult, exaResult] = await Promise.all([
+        baseDataProvider.getOne("deals", { id: dealId }).catch(() => null),
+        this.sourceFreePortalCandidates(dealId).catch(() => null),
+        this.sourceExaCandidates(dealId).catch(() => null),
+      ]);
+
+      const raw = [
+        ...(freePortalResult?.candidates ?? []),
+        ...(exaResult?.candidates ?? []),
+      ];
+      // Dedupe by linkedin_url or vendor id.
+      const seen = new Set<string>();
+      const deduped = raw.filter((c) => {
+        const key = c.linkedin_url || c.id;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+
+      const deal = dealResult?.data as Record<string, unknown> | null;
+      const roleBrief: Record<string, unknown> = {
+        name: deal?.name,
+        seniority: deal?.seniority,
+        location: deal?.location,
+        required_skills: deal?.required_skills,
+        must_have_keywords: deal?.must_have_keywords,
+        nice_to_have_keywords: deal?.nice_to_have_keywords,
+        years_experience_min: deal?.years_experience_min,
+        years_experience_max: deal?.years_experience_max,
+      };
+
+      // Rank via rank-discovery-batch (cap 100, non-fatal if empty).
+      const ranked = deduped.length > 0
+        ? await this.rankDiscoveryBatch(
+            deduped.slice(0, 100).map((c) => ({
+              id: c.id,
+              full_name: c.full_name,
+              job_title: c.job_title,
+              job_company_name: c.job_company_name,
+              location_name: c.location_name,
+              skills: c.skills,
+            })),
+            roleBrief,
+          ).catch(() => [] as Array<{ id: string; rank: number; why_fit: string }>)
+        : [];
+
+      calibrationCache.set(cacheKey, {
+        raw: deduped,
+        ranked,
+        cursor: 0,
+        negativeReasons: [],
+        roleBrief,
+      });
+
+      return buildCalibrationBatch(cacheKey, BATCH_SIZE);
+    },
+
+    // Return the next 3-5 candidates from the cached ranked pool.
+    async calibrationNextBatch(dealId: Identifier) {
+      const cacheKey = String(dealId);
+      const BATCH_SIZE = 5;
+      const entry = calibrationCache.get(cacheKey);
+      if (!entry) {
+        return { candidates: [], pool_size: 0, cursor: 0, pool_exhausted: true };
+      }
+      entry.cursor += BATCH_SIZE;
+      return buildCalibrationBatch(cacheKey, BATCH_SIZE);
+    },
+
+    // Re-rank the cached pool based on a negative reason, reset cursor.
+    async calibrationRerank(dealId: Identifier, negativeReason: string) {
+      const cacheKey = String(dealId);
+      const BATCH_SIZE = 5;
+      const entry = calibrationCache.get(cacheKey);
+      if (!entry || entry.raw.length === 0) {
+        return { candidates: [], pool_size: 0, cursor: 0, pool_exhausted: true };
+      }
+      entry.negativeReasons.push(negativeReason);
+      const avoid = entry.negativeReasons.join("; ");
+      const enrichedBrief = { ...entry.roleBrief, avoid_signals: avoid };
+      const reranked = await this.rankDiscoveryBatch(
+        entry.raw.slice(0, 100).map((c) => ({
+          id: c.id,
+          full_name: c.full_name,
+          job_title: c.job_title,
+          job_company_name: c.job_company_name,
+          location_name: c.location_name,
+          skills: c.skills,
+        })),
+        enrichedBrief,
+      ).catch(() => entry.ranked);
+      entry.ranked = reranked;
+      entry.cursor = 0;
+      return buildCalibrationBatch(cacheKey, BATCH_SIZE);
+    },
+
     async getUnipileLinkedInAccount() {
       const { data, error } = await getSupabaseClient().functions.invoke(
         "get-unipile-linkedin-account",

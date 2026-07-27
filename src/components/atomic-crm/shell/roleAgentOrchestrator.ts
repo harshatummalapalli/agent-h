@@ -72,6 +72,7 @@ async function appendAgentTurn(
 async function executeReversibleOrRead(
   deps: RoleAgentOrchestratorDeps,
   parsed: ParsedCommand,
+  commandText?: string,
 ): Promise<{ summary: string; undo?: ConversationTurnMetadata["undo"] }> {
   if (parsed.action === "create_role") {
     deps.navigate("/");
@@ -212,6 +213,23 @@ async function executeReversibleOrRead(
         params: { criterion_id: parsed.criterion_id },
       },
     };
+  }
+
+  if (parsed.action === "refine_search_intent") {
+    const dealId =
+      parsed.deal_id ??
+      (Number.isFinite(Number(deps.dealId)) ? Number(deps.dealId) : null);
+    if (!dealId) {
+      return {
+        summary:
+          "I couldn't determine which role to update. Please open a specific role first.",
+      };
+    }
+    const text = commandText ?? parsed.explanation;
+    await deps.dataProvider.refineSearchIntent(dealId, text);
+    deps.queryClient.invalidateQueries({ queryKey: ["deals"] });
+    deps.invalidateTranscript();
+    return { summary: parsed.explanation || "Search criteria updated." };
   }
 
   if (parsed.action === "unknown") {
@@ -712,7 +730,7 @@ export async function dispatchRoleAgentCommand(
     },
   });
 
-  const { summary, undo } = await executeReversibleOrRead(deps, parsed);
+  const { summary, undo } = await executeReversibleOrRead(deps, parsed, commandText);
 
   await appendAgentTurn(
     deps,

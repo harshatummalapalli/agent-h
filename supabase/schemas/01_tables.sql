@@ -77,7 +77,8 @@ create table public.deals (
     expected_closing_date date,
     sales_id bigint,
     index smallint,
-    sourcing_paused boolean not null default false
+    sourcing_paused boolean not null default false,
+    role_brief_search_intent jsonb
 );
 
 create table public.deal_notes (

@@ -122,6 +122,7 @@ type Filters = Condition | Group;
 const SENIORITY_TERMS: Record<string, string | null> = {
   intern: "Intern",
   entry_level: "Junior",
+  mid_level: null, // no Crustdata seniority term for mid-level — skip the filter
   senior: "Senior",
   staff: "Staff",
   principal: "Principal",
@@ -199,10 +200,24 @@ export function buildCalibrationFilters(
 ): Filters | null {
   const conditions: Array<Condition | Group> = [];
 
-  // Title: use the role name as a contains match.
+  // Title: use the role name as a contains match.  When the title is longer
+  // than two words, also emit a shorter OR alternative (first two meaningful
+  // words) so Crustdata can match even when the full phrase isn't indexed.
   const title = typeof brief.name === "string" ? brief.name.trim() : null;
   if (title) {
-    conditions.push({ field: F.currentTitle, type: "(.)", value: title });
+    const words = title.split(/\s+/).filter((w) => w.length > 0);
+    if (words.length > 2) {
+      const shortTitle = words.slice(0, 2).join(" ");
+      conditions.push({
+        op: "or",
+        conditions: [
+          { field: F.currentTitle, type: "(.)", value: title },
+          { field: F.currentTitle, type: "(.)", value: shortTitle },
+        ],
+      } as Group);
+    } else {
+      conditions.push({ field: F.currentTitle, type: "(.)", value: title });
+    }
   }
 
   // Location — extract the geographic place even when "remote" is mentioned,
@@ -244,25 +259,21 @@ export function buildCalibrationFilters(
     conditions.push({ field: F.yearsOfExperience, type: "=<", value: yoeMax });
   }
 
-  // Required skills: at least one must appear (OR group)
+  // Required skills: only use the FIRST skill as a hard Crustdata filter.
+  // AND-ing multiple skill conditions is the most common cause of zero results
+  // when the API's skill vocabulary doesn't match the brief's exact phrasing.
+  // Remaining skills are used downstream for ranking/must_haves, not here.
   const skills = Array.isArray(brief.required_skills)
-    ? (brief.required_skills as unknown[])
-        .filter(
-          (s): s is string => typeof s === "string" && s.trim().length > 0,
-        )
-        .slice(0, 5)
+    ? (brief.required_skills as unknown[]).filter(
+        (s): s is string => typeof s === "string" && s.trim().length > 0,
+      )
     : [];
   if (skills.length > 0) {
-    const skillConds: Condition[] = skills.map((s) => ({
+    conditions.push({
       field: F.currentSkills,
       type: "(.)",
-      value: s.trim(),
-    }));
-    conditions.push(
-      skillConds.length === 1
-        ? skillConds[0]
-        : { op: "or", conditions: skillConds },
-    );
+      value: skills[0].trim(),
+    });
   }
 
   if (conditions.length === 0) return null;
@@ -381,13 +392,40 @@ function locationMatchesCountry(
   locationName: string | null,
   canonicalCountry: string,
 ): boolean {
-  // Null/empty location is REJECTED when a country constraint is active.
-  // Better to surface fewer candidates than to show the wrong geography.
-  if (!locationName) return false;
+  // Null/empty location is KEPT — the API already applied the country filter.
+  // Discarding profiles whose display string didn't parse would silently empty
+  // the pool even when the API returned valid matches.
+  if (!locationName) return true;
+
   const pattern = COUNTRY_LOCATION_PATTERNS[canonicalCountry];
-  if (pattern) return pattern.test(locationName);
-  // Generic fallback: case-insensitive substring match on country name.
-  return locationName.toLowerCase().includes(canonicalCountry.toLowerCase());
+  if (pattern) {
+    // Explicitly reject profiles whose location_name matches a DIFFERENT country
+    // pattern, then KEEP everything else (ambiguous text, city names, etc.).
+    if (pattern.test(locationName)) return true;
+    // Check whether it clearly belongs to another known country.
+    for (const [country, otherPattern] of Object.entries(
+      COUNTRY_LOCATION_PATTERNS,
+    )) {
+      if (country !== canonicalCountry && otherPattern.test(locationName)) {
+        return false; // clear contradiction — different country
+      }
+    }
+    return true; // ambiguous — keep
+  }
+  // Generic fallback for countries without a COUNTRY_LOCATION_PATTERNS entry:
+  // keep when location contains the country name; reject when it contains a
+  // different known country name instead.
+  if (locationName.toLowerCase().includes(canonicalCountry.toLowerCase())) {
+    return true;
+  }
+  for (const [country, otherPattern] of Object.entries(
+    COUNTRY_LOCATION_PATTERNS,
+  )) {
+    if (country !== canonicalCountry && otherPattern.test(locationName)) {
+      return false;
+    }
+  }
+  return true; // ambiguous — keep
 }
 
 /** Drop profiles whose location_name clearly contradicts the expected country.
@@ -403,26 +441,16 @@ export function filterByCountry(
 
 // ── HTTP search ───────────────────────────────────────────────────────────
 
-/** Search Crustdata for candidates matching a role brief.
- *  Returns an empty array on any error (non-fatal for calibration gate). */
-export async function searchCrustdataForRoleBrief(
-  roleBrief: CalibrationRoleBrief,
+export type CrustdataSearchResult = {
+  candidates: RawCalibrationCandidate[];
+  note?: string;
+};
+
+async function callCrustdataApi(
+  filters: Filters,
   limit: number,
   apiKey: string,
-): Promise<RawCalibrationCandidate[]> {
-  const filters = buildCalibrationFilters(roleBrief);
-  if (!filters) return [];
-
-  // Determine canonical country for post-filter (if location is a known country).
-  const location =
-    typeof roleBrief.location === "string" ? roleBrief.location.trim() : null;
-  const { place } = location
-    ? parseLocationForFilter(location)
-    : { place: null };
-  const canonicalCountry = place
-    ? (COUNTRY_ALIASES[place.toLowerCase().trim()] ?? null)
-    : null;
-
+): Promise<{ profiles: Array<Record<string, unknown>> } | { error: string }> {
   try {
     const response = await fetch(CRUSTDATA_SEARCH_URL, {
       method: "POST",
@@ -438,23 +466,130 @@ export async function searchCrustdataForRoleBrief(
       try {
         bodySnippet = (await response.text()).slice(0, 200);
       } catch {
-        // ignore read error
+        // ignore
       }
       console.error(
         `crustdata HTTP error ${response.status}:`,
         bodySnippet || "(no body)",
       );
-      return [];
+      return { error: `HTTP ${response.status}` };
     }
     const result = (await response.json()) as {
       profiles?: Array<Record<string, unknown>>;
     };
-    const normalized = (result.profiles ?? []).map(normalizeCrustdataProfile);
-    return canonicalCountry
-      ? filterByCountry(normalized, canonicalCountry)
-      : normalized;
+    return { profiles: result.profiles ?? [] };
   } catch (err) {
     console.error("crustdata fetch error:", err);
-    return [];
+    return { error: String(err) };
   }
+}
+
+/** Search Crustdata for candidates matching a role brief.
+ *  Returns `{ candidates, note? }` — note is set when the pool is empty or an
+ *  error occurred so callers can surface a recruiter-safe diagnostic. */
+export async function searchCrustdataForRoleBrief(
+  roleBrief: CalibrationRoleBrief,
+  limit: number,
+  apiKey: string,
+): Promise<CrustdataSearchResult> {
+  if (!apiKey) {
+    return {
+      candidates: [],
+      note: "Search is not configured on this server yet.",
+    };
+  }
+
+  const filters = buildCalibrationFilters(roleBrief);
+  if (!filters) {
+    return {
+      candidates: [],
+      note: "Brief has too little detail to search.",
+    };
+  }
+
+  // Determine canonical country for post-filter (if location is a known country).
+  const location =
+    typeof roleBrief.location === "string" ? roleBrief.location.trim() : null;
+  const { place } = location
+    ? parseLocationForFilter(location)
+    : { place: null };
+  const canonicalCountry = place
+    ? (COUNTRY_ALIASES[place.toLowerCase().trim()] ?? null)
+    : null;
+
+  const applyCountryFilter = (
+    raw: RawCalibrationCandidate[],
+  ): RawCalibrationCandidate[] =>
+    canonicalCountry ? filterByCountry(raw, canonicalCountry) : raw;
+
+  // First attempt: full filters.
+  const firstResult = await callCrustdataApi(filters, limit, apiKey);
+  if ("error" in firstResult) {
+    return {
+      candidates: [],
+      note: "Web search returned an error — results may be limited.",
+    };
+  }
+
+  const firstNormalized = firstResult.profiles.map(normalizeCrustdataProfile);
+  const firstFiltered = applyCountryFilter(firstNormalized);
+
+  if (firstFiltered.length > 0) {
+    console.warn(
+      "crustdata: first pass returned",
+      firstFiltered.length,
+      "candidates",
+    );
+    return { candidates: firstFiltered };
+  }
+
+  // Zero results from first pass — distinguish why before deciding on retry.
+  if (firstNormalized.length > 0 && firstFiltered.length === 0) {
+    // Post-filter wiped everything: API returned profiles but none matched country.
+    // No point retrying with a looser query since the API already applied country.
+    return {
+      candidates: [],
+      note: "Web search returned profiles but none matched the requested location.",
+    };
+  }
+
+  // API returned 0 profiles. Try a broad retry: title + country only (no skills/seniority/yoe).
+  const broadFilters = buildCalibrationFilters({
+    name: roleBrief.name,
+    location: roleBrief.location,
+  });
+  if (!broadFilters) {
+    return {
+      candidates: [],
+      note: "No profiles matched in web search for this brief.",
+    };
+  }
+
+  console.warn(
+    "crustdata: first pass returned 0 — retrying with broader filters (title + location only)",
+  );
+  const retryResult = await callCrustdataApi(broadFilters, limit, apiKey);
+  if ("error" in retryResult) {
+    return {
+      candidates: [],
+      note: "Web search returned an error — results may be limited.",
+    };
+  }
+
+  const retryNormalized = retryResult.profiles.map(normalizeCrustdataProfile);
+  const retryFiltered = applyCountryFilter(retryNormalized);
+
+  if (retryFiltered.length > 0) {
+    console.warn(
+      "crustdata: broad retry returned",
+      retryFiltered.length,
+      "candidates",
+    );
+    return { candidates: retryFiltered };
+  }
+
+  return {
+    candidates: [],
+    note: "No profiles matched in web search for this brief.",
+  };
 }

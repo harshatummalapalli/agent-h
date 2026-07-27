@@ -214,7 +214,33 @@ export function buildCalibrationFilters(
     ? parseLocationForFilter(location)
     : { place: null };
   if (place) {
-    conditions.push(classifyPlace(place));
+    const classified = classifyPlace(place);
+    if (classified.type === "=") {
+      // Already a known country — use as-is.
+      conditions.push(classified);
+    } else {
+      // City filter: Crustdata city fields store only the bare city name.
+      // Take the first comma-segment so "Hyderabad, India" → "Hyderabad".
+      // Optional: if the last comma-segment is a known country, prefer the
+      // broader country exact filter (e.g. "Hyderabad, India" → country India).
+      const segments = place.split(",").map((s) => s.trim());
+      const lastSegment = segments[segments.length - 1].toLowerCase();
+      const countryCanonical =
+        segments.length > 1 ? COUNTRY_ALIASES[lastSegment] : undefined;
+      if (countryCanonical) {
+        conditions.push({
+          field: F.locationCountry,
+          type: "=",
+          value: countryCanonical,
+        });
+      } else {
+        conditions.push({
+          field: classified.field,
+          type: "(.)",
+          value: segments[0],
+        });
+      }
+    }
   }
 
   // Seniority

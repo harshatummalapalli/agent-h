@@ -13,6 +13,7 @@ export type ParsedAgentAction =
   | "show_more_like_this"
   | "relax_and_research"
   | "relax_criterion"
+  | "refine_search_intent"
   | "request_resume"
   | "reject_candidates"
   | "show_candidates"
@@ -91,6 +92,7 @@ const ACTION_TIERS: Record<ParsedAgentAction, ActionTier> = {
   show_more_like_this: "reversible",
   relax_and_research: "reversible",
   relax_criterion: "reversible",
+  refine_search_intent: "reversible",
   reject_candidates: "reversible",
   request_resume: "leaves_platform",
   send_first_outreach: "leaves_platform",

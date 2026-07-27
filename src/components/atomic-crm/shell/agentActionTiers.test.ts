@@ -10,6 +10,7 @@ describe("agentActionTiers", () => {
   it("classifies reversible actions", () => {
     expect(getActionTier("continue_sourcing")).toBe("reversible");
     expect(getActionTier("relax_criterion")).toBe("reversible");
+    expect(getActionTier("refine_search_intent")).toBe("reversible");
   });
 
   it("classifies leaves-platform actions", () => {

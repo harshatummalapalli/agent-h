@@ -247,6 +247,47 @@ async function fetchBenchCandidates(
   return bench;
 }
 
+// ─── Intake: seed SearchIntent from role brief ────────────────────────────────
+// Converts structured role brief fields to a short text description and calls
+// resolve-search-intent. Fire-and-forget — caller wraps in void + .catch.
+async function resolveSearchIntentFromBrief(
+  dealId: number,
+  roleBrief: Record<string, unknown>,
+): Promise<void> {
+  if (!SUPABASE_URL) return;
+  // Build a pseudo-JD text from structured fields for the LLM to parse.
+  const lines: string[] = [];
+  if (roleBrief.name) lines.push(`Role: ${roleBrief.name}`);
+  if (roleBrief.seniority) lines.push(`Seniority: ${roleBrief.seniority}`);
+  if (roleBrief.location) lines.push(`Location: ${roleBrief.location}`);
+  if (Array.isArray(roleBrief.required_skills) && roleBrief.required_skills.length > 0) {
+    lines.push(`Required skills: ${(roleBrief.required_skills as string[]).join(", ")}`);
+  }
+  if (Array.isArray(roleBrief.must_have_keywords) && roleBrief.must_have_keywords.length > 0) {
+    lines.push(`Must-haves: ${(roleBrief.must_have_keywords as string[]).join(", ")}`);
+  }
+  if (roleBrief.years_experience_min != null || roleBrief.years_experience_max != null) {
+    lines.push(
+      `Experience: ${roleBrief.years_experience_min ?? 0}–${roleBrief.years_experience_max ?? "any"} years`,
+    );
+  }
+  if (lines.length === 0) return; // nothing to parse
+
+  await fetch(`${SUPABASE_URL}/functions/v1/resolve-search-intent`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      apikey: Deno.env.get("SUPABASE_ANON_KEY") ?? "",
+      // Use service role so the intent persists even when the user JWT is short-lived.
+      Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""}`,
+    },
+    body: JSON.stringify({
+      deal_id: dealId,
+      jd_text: lines.join("\n"),
+    }),
+  });
+}
+
 // Call rank-discovery-batch (sibling edge function) with the user's JWT.
 async function rankCandidates(
   candidates: RawCandidate[],
@@ -467,6 +508,14 @@ Deno.serve(async (req: Request) => {
         bench_note,
       });
     }
+
+    // Fire-and-forget: resolve SearchIntent from the role brief on first sourcing.
+    // Non-blocking — candidate ranking proceeds regardless of whether this
+    // succeeds. The intent is used for subsequent recalibration (T5) and ranking
+    // context (T4); the first run seeds the baseline understanding.
+    void resolveSearchIntentFromBrief(deal_id, roleBrief).catch((err) => {
+      console.warn("resolve-search-intent (intake) failed (non-fatal):", err);
+    });
 
     const ranked = await rankCandidates(merged, roleBrief, authHeader);
 

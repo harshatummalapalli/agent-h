@@ -50,9 +50,10 @@ const BATCH_SIZE = 3;
 // runs thin. Raise to 15 explicitly if sourcing quality proves too variable.
 const CRUSTDATA_POOL_FLOOR = BATCH_SIZE * 3;
 
-// Temporary: Crustdata E2E testing flag.
-// Set FORCE_CRUSTDATA_ONLY = false to re-enable bench + normal pool gating.
-const FORCE_CRUSTDATA_ONLY = true;
+// E2E override: set FORCE_CRUSTDATA_ONLY=true in Supabase Edge Function secrets
+// to bypass bench + cheap-pool gating and always call Crustdata. Default is off
+// so the Talent Bench and pool-floor gating are active in production.
+const FORCE_CRUSTDATA_ONLY = Deno.env.get("FORCE_CRUSTDATA_ONLY") === "true";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -494,7 +495,12 @@ Deno.serve(async (req: Request) => {
       // non-fatal
     }
 
-    const ranked = await rankCandidates(merged, roleBrief, authHeader, storedSearchIntent);
+    const ranked = await rankCandidates(
+      merged,
+      roleBrief,
+      authHeader,
+      storedSearchIntent,
+    );
 
     const expiresAt = new Date(
       Date.now() + 30 * 24 * 60 * 60 * 1000,
@@ -586,13 +592,15 @@ Deno.serve(async (req: Request) => {
     // re-rank still uses the old intent (consistent with the transition period).
     // Note: role_brief_learned_criteria remains for legacy display; SearchIntent
     // is now the source of truth for filter/rank going forward.
+    // Forward the caller's JWT so resolve-search-intent runs under RLS
+    // (tenant isolation). Service-role is never used for this call.
     if (body.negative_reason && SUPABASE_URL) {
       void fetch(`${SUPABASE_URL}/functions/v1/resolve-search-intent`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           apikey: SUPABASE_ANON_KEY ?? "",
-          Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""}`,
+          Authorization: authHeader,
         },
         body: JSON.stringify({
           deal_id,
@@ -612,14 +620,21 @@ Deno.serve(async (req: Request) => {
     try {
       const dRes = await fetch(
         `${SUPABASE_URL}/rest/v1/deals?id=eq.${deal_id}&select=role_brief_search_intent`,
-        { headers: { apikey: SUPABASE_ANON_KEY ?? "", Authorization: authHeader } },
+        {
+          headers: {
+            apikey: SUPABASE_ANON_KEY ?? "",
+            Authorization: authHeader,
+          },
+        },
       );
       if (dRes.ok) {
         const dRows = await dRes.json();
         const rec = dRows[0]?.role_brief_search_intent;
         if (rec?.current?.conditions) reRankIntent = rec.current;
       }
-    } catch { /* non-fatal */ }
+    } catch {
+      /* non-fatal */
+    }
     const reranked = await rankCandidates(
       cache.payload,
       enrichedBrief,

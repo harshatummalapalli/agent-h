@@ -366,6 +366,22 @@ export const RoleConversationTranscript = ({
                 );
               }
 
+              if (metadata?.kind === "intent_update") {
+                return (
+                  <li
+                    key={turn.id}
+                    className="rounded border border-border/50 bg-muted/40 px-3 py-2 text-xs space-y-0.5"
+                  >
+                    <span className="block font-semibold text-muted-foreground uppercase tracking-wide text-[10px] mb-1">
+                      Sourcing intent updated
+                    </span>
+                    <span className="whitespace-pre-wrap text-foreground/80">
+                      {turn.content}
+                    </span>
+                  </li>
+                );
+              }
+
               return (
                 <li key={turn.id} className="flex flex-col gap-1 text-sm">
                   <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">

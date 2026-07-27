@@ -67,13 +67,13 @@ async function requireAuth(req: Request): Promise<Response | null> {
   }
 }
 
-// ─── Fetch existing search intent from deals ──────────────────────────────────
+// ─── Fetch existing search intent + tenant from deals ────────────────────────
 
-async function fetchExistingIntent(
+async function fetchDealRow(
   dealId: number,
-): Promise<SearchIntentRecord | null> {
+): Promise<{ intent: SearchIntentRecord | null; tenantId: number | null }> {
   const res = await fetch(
-    `${SUPABASE_URL}/rest/v1/deals?id=eq.${dealId}&select=role_brief_search_intent`,
+    `${SUPABASE_URL}/rest/v1/deals?id=eq.${dealId}&select=role_brief_search_intent,tenant_id`,
     {
       headers: {
         apikey: SUPABASE_SERVICE_ROLE_KEY,
@@ -81,9 +81,48 @@ async function fetchExistingIntent(
       },
     },
   );
-  if (!res.ok) return null;
+  if (!res.ok) return { intent: null, tenantId: null };
   const rows = await res.json();
-  return (rows[0]?.role_brief_search_intent as SearchIntentRecord | null) ?? null;
+  return {
+    intent: (rows[0]?.role_brief_search_intent as SearchIntentRecord | null) ?? null,
+    tenantId: (rows[0]?.tenant_id as number | null) ?? null,
+  };
+}
+
+// ─── Write intent-update turn to transcript ───────────────────────────────────
+
+async function writeIntentTurn(
+  dealId: number,
+  tenantId: number | null,
+  next: VersionedSearchIntent,
+): Promise<void> {
+  const required = next.conditions.filter((c) => c.disposition === "require");
+  const excluded = next.conditions.filter((c) => c.disposition === "exclude");
+  const preferred = next.conditions.filter((c) => c.disposition === "prefer");
+  const lines: string[] = ["Sourcing understanding updated (v" + next.version + "):"];
+  if (required.length) lines.push(`Require: ${required.map((c) => c.value).join(", ")}`);
+  if (excluded.length) lines.push(`Exclude: ${excluded.map((c) => c.value).join(", ")}`);
+  if (preferred.length) lines.push(`Prefer: ${preferred.map((c) => c.value).join(", ")}`);
+  if (next.unenforceable_constraints?.length) {
+    lines.push(`Approximate only: ${next.unenforceable_constraints.map((u) => u.description).join(", ")}`);
+  }
+  await fetch(`${SUPABASE_URL}/rest/v1/role_conversation_turns`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      apikey: SUPABASE_SERVICE_ROLE_KEY,
+      Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+      Prefer: "return=minimal",
+    },
+    body: JSON.stringify({
+      tenant_id: tenantId,
+      deal_id: dealId,
+      speaker: "agent",
+      content: lines.join("\n"),
+      idempotency_key: `intent-v${next.version}-deal-${dealId}`,
+      metadata: { kind: "intent_update", intent_version: next.version },
+    }),
+  });
 }
 
 // ─── Persist updated intent to deals ─────────────────────────────────────────
@@ -167,7 +206,7 @@ async function handleResolveSearchIntent(req: Request): Promise<Response> {
   }
 
   // Fetch existing record from DB (source of truth for previous intent).
-  const existingRecord = await fetchExistingIntent(deal_id);
+  const { intent: existingRecord, tenantId } = await fetchDealRow(deal_id);
   const previous_intent = body.previous_intent ?? existingRecord?.current ?? null;
 
   // Call the LLM to produce updated conditions.
@@ -183,9 +222,12 @@ async function handleResolveSearchIntent(req: Request): Promise<Response> {
     ? bumpIntent(previous_intent, conditions, unenforceable_constraints)
     : makeInitialIntent(conditions, unenforceable_constraints);
 
-  // Persist and return.
+  // Persist, write transcript turn (non-fatal), and return.
   const updatedRecord = updateSearchIntentRecord(existingRecord, next);
   await persistIntent(deal_id, updatedRecord);
+  void writeIntentTurn(deal_id, tenantId, next).catch((err) =>
+    console.warn("writeIntentTurn failed (non-fatal):", err),
+  );
 
   return jsonResponse({ intent: next, record: updatedRecord });
 }

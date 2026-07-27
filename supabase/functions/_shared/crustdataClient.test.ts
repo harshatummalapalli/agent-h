@@ -272,3 +272,104 @@ describe("buildCalibrationFilters", () => {
     expect(buildCalibrationFilters({})).toBeNull();
   });
 });
+
+describe("buildCalibrationFilters — location handling", () => {
+  it("does NOT produce value 'Hyderabad, India' for location 'Hyderabad, India'", () => {
+    const filters = buildCalibrationFilters({
+      name: "Engineering Manager",
+      location: "Hyderabad, India",
+    });
+    expect(filters).not.toBeNull();
+    const conds: Array<{ field: string; type: string; value: unknown }> =
+      filters && "conditions" in filters
+        ? (filters.conditions as Array<{
+            field: string;
+            type: string;
+            value: unknown;
+          }>)
+        : [filters as { field: string; type: string; value: unknown }];
+    const locationCond = conds.find((c) => c.field?.includes("location"));
+    expect(locationCond).toBeDefined();
+    expect(locationCond!.value).not.toBe("Hyderabad, India");
+    expect(["Hyderabad", "India"]).toContain(locationCond!.value);
+  });
+
+  it("uses country field for 'Hyderabad, India' when country segment is a known alias", () => {
+    const filters = buildCalibrationFilters({
+      name: "Software Engineer",
+      location: "Hyderabad, India",
+    });
+    expect(filters).not.toBeNull();
+    const conds: Array<{ field: string; type: string; value: unknown }> =
+      filters && "conditions" in filters
+        ? (filters.conditions as Array<{
+            field: string;
+            type: string;
+            value: unknown;
+          }>)
+        : [filters as { field: string; type: string; value: unknown }];
+    const locationCond = conds.find((c) => c.field?.includes("location"));
+    expect(locationCond!.field).toBe("basic_profile.location.country");
+    expect(locationCond!.type).toBe("=");
+    expect(locationCond!.value).toBe("India");
+  });
+
+  it("uses bare city token for 'Seattle, WA' (no country alias match)", () => {
+    const filters = buildCalibrationFilters({
+      name: "Product Manager",
+      location: "Seattle, WA",
+    });
+    expect(filters).not.toBeNull();
+    const conds: Array<{ field: string; type: string; value: unknown }> =
+      filters && "conditions" in filters
+        ? (filters.conditions as Array<{
+            field: string;
+            type: string;
+            value: unknown;
+          }>)
+        : [filters as { field: string; type: string; value: unknown }];
+    const locationCond = conds.find((c) => c.field?.includes("location"));
+    expect(locationCond!.field).toBe("basic_profile.location.city");
+    expect(locationCond!.value).toBe("Seattle");
+    expect(locationCond!.value).not.toBe("Seattle, WA");
+  });
+
+  it("keeps country exact filter for plain country name 'India'", () => {
+    const filters = buildCalibrationFilters({
+      name: "Data Scientist",
+      location: "India",
+    });
+    expect(filters).not.toBeNull();
+    const conds: Array<{ field: string; type: string; value: unknown }> =
+      filters && "conditions" in filters
+        ? (filters.conditions as Array<{
+            field: string;
+            type: string;
+            value: unknown;
+          }>)
+        : [filters as { field: string; type: string; value: unknown }];
+    const locationCond = conds.find((c) => c.field?.includes("location"));
+    expect(locationCond!.field).toBe("basic_profile.location.country");
+    expect(locationCond!.type).toBe("=");
+    expect(locationCond!.value).toBe("India");
+  });
+
+  it("keeps country exact filter for 'Remote, India' (remote-stripped → India)", () => {
+    const filters = buildCalibrationFilters({
+      name: "Engineering Manager",
+      location: "Remote, India",
+    });
+    expect(filters).not.toBeNull();
+    const conds: Array<{ field: string; type: string; value: unknown }> =
+      filters && "conditions" in filters
+        ? (filters.conditions as Array<{
+            field: string;
+            type: string;
+            value: unknown;
+          }>)
+        : [filters as { field: string; type: string; value: unknown }];
+    const locationCond = conds.find((c) => c.field?.includes("location"));
+    expect(locationCond!.field).toBe("basic_profile.location.country");
+    expect(locationCond!.value).toBe("India");
+  });
+});

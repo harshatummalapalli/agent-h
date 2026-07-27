@@ -29,7 +29,8 @@ export type ConversationTurnKind =
   | "decision"
   | "result"
   | "candidate_card"
-  | "calibration_question";
+  | "calibration_question"
+  | "intent_update";
 
 export type ConversationTurnMetadata = {
   kind?: ConversationTurnKind;

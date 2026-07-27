@@ -67,6 +67,7 @@ import {
 } from "../shell/roleAgentOrchestrator";
 import type { ConversationTurnMetadata } from "../shell/agentActionTiers";
 import type { Deal, RoleConversationTurn } from "../types";
+import { SearchIntentDisplay } from "./SearchIntentDisplay";
 import "../inbox/agent-h-theme.css";
 
 export const RoleWorkspacePage = () => {
@@ -1547,6 +1548,22 @@ const RoleMemoryPanel = ({
             </ul>
           )}
         </div>
+
+        {/* Taxonomy-aware sourcing intent */}
+        {deal?.role_brief_search_intent?.current && (
+          <>
+            <Separator />
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
+                Sourcing understanding
+              </p>
+              <SearchIntentDisplay
+                current={deal.role_brief_search_intent.current}
+                history={deal.role_brief_search_intent.history ?? []}
+              />
+            </div>
+          </>
+        )}
 
         {/* Role must-haves from deal */}
         {((dealRecord?.must_have_keywords as string[] | undefined) ?? [])

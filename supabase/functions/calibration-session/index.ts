@@ -248,10 +248,13 @@ async function fetchBenchCandidates(
 }
 
 // Call rank-discovery-batch (sibling edge function) with the user's JWT.
+// searchIntent is optional — when present (T4 wiring), it is forwarded so the
+// ranking prompt can flag conflicts plainly (e.g. "currently Staff, which was excluded").
 async function rankCandidates(
   candidates: RawCandidate[],
   roleBrief: Record<string, unknown>,
   authHeader: string,
+  searchIntent?: Record<string, unknown> | null,
 ): Promise<RankedEntry[]> {
   if (candidates.length === 0) return [];
   try {
@@ -274,6 +277,7 @@ async function rankCandidates(
             skills: c.skills,
           })),
           role: roleBrief,
+          ...(searchIntent ? { search_intent: searchIntent } : {}),
         }),
       },
     );
@@ -468,7 +472,29 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    const ranked = await rankCandidates(merged, roleBrief, authHeader);
+    // Fetch stored SearchIntent for conflict-aware why-fit ranking (T4).
+    // Non-blocking read — missing or failed intent does not block ranking.
+    let storedSearchIntent: Record<string, unknown> | null = null;
+    try {
+      const dealRes = await fetch(
+        `${SUPABASE_URL}/rest/v1/deals?id=eq.${deal_id}&select=role_brief_search_intent`,
+        {
+          headers: {
+            apikey: SUPABASE_ANON_KEY ?? "",
+            Authorization: authHeader,
+          },
+        },
+      );
+      if (dealRes.ok) {
+        const rows = await dealRes.json();
+        const record = rows[0]?.role_brief_search_intent;
+        if (record?.current?.conditions) storedSearchIntent = record.current;
+      }
+    } catch {
+      // non-fatal
+    }
+
+    const ranked = await rankCandidates(merged, roleBrief, authHeader, storedSearchIntent);
 
     const expiresAt = new Date(
       Date.now() + 30 * 24 * 60 * 60 * 1000,
@@ -537,7 +563,7 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({ ...buildBatch(cache, BATCH_SIZE), bench_note: null });
   }
 
-  // ── rerank: add negative reason, re-rank, reset cursor, persist ──
+  // ── rerank: add negative reason, update SearchIntent, re-rank, reset cursor ──
   if (action === "rerank") {
     const cache = await fetchCacheRow(deal_id, authHeader);
     if (!cache || cache.payload.length === 0) {
@@ -553,14 +579,52 @@ Deno.serve(async (req: Request) => {
       ...cache.negative_reasons,
       ...(body.negative_reason ? [body.negative_reason] : []),
     ];
+
+    // T5 WIRING: call resolve-search-intent with the new calibration feedback.
+    // Fire-and-forget — re-ranking proceeds regardless of whether this succeeds.
+    // The updated SearchIntent will be used on the NEXT ranking pass; immediate
+    // re-rank still uses the old intent (consistent with the transition period).
+    // Note: role_brief_learned_criteria remains for legacy display; SearchIntent
+    // is now the source of truth for filter/rank going forward.
+    if (body.negative_reason && SUPABASE_URL) {
+      void fetch(`${SUPABASE_URL}/functions/v1/resolve-search-intent`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          apikey: SUPABASE_ANON_KEY ?? "",
+          Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""}`,
+        },
+        body: JSON.stringify({
+          deal_id,
+          calibration_feedback: reasons,
+        }),
+      }).catch((err) => {
+        console.warn("resolve-search-intent (rerank) failed (non-fatal):", err);
+      });
+    }
+
     const enrichedBrief = {
       ...cache.role_brief_snapshot,
       avoid_signals: reasons.join("; "),
     };
+    // Fetch current SearchIntent for conflict-aware why-fit (T4, rerank path).
+    let reRankIntent: Record<string, unknown> | null = null;
+    try {
+      const dRes = await fetch(
+        `${SUPABASE_URL}/rest/v1/deals?id=eq.${deal_id}&select=role_brief_search_intent`,
+        { headers: { apikey: SUPABASE_ANON_KEY ?? "", Authorization: authHeader } },
+      );
+      if (dRes.ok) {
+        const dRows = await dRes.json();
+        const rec = dRows[0]?.role_brief_search_intent;
+        if (rec?.current?.conditions) reRankIntent = rec.current;
+      }
+    } catch { /* non-fatal */ }
     const reranked = await rankCandidates(
       cache.payload,
       enrichedBrief,
       authHeader,
+      reRankIntent,
     );
     cache.ranked = reranked;
     cache.cursor = 0;

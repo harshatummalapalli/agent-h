@@ -432,17 +432,19 @@ Deno.serve(async (req: Request) => {
 
     // Crustdata gate: always run when FORCE_CRUSTDATA_ONLY is on (Crustdata E2E);
     // otherwise only run when the pool is below the floor to avoid redundant calls.
+    let crustdataNote: string | undefined;
     if (
       (FORCE_CRUSTDATA_ONLY || merged.length < CRUSTDATA_POOL_FLOOR) &&
       CRUSTDATA_API_KEY
     ) {
-      const crustdataCandidates = await searchCrustdataForRoleBrief(
+      const crustdataResult = await searchCrustdataForRoleBrief(
         roleBrief,
         // Request enough to fill the gap; cap at 30 to stay within API budget.
         Math.min(CRUSTDATA_POOL_FLOOR - merged.length + 10, 30),
         CRUSTDATA_API_KEY,
       );
-      for (const c of crustdataCandidates) {
+      crustdataNote = crustdataResult.note;
+      for (const c of crustdataResult.candidates) {
         const key = c.linkedin_url || c.id;
         if (seen.has(key)) continue;
         seen.add(key);
@@ -450,8 +452,9 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    // If pool is empty and a country was requested, return a clear message
-    // rather than persisting/ranking an empty pool.
+    // If pool is empty, return a diagnostic bench_note rather than persisting
+    // an empty pool. Prefer the structured note from the Crustdata client when
+    // available; otherwise derive a country-specific or generic fallback.
     if (merged.length === 0) {
       const locationStr =
         typeof roleBrief.location === "string" ? roleBrief.location.trim() : "";
@@ -461,9 +464,37 @@ Deno.serve(async (req: Request) => {
       const canonicalCountry = place
         ? (COUNTRY_ALIASES[place.toLowerCase().trim()] ?? null)
         : null;
-      const bench_note = canonicalCountry
-        ? `No ${canonicalCountry}-based profiles found for this brief — try broadening the role title or required skills.`
-        : "No matching profiles found for this brief — try broadening the criteria.";
+
+      let bench_note: string;
+      if (!CRUSTDATA_API_KEY) {
+        bench_note =
+          "Search is not configured on this server yet — ask your admin to set up web search.";
+      } else if (crustdataNote?.includes("not configured")) {
+        bench_note =
+          "Search is not configured on this server yet — ask your admin to set up web search.";
+      } else if (crustdataNote?.includes("returned an error")) {
+        bench_note =
+          "Web search is temporarily unavailable — try again shortly.";
+      } else if (
+        crustdataNote?.includes("none matched the requested location")
+      ) {
+        bench_note = canonicalCountry
+          ? `Found profiles in web search but none were based in ${canonicalCountry} — check the location in the brief.`
+          : crustdataNote;
+      } else if (
+        crustdataNote?.includes("No profiles matched") ||
+        crustdataNote?.includes("too little detail")
+      ) {
+        bench_note = canonicalCountry
+          ? `No ${canonicalCountry}-based profiles found for this brief — try a shorter title or fewer required skills.`
+          : "No matching profiles found — try broadening the brief.";
+      } else if (canonicalCountry) {
+        bench_note = `No ${canonicalCountry}-based profiles found for this brief — try broadening the role title or required skills.`;
+      } else {
+        bench_note =
+          "No matching profiles found for this brief — try broadening the criteria.";
+      }
+
       return jsonResponse({
         candidates: [],
         pool_size: 0,

@@ -22,12 +22,37 @@ configured, deploy manually using the steps below.
 
 ---
 
-## 2. Deploy edge functions
+## 2. Apply pending database migration (taxonomy-aware sourcing)
+
+**Required before deploying edge functions for the taxonomy/search-intent work.**
+
+Migration file: `supabase/migrations/20260727000000_agent_h_role_brief_search_intent.sql`
+
+Option A — CLI (recommended):
+```bash
+npx supabase db push
+```
+
+Option B — Supabase Dashboard → SQL Editor → paste and run:
+```sql
+alter table public.deals
+  add column if not exists role_brief_search_intent jsonb;
+
+comment on column public.deals.role_brief_search_intent is
+  'Versioned SearchIntent record: { current: VersionedSearchIntent, history: VersionedSearchIntent[] }. Produced by resolve-search-intent.';
+```
+
+Verify: in the Dashboard → Table Editor → `deals`, confirm `role_brief_search_intent` (type `jsonb`) is present.
+
+---
+
+## 3. Deploy edge functions
 
 Run these four commands from the repo root:
 
 ```bash
 npx supabase functions deploy calibration-session
+npx supabase functions deploy resolve-search-intent
 npx supabase functions deploy parse-agent-command
 npx supabase functions deploy parse-job-description
 npx supabase functions deploy source-candidates-discovery

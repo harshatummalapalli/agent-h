@@ -1549,18 +1549,27 @@ const RoleMemoryPanel = ({
           )}
         </div>
 
-        {/* Taxonomy-aware sourcing intent */}
-        {deal?.role_brief_search_intent?.current && (
+        {/* T6: Search Intent block — rendered from deal.role_brief_search_intent
+            (inline here inside the RoleMemoryPanel section, not a separate file).
+            SearchIntentDisplay lives at src/components/atomic-crm/roles/SearchIntentDisplay.tsx. */}
+        {deal !== undefined && (
           <>
             <Separator />
             <div>
               <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
                 Sourcing understanding
               </p>
-              <SearchIntentDisplay
-                current={deal.role_brief_search_intent.current}
-                history={deal.role_brief_search_intent.history ?? []}
-              />
+              {deal?.role_brief_search_intent?.current ? (
+                <SearchIntentDisplay
+                  current={deal.role_brief_search_intent.current}
+                  history={deal.role_brief_search_intent.history ?? []}
+                />
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Sourcing understanding will appear here after the first
+                  search.
+                </p>
+              )}
             </div>
           </>
         )}

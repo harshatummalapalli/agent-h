@@ -74,10 +74,10 @@ const processCompanyLogo = async (params: any) => {
   };
 };
 
-// Temporary sourcing kill-switches for Crustdata E2E testing.
-// Set both to `true` to re-enable free-portal and Exa sourcing.
+// Free-portal sourcing is permanently retired (product decision; Crustdata is the
+// sole sourcing vendor). Exa is also disabled. Neither flag is a temporary kill-switch.
 const FREE_PORTALS_ENABLED = false;
-const CHEAP_CLIENT_SOURCES_ENABLED = false; // disables Exa
+const CHEAP_CLIENT_SOURCES_ENABLED = false; // Exa — retired alongside free portals
 
 const getDataProviderWithCustomMethods = () => {
   const baseDataProvider = getBaseDataProvider();

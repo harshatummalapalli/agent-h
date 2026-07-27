@@ -147,6 +147,26 @@ export const useSourcingThread = ({
             tone: "success",
           });
           onNavigate("/deals");
+        } else if (parsed.action === "refine_search_intent") {
+          if (parsed.deal_id == null) {
+            appendItem({
+              kind: "assistant",
+              id: makeId(),
+              text: "Please mention which role to adjust, or open a specific role first.",
+              tone: "info",
+            });
+          } else {
+            await dataProvider.refineSearchIntent(parsed.deal_id, trimmed);
+            queryClient.invalidateQueries({
+              queryKey: ["inbox_per_deal_signals"],
+            });
+            appendItem({
+              kind: "assistant",
+              id: makeId(),
+              text: parsed.explanation,
+              tone: "success",
+            });
+          }
         } else {
           appendItem({
             kind: "assistant",

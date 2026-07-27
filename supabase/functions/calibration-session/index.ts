@@ -563,7 +563,7 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({ ...buildBatch(cache, BATCH_SIZE), bench_note: null });
   }
 
-  // ── rerank: add negative reason, re-rank, reset cursor, persist ──
+  // ── rerank: add negative reason, update SearchIntent, re-rank, reset cursor ──
   if (action === "rerank") {
     const cache = await fetchCacheRow(deal_id, authHeader);
     if (!cache || cache.payload.length === 0) {
@@ -579,6 +579,30 @@ Deno.serve(async (req: Request) => {
       ...cache.negative_reasons,
       ...(body.negative_reason ? [body.negative_reason] : []),
     ];
+
+    // T5 WIRING: call resolve-search-intent with the new calibration feedback.
+    // Fire-and-forget — re-ranking proceeds regardless of whether this succeeds.
+    // The updated SearchIntent will be used on the NEXT ranking pass; immediate
+    // re-rank still uses the old intent (consistent with the transition period).
+    // Note: role_brief_learned_criteria remains for legacy display; SearchIntent
+    // is now the source of truth for filter/rank going forward.
+    if (body.negative_reason && SUPABASE_URL) {
+      void fetch(`${SUPABASE_URL}/functions/v1/resolve-search-intent`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          apikey: SUPABASE_ANON_KEY ?? "",
+          Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""}`,
+        },
+        body: JSON.stringify({
+          deal_id,
+          calibration_feedback: reasons,
+        }),
+      }).catch((err) => {
+        console.warn("resolve-search-intent (rerank) failed (non-fatal):", err);
+      });
+    }
+
     const enrichedBrief = {
       ...cache.role_brief_snapshot,
       avoid_signals: reasons.join("; "),

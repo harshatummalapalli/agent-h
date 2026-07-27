@@ -1980,7 +1980,24 @@ const getDataProviderWithCustomMethods = () => {
     },
     // Agent H, Triage Inbox + Command Canvas: classifies command-bar free
     // text into one of the app's real supported actions via parse-agent-
-    // command (Claude Haiku tool-use). Has no side effects itself -- the
+    // Agent H: update search intent via free-text refinement. Calls
+    // resolve-search-intent with the command text as the refine_history
+    // entry; the function fetches the existing intent server-side and
+    // produces a new versioned intent persisted on deals.role_brief_search_intent.
+    // Also writes an intent_update transcript turn (non-fatal, server-side).
+    async refineSearchIntent(dealId: Identifier, commandText: string) {
+      const { data, error } =
+        await getSupabaseClient().functions.invoke<{
+          intent: unknown;
+          record: unknown;
+        }>("resolve-search-intent", {
+          method: "POST",
+          body: { deal_id: Number(dealId), refine_history: [commandText] },
+        });
+      if (error) throw error;
+      return data!;
+    },
+    // Agent H: parse a free-text command (Claude Haiku tool-use). Has no side effects itself -- the
     // caller dispatches the returned action to the actual dataProvider
     // methods (sourceFreePortalCandidates, relaxLearnedCriterion, etc).
     async parseAgentCommand(
@@ -2012,6 +2029,7 @@ const getDataProviderWithCustomMethods = () => {
           | "start_sourcing"
           | "show_more_like_this"
           | "relax_and_research"
+          | "refine_search_intent"
           | "unknown";
         deal_id: number | null;
         criterion_id: number | null;

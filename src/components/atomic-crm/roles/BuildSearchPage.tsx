@@ -8,7 +8,7 @@
 
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useDataProvider } from "ra-core";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "react-router";
 import {
   ExternalLink,
@@ -18,12 +18,24 @@ import {
   RotateCcw,
   ChevronDown,
   ChevronRight,
+  SendHorizonal,
 } from "lucide-react";
+import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import type { FilterDraft } from "../types";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
+import { OutreachPreviewPanel } from "../sourcing/OutreachPreviewPanel";
+import type { OutreachPrepared } from "../sourcing/sourcingTypes";
+import type { Deal, FilterDraft } from "../types";
 import type { CrmDataProvider } from "../providers/types";
 
 // Autocomplete field paths (mirrors crustdataCapabilityManifest CRUSTDATA_FIELDS)
@@ -290,7 +302,15 @@ type SearchCandidate = {
   years_experience?: number | null;
 };
 
-function CandidateRow({ c }: { c: SearchCandidate }) {
+function CandidateRow({
+  c,
+  selected,
+  onToggle,
+}: {
+  c: SearchCandidate;
+  selected?: boolean;
+  onToggle?: (id: string) => void;
+}) {
   const linkedinHref = c.linkedin_url
     ? c.linkedin_url.startsWith("http")
       ? c.linkedin_url
@@ -298,8 +318,16 @@ function CandidateRow({ c }: { c: SearchCandidate }) {
     : null;
 
   return (
-    <div className="flex items-start justify-between gap-4 py-3 border-b border-border last:border-0">
-      <div className="flex flex-col gap-0.5 min-w-0">
+    <div className="flex items-start gap-3 py-3 border-b border-border last:border-0">
+      {onToggle && (
+        <Checkbox
+          checked={selected}
+          onCheckedChange={() => onToggle(c.id)}
+          aria-label={`Select ${c.full_name ?? c.id}`}
+          className="mt-0.5 shrink-0"
+        />
+      )}
+      <div className="flex flex-col gap-0.5 min-w-0 flex-1">
         <span className="text-sm font-medium truncate">
           {c.full_name ?? "—"}
         </span>
@@ -382,6 +410,13 @@ function FilterSection({
 
 // ─── BuildSearchPage ──────────────────────────────────────────────────────────
 
+type OutreachQueueItem = {
+  candidateKey: string;
+  dbId: number;
+  prepared: OutreachPrepared;
+  name: string;
+};
+
 export function BuildSearchPage() {
   const dataProvider = useDataProvider<CrmDataProvider>();
   const [searchParams] = useSearchParams();
@@ -390,6 +425,19 @@ export function BuildSearchPage() {
   const [draft, setDraft] = useState<FilterDraft>(loadDraft);
   const [limit, setLimit] = useState(25);
   const [compiledVisible, setCompiledVisible] = useState(false);
+
+  // ── Selection + outreach state ───────────────────────────────────────────
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [rolePickerOpen, setRolePickerOpen] = useState(false);
+  const [activeDealId, setActiveDealId] = useState<string | null>(
+    dealId ?? null,
+  );
+  const [outreachState, setOutreachState] = useState<
+    "idle" | "preparing" | "reviewing"
+  >("idle");
+  const [outreachQueue, setOutreachQueue] = useState<OutreachQueueItem[]>([]);
+  const [queueIdx, setQueueIdx] = useState(0);
+  const [confirming, setConfirming] = useState(false);
 
   // Persist draft to localStorage on every change
   useEffect(() => {
@@ -403,8 +451,7 @@ export function BuildSearchPage() {
     error,
     reset,
   } = useMutation({
-    mutationFn: () =>
-      dataProvider.searchCrustdataFilters(draft, limit, dealId),
+    mutationFn: () => dataProvider.searchCrustdataFilters(draft, limit, dealId),
     onError: () => {},
   });
 
@@ -420,16 +467,172 @@ export function BuildSearchPage() {
     reset();
   };
 
+  // ── Open deals for role picker ────────────────────────────────────────────
+  const dealsQuery = useQuery({
+    queryKey: ["build-search-open-deals"],
+    queryFn: () =>
+      dataProvider.getList<Deal>("deals", {
+        pagination: { page: 1, perPage: 50 },
+        sort: { field: "updated_at", order: "DESC" },
+        filter: { "archived_at@is": null },
+      }),
+    enabled: rolePickerOpen,
+    staleTime: 60_000,
+  });
+  const openDeals = dealsQuery.data?.data ?? [];
+
+  // ── Selection helpers ─────────────────────────────────────────────────────
+  const toggleSelect = (id: string) =>
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === candidates.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(candidates.map((c) => c.id)));
+    }
+  };
+
+  // ── Outreach flow ─────────────────────────────────────────────────────────
+  const startOutreachFlow = async (resolvedDealId: string) => {
+    const selected = candidates.filter((c) => selectedIds.has(c.id));
+    if (selected.length === 0) return;
+    setOutreachState("preparing");
+    const queue: OutreachQueueItem[] = [];
+
+    for (let i = 0; i < selected.length; i++) {
+      const c = selected[i];
+      toast.loading(`Saving ${i + 1}/${selected.length}…`, {
+        id: "outreach-progress",
+      });
+      try {
+        const outcome = await dataProvider.saveSourcedCandidate(
+          Number(resolvedDealId),
+          {
+            id: c.id,
+            full_name: c.full_name,
+            linkedin_url: c.linkedin_url,
+            job_title: c.job_title,
+            job_company_name: c.job_company_name,
+            location_name: c.location_name,
+          },
+        );
+        if (!outcome.candidate_id) continue;
+
+        toast.loading(`Preparing outreach ${i + 1}/${selected.length}…`, {
+          id: "outreach-progress",
+        });
+        const prepared = await dataProvider.prepareFirstOutreach(
+          outcome.candidate_id,
+          Number(resolvedDealId),
+        );
+        queue.push({
+          candidateKey: c.id,
+          dbId: outcome.candidate_id,
+          prepared: prepared as unknown as OutreachPrepared,
+          name: c.full_name ?? `Candidate #${outcome.candidate_id}`,
+        });
+      } catch (err: any) {
+        toast.error(`${c.full_name ?? c.id}: ${err?.message ?? "Failed"}`);
+      }
+    }
+
+    toast.dismiss("outreach-progress");
+    if (queue.length === 0) {
+      toast.error("No outreach could be prepared");
+      setOutreachState("idle");
+      return;
+    }
+    toast.success(
+      `${queue.length} outreach draft${queue.length > 1 ? "s" : ""} ready`,
+    );
+    setOutreachQueue(queue);
+    setQueueIdx(0);
+    setOutreachState("reviewing");
+  };
+
+  const handleOutreachSelected = () => {
+    if (!activeDealId) {
+      setRolePickerOpen(true);
+    } else {
+      startOutreachFlow(activeDealId);
+    }
+  };
+
+  const handlePickRole = (id: number) => {
+    const picked = String(id);
+    setActiveDealId(picked);
+    setRolePickerOpen(false);
+    startOutreachFlow(picked);
+  };
+
+  const handleUpdatePrepared = (next: OutreachPrepared) => {
+    setOutreachQueue((q) =>
+      q.map((item, idx) =>
+        idx === queueIdx ? { ...item, prepared: next } : item,
+      ),
+    );
+  };
+
+  const handleConfirmSend = async () => {
+    const item = outreachQueue[queueIdx];
+    if (!item || !activeDealId) return;
+    setConfirming(true);
+    try {
+      const p = item.prepared;
+      const isDual = p.dual_channel && p.send_email_too && p.email_preview;
+      await dataProvider.sendFirstOutreach(item.dbId, Number(activeDealId), {
+        channel: p.channel,
+        message_body: p.message_body ?? undefined,
+        linkedin_provider_id: p.linkedin_provider_id ?? undefined,
+        subject: p.channel === "email" ? p.email_preview?.subject : undefined,
+        html: p.channel === "email" ? p.email_preview?.html : undefined,
+        also_send_email: isDual ? true : undefined,
+        email_to: isDual ? p.email_preview?.to : undefined,
+        email_subject: isDual ? p.email_preview?.subject : undefined,
+        email_html: isDual ? p.email_preview?.html : undefined,
+      });
+      toast.success(
+        isDual ? "Outreach sent via LinkedIn + email" : "Outreach sent",
+      );
+      const nextIdx = queueIdx + 1;
+      if (nextIdx < outreachQueue.length) {
+        setQueueIdx(nextIdx);
+      } else {
+        setOutreachState("idle");
+        setOutreachQueue([]);
+        setSelectedIds(new Set());
+      }
+    } catch (err: any) {
+      toast.error(err?.message ?? "Failed to send outreach");
+    } finally {
+      setConfirming(false);
+    }
+  };
+
+  const handleCancelReview = () => {
+    setOutreachState("idle");
+    setOutreachQueue([]);
+    setQueueIdx(0);
+  };
+
   const empty = isDraftEmpty(draft);
-  const candidates = (data as { candidates?: SearchCandidate[] } | undefined)
-    ?.candidates ?? [];
-  const totalCount = (data as { total_count?: number } | undefined)
-    ?.total_count ?? 0;
-  const appliedGroups = (data as { applied_groups?: string[] } | undefined)
-    ?.applied_groups ?? [];
-  const compiledFilters = (
-    data as { compiled_filters?: unknown } | undefined
-  )?.compiled_filters;
+  const candidates =
+    (data as { candidates?: SearchCandidate[] } | undefined)?.candidates ?? [];
+  const totalCount =
+    (data as { total_count?: number } | undefined)?.total_count ?? 0;
+  const appliedGroups =
+    (data as { applied_groups?: string[] } | undefined)?.applied_groups ?? [];
+  const compiledFilters = (data as { compiled_filters?: unknown } | undefined)
+    ?.compiled_filters;
   const hasSearched = !!data;
   const zeroResults = hasSearched && candidates.length === 0;
 
@@ -443,8 +646,8 @@ export function BuildSearchPage() {
               Build your search
             </h1>
             <p className="text-sm text-muted-foreground mt-0.5">
-              Manually tune Crustdata filters to find the right people.
-              Results are not added to any role pipeline automatically.
+              Manually tune Crustdata filters to find the right people. Results
+              are not added to any role pipeline automatically.
             </p>
           </div>
           <Button
@@ -767,7 +970,9 @@ export function BuildSearchPage() {
                 />
               </div>
               <div className="flex flex-col gap-1.5">
-                <Label className="text-xs font-medium">Fields of study (OR)</Label>
+                <Label className="text-xs font-medium">
+                  Fields of study (OR)
+                </Label>
                 <TagInput
                   aria-label="Fields of study"
                   values={draft.educationFieldsOfStudy ?? []}
@@ -852,7 +1057,10 @@ export function BuildSearchPage() {
                   value={limit}
                   onChange={(e) =>
                     setLimit(
-                      Math.min(100, Math.max(1, parseInt(e.target.value, 10) || 25)),
+                      Math.min(
+                        100,
+                        Math.max(1, parseInt(e.target.value, 10) || 25),
+                      ),
                     )
                   }
                 />
@@ -872,9 +1080,8 @@ export function BuildSearchPage() {
               <div className="flex flex-col items-center justify-center gap-3 py-20 text-center text-muted-foreground">
                 <Search className="h-10 w-10 opacity-20" />
                 <p className="text-sm max-w-xs">
-                  Configure your filters and hit{" "}
-                  <strong>Run search</strong> to find candidates directly
-                  from Crustdata.
+                  Configure your filters and hit <strong>Run search</strong> to
+                  find candidates directly from Crustdata.
                 </p>
               </div>
             )}
@@ -896,6 +1103,16 @@ export function BuildSearchPage() {
                 {/* Header */}
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2 text-sm">
+                    {candidates.length > 0 && (
+                      <Checkbox
+                        checked={
+                          selectedIds.size === candidates.length &&
+                          candidates.length > 0
+                        }
+                        onCheckedChange={toggleSelectAll}
+                        aria-label="Select all candidates"
+                      />
+                    )}
                     <span className="font-medium">
                       {totalCount > 0
                         ? `${totalCount.toLocaleString()} result${totalCount === 1 ? "" : "s"}`
@@ -903,8 +1120,7 @@ export function BuildSearchPage() {
                     </span>
                     {appliedGroups.length > 0 && (
                       <span className="text-muted-foreground">
-                        ·{" "}
-                        {appliedGroups.join(", ")}
+                        · {appliedGroups.join(", ")}
                       </span>
                     )}
                   </div>
@@ -921,6 +1137,26 @@ export function BuildSearchPage() {
                     Compiled filters
                   </button>
                 </div>
+
+                {/* Sticky outreach bar */}
+                {selectedIds.size > 0 && (
+                  <div className="sticky top-4 z-10 flex items-center justify-between gap-3 rounded-lg border border-primary/20 bg-background/95 backdrop-blur px-4 py-2.5 shadow-md">
+                    <span className="text-sm text-muted-foreground">
+                      {selectedIds.size} selected
+                    </span>
+                    <Button
+                      size="sm"
+                      disabled={outreachState === "preparing"}
+                      onClick={handleOutreachSelected}
+                      className="gap-1.5"
+                    >
+                      <SendHorizonal className="h-3.5 w-3.5" />
+                      {outreachState === "preparing"
+                        ? "Preparing…"
+                        : `Outreach selected (${selectedIds.size})`}
+                    </Button>
+                  </div>
+                )}
 
                 {compiledVisible && (
                   <pre className="text-[10px] bg-muted rounded p-3 overflow-x-auto max-h-48 text-muted-foreground">
@@ -943,13 +1179,12 @@ export function BuildSearchPage() {
                       </li>
                       <li>
                         Country spelling — use full names like{" "}
-                        <strong>United States</strong> or{" "}
-                        <strong>India</strong> (not abbreviations)
+                        <strong>United States</strong> or <strong>India</strong>{" "}
+                        (not abbreviations)
                       </li>
                       <li>
-                        Seniority vocabulary — try{" "}
-                        <strong>Senior</strong>, <strong>Lead</strong>, or{" "}
-                        <strong>Principal</strong>
+                        Seniority vocabulary — try <strong>Senior</strong>,{" "}
+                        <strong>Lead</strong>, or <strong>Principal</strong>
                       </li>
                       <li>
                         Company HQ country requires ISO alpha-3 (
@@ -965,7 +1200,11 @@ export function BuildSearchPage() {
                   <div className="rounded-lg border border-border divide-y divide-border">
                     {candidates.map((c) => (
                       <div key={c.id} className="px-4">
-                        <CandidateRow c={c} />
+                        <CandidateRow
+                          c={c}
+                          selected={selectedIds.has(c.id)}
+                          onToggle={toggleSelect}
+                        />
                       </div>
                     ))}
                   </div>
@@ -975,6 +1214,68 @@ export function BuildSearchPage() {
           </div>
         </div>
       </div>
+
+      {/* ── Role picker dialog ────────────────────────────────────────────── */}
+      <Dialog open={rolePickerOpen} onOpenChange={setRolePickerOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Pick a role</DialogTitle>
+            <DialogDescription>
+              Select the open role to add these candidates to.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-1 max-h-72 overflow-y-auto">
+            {dealsQuery.isPending && (
+              <p className="text-sm text-muted-foreground py-4 text-center animate-pulse">
+                Loading roles…
+              </p>
+            )}
+            {openDeals.length === 0 && !dealsQuery.isPending && (
+              <p className="text-sm text-muted-foreground py-4 text-center">
+                No open roles found.
+              </p>
+            )}
+            {openDeals.map((deal) => (
+              <button
+                key={deal.id}
+                type="button"
+                className="w-full text-left px-3 py-2 rounded-md text-sm hover:bg-muted transition-colors"
+                onClick={() => handlePickRole(Number(deal.id))}
+              >
+                {deal.name}
+              </button>
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Outreach review modal ─────────────────────────────────────────── */}
+      <Dialog
+        open={outreachState === "reviewing" && outreachQueue.length > 0}
+        onOpenChange={(open) => {
+          if (!open) handleCancelReview();
+        }}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>
+              Review outreach — {outreachQueue[queueIdx]?.name}
+            </DialogTitle>
+            <DialogDescription>
+              {queueIdx + 1} of {outreachQueue.length}
+            </DialogDescription>
+          </DialogHeader>
+          {outreachQueue[queueIdx] && (
+            <OutreachPreviewPanel
+              prepared={outreachQueue[queueIdx].prepared}
+              onPreparedChange={handleUpdatePrepared}
+              onConfirm={handleConfirmSend}
+              onCancel={handleCancelReview}
+              confirming={confirming}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

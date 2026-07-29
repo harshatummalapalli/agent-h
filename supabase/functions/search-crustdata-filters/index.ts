@@ -1,18 +1,23 @@
-// search-crustdata-filters — manual filter-based Crustdata person search.
+// search-crustdata-filters — manual filter-based Crustdata person search + autocomplete.
 //
-// Powers the "Build search" tab in RoleWorkspacePage. Accepts a typed
-// FilterDraft from the UI (explicit form fields), compiles it to a
-// Crustdata boolean filter tree, and returns normalized candidate profiles.
+// Powers the "Build search" standalone page. Two modes:
 //
-// Deliberately ISOLATED from the calibration loop:
-//   • Does NOT read or write role_discovery_cache.
-//   • Does NOT interact with the Talent Bench.
-//   • Does NOT modify deal.role_brief_search_intent.
-// Results stay local to this request — caller decides what to do with them.
+// MODE: search (default)
+//   Body: { filter_draft: FilterDraft, deal_id?: string, limit?: number }
+//   Response: { candidates, compiled_filters, applied_groups, total_count }
+//   Accepts the full expanded FilterDraft from crustdataFilterCompiler.
 //
-// Auth: requires a valid Supabase JWT (same pattern as calibration-session).
-// Body: { filter_draft: FilterDraft, deal_id?: string, limit?: number }
-// Response: { candidates, compiled_filters, applied_groups, total_count }
+// MODE: autocomplete
+//   Body: { mode: "autocomplete", field: string, query: string, limit?: number }
+//   Response: { suggestions: string[] }
+//   Calls POST https://api.crustdata.com/person/search/autocomplete.
+//   field must be one of AUTOCOMPLETE_SUPPORTED_FIELDS (allowlist enforced).
+//
+// Both modes:
+//   - Require a valid Supabase JWT (same auth pattern as calibration-session).
+//   - Do NOT read or write role_discovery_cache.
+//   - Do NOT interact with the Talent Bench.
+//   - Do NOT modify deal.role_brief_search_intent.
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import * as jose from "jsr:@panva/jose@6";
@@ -26,6 +31,10 @@ import {
   CRUSTDATA_SEARCH_URL,
   CRUSTDATA_API_VERSION,
 } from "../_shared/crustdataClient.ts";
+import {
+  CRUSTDATA_AUTOCOMPLETE_URL,
+  AUTOCOMPLETE_SUPPORTED_FIELDS,
+} from "../_shared/crustdataCapabilityManifest.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
 const SUPABASE_JWT_ISSUER =
@@ -37,6 +46,7 @@ const CRUSTDATA_API_KEY = Deno.env.get("CRUSTDATA_API_KEY");
 
 const DEFAULT_LIMIT = 25;
 const MAX_LIMIT = 100;
+const AUTOCOMPLETE_MAX_LIMIT = 20;
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -66,6 +76,65 @@ async function requireAuth(req: Request): Promise<boolean> {
   }
 }
 
+// ── Autocomplete handler ───────────────────────────────────────────────────────
+
+const ALLOWED_AUTOCOMPLETE_FIELDS: ReadonlySet<string> = new Set(
+  AUTOCOMPLETE_SUPPORTED_FIELDS as unknown as string[],
+);
+
+async function handleAutocomplete(body: {
+  field: string;
+  query: string;
+  limit?: number;
+}): Promise<Response> {
+  const { field, query, limit: rawLimit } = body;
+
+  if (!field || typeof field !== "string") {
+    return jsonResponse({ error: "field is required" }, 400);
+  }
+  if (typeof query !== "string") {
+    return jsonResponse({ error: "query must be a string" }, 400);
+  }
+  if (!ALLOWED_AUTOCOMPLETE_FIELDS.has(field)) {
+    // Unknown field — return empty suggestions rather than exposing server-side error.
+    return jsonResponse({ suggestions: [] });
+  }
+
+  const limit = Math.min(
+    Math.max(1, typeof rawLimit === "number" ? rawLimit : AUTOCOMPLETE_MAX_LIMIT),
+    AUTOCOMPLETE_MAX_LIMIT,
+  );
+
+  try {
+    const res = await fetch(CRUSTDATA_AUTOCOMPLETE_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${CRUSTDATA_API_KEY}`,
+        "x-api-version": CRUSTDATA_API_VERSION,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ field, query, limit }),
+      signal: AbortSignal.timeout(2000),
+    });
+
+    if (!res.ok) {
+      console.error(
+        `[search-crustdata-filters/autocomplete] HTTP ${res.status} for field=${field}`,
+      );
+      return jsonResponse({ suggestions: [] });
+    }
+
+    const data = (await res.json()) as { suggestions?: Array<{ value: string }> };
+    const suggestions = (data.suggestions ?? []).map((s) => s.value);
+    return jsonResponse({ suggestions });
+  } catch (err) {
+    console.error("[search-crustdata-filters/autocomplete] error:", err);
+    return jsonResponse({ suggestions: [] });
+  }
+}
+
+// ── Main handler ──────────────────────────────────────────────────────────────
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: CORS_HEADERS });
@@ -86,18 +155,23 @@ Deno.serve(async (req: Request) => {
     );
   }
 
-  let body: {
-    filter_draft?: FilterDraft;
-    deal_id?: string;
-    limit?: number;
-  };
+  let body: Record<string, unknown>;
   try {
     body = await req.json();
   } catch {
     return jsonResponse({ error: "Invalid JSON body" }, 400);
   }
 
-  const { filter_draft: filterDraft, limit: rawLimit } = body;
+  // ── Autocomplete mode ────────────────────────────────────────────────────
+  if (body.mode === "autocomplete") {
+    return handleAutocomplete(
+      body as { field: string; query: string; limit?: number },
+    );
+  }
+
+  // ── Search mode (default) ────────────────────────────────────────────────
+  const filterDraft = body.filter_draft as FilterDraft | undefined;
+  const rawLimit = body.limit as number | undefined;
 
   if (!filterDraft || typeof filterDraft !== "object") {
     return jsonResponse({ error: "filter_draft is required" }, 400);

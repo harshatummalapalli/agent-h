@@ -157,7 +157,7 @@ function sanitizeDraft(draft: FilterDraft): FilterDraft {
   setNum("connectionsMax", draft.connectionsMax);
   setNum("followersMin", draft.followersMin);
   const sortField = draft.sortField?.trim();
-  if (sortField) {
+  if (sortField && sortField !== "none") {
     out.sortField = sortField;
     out.sortOrder = draft.sortOrder ?? "desc";
   }
@@ -575,6 +575,7 @@ export function BuildSearchPage() {
     total_count?: number;
     applied_groups?: string[];
     compiled_filters?: unknown;
+    sorts?: Array<{ field: string; order: "asc" | "desc" }>;
     note?: string;
     error?: string;
     error_detail?: string;
@@ -808,6 +809,7 @@ export function BuildSearchPage() {
   const totalCount = searchData?.total_count ?? 0;
   const appliedGroups = searchData?.applied_groups ?? [];
   const compiledFilters = searchData?.compiled_filters;
+  const appliedSorts = searchData?.sorts;
   const searchNote = searchData?.note;
   const searchError = searchData?.error;
   const searchErrorDetail = searchData?.error_detail;
@@ -1466,14 +1468,16 @@ export function BuildSearchPage() {
               <div className="flex flex-col gap-1.5">
                 <Label className="text-xs font-medium">Sort by</Label>
                 <Select
-                  value={draft.sortField ?? ""}
-                  onValueChange={(v) => set("sortField", v || null)}
+                  value={draft.sortField ?? "none"}
+                  onValueChange={(v) =>
+                    set("sortField", !v || v === "none" ? null : v)
+                  }
                 >
                   <SelectTrigger className="h-8 text-xs">
                     <SelectValue placeholder="Default (relevance)" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">Default (relevance)</SelectItem>
+                    <SelectItem value="none">Default (relevance)</SelectItem>
                     {SORTABLE_FIELD_OPTIONS.map((o) => (
                       <SelectItem key={o.value} value={o.value}>
                         {o.label}
@@ -1481,8 +1485,12 @@ export function BuildSearchPage() {
                     ))}
                   </SelectContent>
                 </Select>
+                <p className="text-[10px] text-muted-foreground">
+                  Connections/followers ranks results but Crustdata does not
+                  return the counts in search results — order is the signal.
+                </p>
               </div>
-              {draft.sortField && (
+              {draft.sortField && draft.sortField !== "none" && (
                 <div className="flex flex-col gap-1.5">
                   <Label className="text-xs font-medium">Order</Label>
                   <div className="flex gap-4">
@@ -1710,7 +1718,16 @@ export function BuildSearchPage() {
 
                 {compiledVisible && (
                   <pre className="text-[10px] bg-muted rounded p-3 overflow-x-auto max-h-48 text-muted-foreground">
-                    {JSON.stringify(compiledFilters, null, 2)}
+                    {JSON.stringify(
+                      {
+                        filters: compiledFilters,
+                        ...(appliedSorts?.length
+                          ? { sorts: appliedSorts }
+                          : {}),
+                      },
+                      null,
+                      2,
+                    )}
                   </pre>
                 )}
 

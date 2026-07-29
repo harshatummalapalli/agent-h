@@ -261,6 +261,7 @@ Deno.serve(async (req: Request) => {
   const dropped: string[] = [];
   let lastFilters: CrustdataFilters | null = null;
   let lastApplied: string[] = [];
+  let lastSorts: Array<{ field: string; order: "asc" | "desc" }> | undefined;
   let lastHttpStatus: number | null = null;
   let profiles: Array<Record<string, unknown>> = [];
   let totalCount = 0;
@@ -283,6 +284,7 @@ Deno.serve(async (req: Request) => {
 
     lastFilters = filters;
     lastApplied = appliedGroups;
+    lastSorts = sorts;
 
     const result = await callCrustdata(filters, sorts);
     if ("error" in result) {
@@ -315,6 +317,7 @@ Deno.serve(async (req: Request) => {
         candidates: [],
         compiled_filters: lastFilters,
         applied_groups: lastApplied,
+        sorts: lastSorts,
         total_count: 0,
         crustdata_http_status: lastHttpStatus,
         note: "Search provider returned an error — check compiled filters and try fewer constraints.",
@@ -342,6 +345,7 @@ Deno.serve(async (req: Request) => {
     candidates,
     compiled_filters: lastFilters,
     applied_groups: lastApplied,
+    sorts: lastSorts,
     total_count: totalCount || candidates.length,
     crustdata_http_status: lastHttpStatus,
     relaxed_away: dropped,

@@ -858,9 +858,10 @@ export function compileFilterDraft(draft: FilterDraft): CompileResult {
   // ── Sort ──────────────────────────────────────────────────────────────────
   const sortField = draft.sortField?.trim() ?? null;
   const sorts =
-    sortField && SORTABLE_FIELDS.has(sortField)
-      ? [{ field: sortField, order: draft.sortOrder ?? "desc" }]
+    sortField && sortField !== "none" && SORTABLE_FIELDS.has(sortField)
+      ? [{ field: sortField, order: draft.sortOrder ?? ("desc" as const) }]
       : undefined;
+  if (sorts) appliedGroups.push("sort");
 
   return {
     filters: { op: "and", conditions: topLevel },

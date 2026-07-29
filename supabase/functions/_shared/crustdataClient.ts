@@ -182,8 +182,10 @@ export function parseLocationForFilter(location: string): {
 
   const place = withParenNorm
     .replace(REMOTE_STRIP_RE, " ")
+    .replace(/\s*,\s*/g, ", ") // normalise "City , Country" → "City, Country"
     .replace(/[,\s-]+$/, "")
     .replace(/^[,\s-]+/, "")
+    .replace(/\s{2,}/g, " ") // collapse any remaining double-spaces
     .trim();
 
   return { place: place || null, remoteOnly: hasRemote && !place };

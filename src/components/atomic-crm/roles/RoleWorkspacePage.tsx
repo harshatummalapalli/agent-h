@@ -68,6 +68,7 @@ import {
 import type { ConversationTurnMetadata } from "../shell/agentActionTiers";
 import type { Deal, RoleConversationTurn } from "../types";
 import { SearchIntentDisplay } from "./SearchIntentDisplay";
+import { BuildSearchTab } from "./BuildSearchTab";
 import "../inbox/agent-h-theme.css";
 
 export const RoleWorkspacePage = () => {
@@ -80,7 +81,7 @@ export const RoleWorkspacePage = () => {
   );
 };
 
-type WorkspaceTab = "sourcing" | "review";
+type WorkspaceTab = "sourcing" | "review" | "build-search";
 
 const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
   const navigate = useNavigate();
@@ -584,6 +585,7 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
                     [
                       { value: "sourcing", label: "Sourcing" },
                       { value: "review", label: "Review & Contact" },
+                      { value: "build-search", label: "Build search" },
                     ] as const
                   ).map(({ value, label }) => (
                     <TabsTrigger
@@ -654,6 +656,14 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
                   </>
                 )}
               </div>
+            </TabsContent>
+
+            {/* Build search tab */}
+            <TabsContent
+              value="build-search"
+              className="flex-1 mt-0 overflow-y-auto"
+            >
+              <BuildSearchTab deal={deal} />
             </TabsContent>
 
             {/* Review & Contact tab */}

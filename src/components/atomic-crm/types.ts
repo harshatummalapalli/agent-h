@@ -385,3 +385,23 @@ export interface ContactGender {
   label: string;
   icon: ComponentType<{ className?: string }>;
 }
+
+// ─── FilterDraft — typed form fields for the "Build search" tab ──────────────
+// Mirrors _shared/crustdataFilterCompiler.ts FilterDraft (kept in sync manually;
+// no shared import because frontend and Deno runtimes are separate).
+
+export type FilterDraft = {
+  currentTitlesInclude?: string[];
+  currentTitlesExclude?: string[];
+  pastTitlesInclude?: string[];
+  locationCountry?: string;
+  locationCity?: string;
+  skillsRequired?: string[];
+  seniority?: string;
+  yoeMin?: number | null;
+  yoeMax?: number | null;
+  currentCompaniesInclude?: string[];
+  currentCompaniesExclude?: string[];
+  headcountMin?: number | null;
+  headcountMax?: number | null;
+};

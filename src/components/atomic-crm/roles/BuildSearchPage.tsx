@@ -6,7 +6,7 @@
 // Draft persists to localStorage under "buildSearch:draft" so recruiters
 // can resume mid-session. Cleared via the Reset button.
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { useDataProvider } from "ra-core";
 import { useMutation } from "@tanstack/react-query";
 import { useSearchParams } from "react-router";
@@ -25,6 +25,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { FilterDraft } from "../types";
 import type { CrmDataProvider } from "../providers/types";
+
+// Autocomplete field paths (mirrors crustdataCapabilityManifest CRUSTDATA_FIELDS)
+const AC_FIELD_TITLE = "experience.employment_details.current.title";
+const AC_FIELD_COUNTRY = "basic_profile.location.country";
+const AC_FIELD_COMPANY = "experience.employment_details.current.company_name";
+const AC_FIELD_SKILLS = "skills.professional_network_skills";
 
 const LS_KEY = "buildSearch:draft";
 
@@ -145,6 +151,128 @@ function TagInput({
           </button>
         )}
       </div>
+    </div>
+  );
+}
+
+// ─── AutocompleteTagInput — TagInput with Crustdata typeahead ─────────────────
+
+function AutocompleteTagInput({
+  values,
+  onChange,
+  placeholder,
+  "aria-label": ariaLabel,
+  autocompleteField,
+  dataProvider,
+}: {
+  values: string[];
+  onChange: (vals: string[]) => void;
+  placeholder?: string;
+  "aria-label"?: string;
+  autocompleteField: string;
+  dataProvider: CrmDataProvider;
+}) {
+  const [input, setInput] = useState("");
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const commit = (val?: string) => {
+    const v = (val ?? input).trim();
+    if (v && !values.includes(v)) onChange([...values, v]);
+    setInput("");
+    setSuggestions([]);
+  };
+
+  const onInputChange = (raw: string) => {
+    setInput(raw);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (raw.trim().length < 2) {
+      setSuggestions([]);
+      return;
+    }
+    debounceRef.current = setTimeout(async () => {
+      try {
+        const results = await dataProvider.autocompleteCrustdataField(
+          autocompleteField,
+          raw.trim(),
+          8,
+        );
+        setSuggestions(results.filter((r) => !values.includes(r)));
+      } catch {
+        setSuggestions([]);
+      }
+    }, 300);
+  };
+
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex flex-wrap gap-1.5">
+        {values.map((v) => (
+          <Badge key={v} variant="secondary" className="gap-1 text-xs pr-1">
+            {v}
+            <button
+              type="button"
+              aria-label={`Remove ${v}`}
+              onClick={() => onChange(values.filter((x) => x !== v))}
+              className="ml-0.5 rounded hover:bg-muted"
+            >
+              <X className="h-2.5 w-2.5" />
+            </button>
+          </Badge>
+        ))}
+        <div className="flex gap-1 min-w-[140px]">
+          <Input
+            className="h-7 text-xs px-2"
+            value={input}
+            aria-label={ariaLabel}
+            placeholder={placeholder}
+            onChange={(e) => onInputChange(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === ",") {
+                e.preventDefault();
+                commit();
+              }
+              if (e.key === "Backspace" && !input && values.length > 0) {
+                onChange(values.slice(0, -1));
+              }
+              if (e.key === "Escape") setSuggestions([]);
+            }}
+            onBlur={() => {
+              // Delay so click on suggestion fires first
+              setTimeout(() => {
+                commit();
+                setSuggestions([]);
+              }, 150);
+            }}
+          />
+          {input.trim() && (
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => commit()}
+              className="text-muted-foreground hover:text-foreground"
+              aria-label="Add"
+            >
+              <Plus className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
+      </div>
+      {suggestions.length > 0 && (
+        <div className="bg-popover border border-border rounded-md shadow-md z-10 max-h-48 overflow-y-auto">
+          {suggestions.map((s) => (
+            <button
+              key={s}
+              type="button"
+              className="w-full text-left px-3 py-1.5 text-xs hover:bg-muted transition-colors"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => commit(s)}
+            >
+              {s}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -347,11 +475,13 @@ export function BuildSearchPage() {
                     (OR: any synonym matches)
                   </span>
                 </Label>
-                <TagInput
+                <AutocompleteTagInput
                   aria-label="Current title include"
                   values={draft.currentTitlesInclude ?? []}
                   onChange={(v) => set("currentTitlesInclude", v)}
                   placeholder="e.g. Security Analyst"
+                  autocompleteField={AC_FIELD_TITLE}
+                  dataProvider={dataProvider}
                 />
               </div>
               <div className="flex flex-col gap-1.5">
@@ -388,11 +518,13 @@ export function BuildSearchPage() {
                     (OR — full name: United States, India…)
                   </span>
                 </Label>
-                <TagInput
+                <AutocompleteTagInput
                   aria-label="Countries"
                   values={draft.locationCountries ?? []}
                   onChange={(v) => set("locationCountries", v)}
                   placeholder="e.g. India"
+                  autocompleteField={AC_FIELD_COUNTRY}
+                  dataProvider={dataProvider}
                 />
               </div>
               <div className="flex flex-col gap-1.5">
@@ -428,11 +560,13 @@ export function BuildSearchPage() {
                 <p className="text-xs text-muted-foreground -mt-0.5">
                   Too many AND skills → zero results. Keep to 2–3 critical ones.
                 </p>
-                <TagInput
+                <AutocompleteTagInput
                   aria-label="Must-have skills"
                   values={draft.skillsRequired ?? []}
                   onChange={(v) => set("skillsRequired", v)}
                   placeholder="e.g. Python"
+                  autocompleteField={AC_FIELD_SKILLS}
+                  dataProvider={dataProvider}
                 />
               </div>
               <div className="flex flex-col gap-1.5">
@@ -513,11 +647,13 @@ export function BuildSearchPage() {
                 <Label className="text-xs font-medium">
                   Current company — include (OR)
                 </Label>
-                <TagInput
+                <AutocompleteTagInput
                   aria-label="Current company include"
                   values={draft.currentCompaniesInclude ?? []}
                   onChange={(v) => set("currentCompaniesInclude", v)}
                   placeholder="e.g. Palo Alto Networks"
+                  autocompleteField={AC_FIELD_COMPANY}
+                  dataProvider={dataProvider}
                 />
               </div>
               <div className="flex flex-col gap-1.5">

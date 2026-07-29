@@ -2121,6 +2121,21 @@ const getDataProviderWithCustomMethods = () => {
       return data.config as ConfigurationContextValue;
     },
 
+    async autocompleteCrustdataField(
+      field: string,
+      query: string,
+      limit = 10,
+    ): Promise<string[]> {
+      const { data, error } = await getSupabaseClient().functions.invoke<{
+        suggestions: string[];
+      }>("search-crustdata-filters", {
+        method: "POST",
+        body: { mode: "autocomplete", field, query, limit },
+      });
+      if (!data || error) return [];
+      return data.suggestions ?? [];
+    },
+
     async searchCrustdataFilters(
       filterDraft: FilterDraft,
       limit?: number,

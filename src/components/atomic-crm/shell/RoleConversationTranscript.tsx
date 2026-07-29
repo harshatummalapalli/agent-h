@@ -1,5 +1,13 @@
 import { useGetList, useDataProvider, useNotify } from "ra-core";
 import { useState, useMemo } from "react";
+import {
+  MapPin,
+  CheckCircle2,
+  XCircle,
+  Circle,
+  ExternalLink,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
 import type { CrmDataProvider } from "../providers/types";
 import type { RoleConversationTurn } from "../types";
 import {
@@ -35,52 +43,43 @@ function CandidateCardTurn({
       )}
       {/* why_fit is always non-empty from the server; show it prominently */}
       {metadata.why_fit && (
-        <div className="text-xs text-muted-foreground italic">
+        <div className="text-xs text-foreground leading-relaxed">
           {metadata.why_fit}
         </div>
       )}
       {metadata.location_name && (
-        <div className="text-xs text-muted-foreground">
-          📍 {metadata.location_name}
+        <div className="text-xs text-muted-foreground flex items-center gap-1">
+          <MapPin className="h-3 w-3 shrink-0" />
+          {metadata.location_name}
         </div>
       )}
       {(() => {
         const normalized = normalizeLinkedinUrl(metadata.linkedin_url);
-        const href =
-          normalized ??
-          (metadata.linkedin_url
-            ? `https://${metadata.linkedin_url.replace(/^https?:\/\//i, "")}`
-            : null);
-        return href ? (
-          <a
-            href={href}
-            target="_blank"
-            rel="noreferrer"
-            className="text-xs text-blue-700 underline"
+        return normalized ? (
+          <Button
+            asChild
+            variant="outline"
+            size="sm"
+            className="h-6 text-xs px-2 gap-1 self-start"
           >
-            LinkedIn profile
-          </a>
+            <a href={normalized} target="_blank" rel="noreferrer">
+              <ExternalLink className="h-3 w-3" />
+              LinkedIn
+            </a>
+          </Button>
         ) : null;
       })()}
       {metadata.must_haves.length > 0 && (
         <ul className="flex flex-col gap-0.5 mt-0.5">
           {metadata.must_haves.map((m, i) => (
             <li key={i} className="text-xs flex items-center gap-1.5">
-              <span
-                className={
-                  m.status === "found"
-                    ? "text-green-600"
-                    : m.status === "inferred"
-                      ? "text-yellow-600"
-                      : "text-red-500"
-                }
-              >
-                {m.status === "found"
-                  ? "✓"
-                  : m.status === "inferred"
-                    ? "~"
-                    : "✗"}
-              </span>
+              {m.status === "found" ? (
+                <CheckCircle2 className="h-3 w-3 text-green-600 shrink-0" />
+              ) : m.status === "inferred" ? (
+                <Circle className="h-3 w-3 text-yellow-600 shrink-0" />
+              ) : (
+                <XCircle className="h-3 w-3 text-red-500 shrink-0" />
+              )}
               {m.label}
             </li>
           ))}
@@ -88,20 +87,22 @@ function CandidateCardTurn({
       )}
       {onAddToPipeline && (
         <div className="flex gap-2 mt-2">
-          <button
+          <Button
             type="button"
-            className="text-xs border rounded px-2 py-1 transition-colors text-blue-700 border-blue-200 bg-blue-50/60 hover:bg-blue-100 disabled:opacity-50"
+            variant="outline"
+            size="sm"
+            className="h-6 text-xs px-2"
             onClick={onAddToPipeline}
             disabled={
               pipelineSaveState === "saving" || pipelineSaveState === "saved"
             }
           >
             {pipelineSaveState === "saved"
-              ? "✓ Added to pipeline"
+              ? "Added to pipeline"
               : pipelineSaveState === "saving"
                 ? "Adding…"
-                : "+ Add to pipeline"}
-          </button>
+                : "Add to pipeline"}
+          </Button>
         </div>
       )}
     </li>
@@ -120,22 +121,26 @@ function BatchFooter({
   return (
     <div className="flex gap-2 flex-wrap pt-1 border-t border-dashed">
       {onCalibrationYes && (
-        <button
+        <Button
           type="button"
-          className="text-xs border rounded px-2 py-1 hover:bg-muted transition-colors text-green-700 border-green-200 bg-green-50/60"
+          variant="outline"
+          size="sm"
+          className="h-7 text-xs"
           onClick={onCalibrationYes}
         >
-          ✓ These look right — show more like this
-        </button>
+          These look right — show more like this
+        </Button>
       )}
       {onCalibrationNo && (
-        <button
+        <Button
           type="button"
-          className="text-xs border rounded px-2 py-1 hover:bg-muted transition-colors text-muted-foreground"
+          variant="ghost"
+          size="sm"
+          className="h-7 text-xs text-muted-foreground"
           onClick={onCalibrationNo}
         >
-          ✗ Not a fit
-        </button>
+          Not a fit
+        </Button>
       )}
     </div>
   );

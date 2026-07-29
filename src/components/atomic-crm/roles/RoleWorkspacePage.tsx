@@ -1415,22 +1415,21 @@ const RoleMemoryPanel = ({
   dealId,
   deal,
   pipelineCount,
-  onRefine,
-  commandBusy,
   onClose,
   lastBatch,
 }: {
   dealId: string;
   deal: Deal | undefined;
   pipelineCount: number;
-  onRefine: (text: string) => void;
-  commandBusy: boolean;
+  /** @deprecated Refine textarea removed — use command bar */
+  onRefine?: (text: string) => void;
+  /** @deprecated Refine textarea removed — use command bar */
+  commandBusy?: boolean;
   onClose: () => void;
   lastBatch: CalibrationBatch | null;
 }) => {
   const dataProvider = useDataProvider<CrmDataProvider>();
   const queryClient = useQueryClient();
-  const [refineText, setRefineText] = useState("");
 
   const { data: learnedCriteria = [], refetch: refetchCriteria } = useQuery({
     queryKey: ["role_brief_learned_criteria", dealId],
@@ -1459,13 +1458,6 @@ const RoleMemoryPanel = ({
     } catch {
       toast.error("Couldn't relax that criterion");
     }
-  };
-
-  const handleRefineSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!refineText.trim()) return;
-    onRefine(refineText.trim());
-    setRefineText("");
   };
 
   const dealRecord = deal as unknown as Record<string, unknown> | undefined;
@@ -1643,28 +1635,12 @@ const RoleMemoryPanel = ({
 
         <Separator />
 
-        {/* Refine input */}
+        {/* Refine hint — use the command bar below to adjust search criteria */}
         <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
-            Refine ideal candidate
+          <p className="text-xs text-muted-foreground">
+            To refine your search criteria, use the command bar — type what you
+            want to add, change, or exclude.
           </p>
-          <form onSubmit={handleRefineSubmit} className="flex flex-col gap-2">
-            <Textarea
-              placeholder="e.g. Must have led a team, fintech background preferred…"
-              rows={3}
-              className="text-xs resize-none"
-              value={refineText}
-              onChange={(e) => setRefineText(e.target.value)}
-            />
-            <Button
-              type="submit"
-              size="sm"
-              className="self-start text-xs"
-              disabled={!refineText.trim() || commandBusy}
-            >
-              Update criteria
-            </Button>
-          </form>
         </div>
       </div>
     </div>

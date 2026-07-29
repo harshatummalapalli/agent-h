@@ -11,7 +11,15 @@
 // No Deno-specific imports — pure, Vitest-testable.
 
 import { CRUSTDATA_FIELDS } from "./crustdataCapabilityManifest.ts";
-import type { SearchIntentCondition, VersionedSearchIntent, UnenforcedConstraint } from "./searchIntent.ts";
+import {
+  buildAllWordsCondition,
+  buildAllWordsOrGroup,
+} from "./crustdataAllWords.ts";
+import type {
+  SearchIntentCondition,
+  VersionedSearchIntent,
+  UnenforcedConstraint,
+} from "./searchIntent.ts";
 
 // ─── Re-exported types (callers can import from here) ─────────────────────────
 
@@ -29,7 +37,7 @@ export type CrustdataGroup = {
 export type CrustdataFilters = CrustdataCondition | CrustdataGroup;
 
 export type ValidatorResult = {
-  filters: CrustdataGroup | null;     // null when nothing is enforceable
+  filters: CrustdataGroup | null; // null when nothing is enforceable
   unenforceable: UnenforcedConstraint[];
 };
 
@@ -43,7 +51,7 @@ const COMPANY_ACRONYMS: Record<string, string[]> = {
   MAMAA: ["Meta", "Apple", "Microsoft", "Amazon", "Alphabet"],
   MANGA: ["Meta", "Apple", "Netflix", "Google", "Amazon"],
   GAFAM: ["Google", "Apple", "Facebook", "Amazon", "Microsoft"],
-  FANG:  ["Facebook", "Amazon", "Netflix", "Google"],
+  FANG: ["Facebook", "Amazon", "Netflix", "Google"],
 };
 
 /** Expand an acronym to real company names. Returns [value] unchanged if not an acronym. */
@@ -68,26 +76,35 @@ function looksLikeRecencyConstraint(value: string): boolean {
 
 // ─── Condition assemblers ─────────────────────────────────────────────────────
 
-/** Decompose a phrase into 2-word shingles (mirrors crustdataQueryBuilder). */
+/**
+ * Expand a phrase into atomic alternatives for `(.)` matching.
+ * Retained name for call-site compatibility; no longer shingles —
+ * delegates to compound-separator split only via buildContains.
+ * Prefer buildAllWordsCondition for new code.
+ */
 function decomposePhrase(phrase: string, maxTerms = 6): string[] {
-  const words = phrase.trim().split(/\s+/).filter(Boolean);
-  if (words.length <= 2) return words.length > 0 ? [phrase.trim()] : [];
-  const shingles = new Set<string>();
-  for (let i = 0; i + 2 <= words.length; i++) {
-    shingles.add(`${words[i]} ${words[i + 1]}`);
-  }
-  return Array.from(shingles).slice(0, maxTerms);
+  // Split slash/pipe/ampersand/comma compounds into alternatives; keep each
+  // full phrase (live 2026-07-29: shingle-OR over-broadened titles).
+  const parts = phrase
+    .split(/[/|&,]|\bor\b|\band\b/i)
+    .map((t) => t.trim())
+    .filter((t) => t.length > 0);
+  return Array.from(new Set(parts)).slice(0, maxTerms);
 }
 
-/** Build a contains condition (or OR-group for multi-term phrases). */
-function buildContains(field: string, phrase: string): CrustdataCondition | CrustdataGroup | null {
+/** Build a contains condition via shared all-words helper (full phrase, no shingle OR). */
+function buildContains(
+  field: string,
+  phrase: string,
+): CrustdataCondition | CrustdataGroup | null {
   const terms = decomposePhrase(phrase);
-  if (terms.length === 0) return null;
-  if (terms.length === 1) return { field, type: "(.)", value: terms[0] };
-  return {
-    op: "or",
-    conditions: terms.map((t) => ({ field, type: "(.)", value: t }) as CrustdataCondition),
-  };
+  if (terms.length === 0) {
+    return buildAllWordsCondition(field, phrase) as CrustdataCondition | null;
+  }
+  return buildAllWordsOrGroup(field, terms) as
+    | CrustdataCondition
+    | CrustdataGroup
+    | null;
 }
 
 /** Build a not-contains condition for a keyword. */
@@ -100,8 +117,18 @@ function buildExperienceRange(value: string): CrustdataCondition[] {
   const minMatch = value.match(/min:(\d+)/i) || value.match(/^(\d+)-/);
   const maxMatch = value.match(/max:(\d+)/i) || value.match(/-(\d+)$/);
   const conditions: CrustdataCondition[] = [];
-  if (minMatch) conditions.push({ field: CRUSTDATA_FIELDS.yearsOfExperience, type: "=>", value: Number(minMatch[1]) });
-  if (maxMatch) conditions.push({ field: CRUSTDATA_FIELDS.yearsOfExperience, type: "=<", value: Number(maxMatch[1]) });
+  if (minMatch)
+    conditions.push({
+      field: CRUSTDATA_FIELDS.yearsOfExperience,
+      type: "=>",
+      value: Number(minMatch[1]),
+    });
+  if (maxMatch)
+    conditions.push({
+      field: CRUSTDATA_FIELDS.yearsOfExperience,
+      type: "=<",
+      value: Number(maxMatch[1]),
+    });
   return conditions;
 }
 
@@ -111,7 +138,8 @@ function buildExperienceRange(value: string): CrustdataCondition[] {
 function routePrefer(cond: SearchIntentCondition): UnenforcedConstraint {
   return {
     description: `Prefer ${cond.category}: "${cond.value}"`,
-    reason: "Crustdata only supports hard AND/OR filters; 'prefer' (soft/ranking) cannot be expressed as a filter. This will inform why-fit scoring instead.",
+    reason:
+      "Crustdata only supports hard AND/OR filters; 'prefer' (soft/ranking) cannot be expressed as a filter. This will inform why-fit scoring instead.",
   };
 }
 
@@ -119,9 +147,13 @@ function routePrefer(cond: SearchIntentCondition): UnenforcedConstraint {
  * Validate and assemble a VersionedSearchIntent into a Crustdata filter tree.
  * Enforceable conditions → filters. Non-filterable → unenforceable list.
  */
-export function validateAndAssembleIntent(intent: VersionedSearchIntent): ValidatorResult {
+export function validateAndAssembleIntent(
+  intent: VersionedSearchIntent,
+): ValidatorResult {
   const assembled: Array<CrustdataCondition | CrustdataGroup> = [];
-  const unenforceable: UnenforcedConstraint[] = [...intent.unenforceable_constraints];
+  const unenforceable: UnenforcedConstraint[] = [
+    ...intent.unenforceable_constraints,
+  ];
 
   for (const cond of intent.conditions) {
     // All "prefer" conditions are inherently unenforceable as hard filters.
@@ -136,10 +168,18 @@ export function validateAndAssembleIntent(intent: VersionedSearchIntent): Valida
       case "seniority": {
         if (isExclude) {
           // Exclude seniority: not-contains on seniority_level field.
-          assembled.push(buildNotContains(CRUSTDATA_FIELDS.currentSeniorityLevel, cond.value));
+          assembled.push(
+            buildNotContains(
+              CRUSTDATA_FIELDS.currentSeniorityLevel,
+              cond.value,
+            ),
+          );
         } else {
           // Require seniority: fuzzy contains (vocabulary unconfirmed, see manifest).
-          const c = buildContains(CRUSTDATA_FIELDS.currentSeniorityLevel, cond.value);
+          const c = buildContains(
+            CRUSTDATA_FIELDS.currentSeniorityLevel,
+            cond.value,
+          );
           if (c) assembled.push(c);
         }
         break;
@@ -149,19 +189,26 @@ export function validateAndAssembleIntent(intent: VersionedSearchIntent): Valida
         const companies = expandCompanyAcronym(cond.value);
         if (isExclude) {
           for (const company of companies) {
-            assembled.push(buildNotContains(CRUSTDATA_FIELDS.currentCompanyName, company));
+            assembled.push(
+              buildNotContains(CRUSTDATA_FIELDS.currentCompanyName, company),
+            );
           }
         } else {
-          const groups = companies.map((c) => buildContains(CRUSTDATA_FIELDS.currentCompanyName, c)).filter(Boolean) as Array<CrustdataCondition | CrustdataGroup>;
+          const groups = companies
+            .map((c) => buildContains(CRUSTDATA_FIELDS.currentCompanyName, c))
+            .filter(Boolean) as Array<CrustdataCondition | CrustdataGroup>;
           if (groups.length === 1) assembled.push(groups[0]);
-          else if (groups.length > 1) assembled.push({ op: "or", conditions: groups });
+          else if (groups.length > 1)
+            assembled.push({ op: "or", conditions: groups });
         }
         break;
       }
 
       case "title": {
         if (isExclude) {
-          assembled.push(buildNotContains(CRUSTDATA_FIELDS.currentTitle, cond.value));
+          assembled.push(
+            buildNotContains(CRUSTDATA_FIELDS.currentTitle, cond.value),
+          );
         } else {
           const c = buildContains(CRUSTDATA_FIELDS.currentTitle, cond.value);
           if (c) assembled.push(c);
@@ -174,7 +221,8 @@ export function validateAndAssembleIntent(intent: VersionedSearchIntent): Valida
         if (looksLikeRecencyConstraint(cond.value)) {
           unenforceable.push({
             description: `${isExclude ? "Exclude" : "Require"} skill with recency: "${cond.value}"`,
-            reason: "Crustdata has no skill-date or recency field. Only skill presence/absence can be filtered.",
+            reason:
+              "Crustdata has no skill-date or recency field. Only skill presence/absence can be filtered.",
           });
           break;
         }
@@ -192,7 +240,8 @@ export function validateAndAssembleIntent(intent: VersionedSearchIntent): Valida
         if (rangeConds.length === 0) {
           unenforceable.push({
             description: `Experience range: "${cond.value}"`,
-            reason: "Could not parse experience range. Use format: 'min:N', 'max:N', or 'N-M'.",
+            reason:
+              "Could not parse experience range. Use format: 'min:N', 'max:N', or 'N-M'.",
           });
         } else {
           assembled.push(...rangeConds);
@@ -202,16 +251,22 @@ export function validateAndAssembleIntent(intent: VersionedSearchIntent): Valida
 
       case "location": {
         // Route to either country (exact) or city (contains).
-        const lower = cond.value.toLowerCase().trim();
         if (isExclude) {
           // Location excludes are unusual but supported via not-contains on city.
-          assembled.push(buildNotContains(CRUSTDATA_FIELDS.locationCity, cond.value));
+          assembled.push(
+            buildNotContains(CRUSTDATA_FIELDS.locationCity, cond.value),
+          );
         } else {
           // Simple heuristic: short values (1-2 words, no comma) that are known
           // country aliases use the country field; others use city contains.
-          const isCountryLike = !cond.value.includes(",") && cond.value.split(/\s+/).length <= 3;
+          const isCountryLike =
+            !cond.value.includes(",") && cond.value.split(/\s+/).length <= 3;
           if (isCountryLike) {
-            assembled.push({ field: CRUSTDATA_FIELDS.locationCountry, type: "=", value: cond.value.trim() });
+            assembled.push({
+              field: CRUSTDATA_FIELDS.locationCountry,
+              type: "=",
+              value: cond.value.trim(),
+            });
           } else {
             const c = buildContains(CRUSTDATA_FIELDS.locationCity, cond.value);
             if (c) assembled.push(c);
@@ -224,7 +279,8 @@ export function validateAndAssembleIntent(intent: VersionedSearchIntent): Valida
       default: {
         unenforceable.push({
           description: `${isExclude ? "Exclude" : "Require"} (other): "${cond.value}"`,
-          reason: "Condition category 'other' cannot be mapped to a Crustdata field.",
+          reason:
+            "Condition category 'other' cannot be mapped to a Crustdata field.",
         });
         break;
       }

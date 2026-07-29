@@ -10,9 +10,10 @@
 // Re-uses CRUSTDATA_FIELDS from the capability manifest.
 //
 // Title matching: Crustdata `(.)` is case-insensitive ALL-WORDS (every word must
-// appear, any order). We send each user title as one full-phrase condition —
-// NOT 2-word shingle ORs. Shingle-OR turned "AI Software Engineer" into
-// ("AI Software" OR "Software Engineer"), which matched every Software Engineer.
+// appear, any order). Shared helper: crustdataAllWords.buildAllWordsCondition —
+// full phrase as one `(.)`, never 2-word shingle OR. Live compare 2026-07-29
+// ("Machine Learning Engineer"): full-phrase 65,685 relevant vs shingle-OR
+// 102,862 over-broad (Heads/Founders).
 //
 // Multi-value boolean semantics (documented in UI helper text):
 //   currentTitlesInclude   — OR (any matching title counts)
@@ -37,6 +38,11 @@
 
 import { CRUSTDATA_FIELDS } from "./crustdataCapabilityManifest.ts";
 import { COUNTRY_ALIASES } from "./crustdataClient.ts";
+import {
+  buildAllWordsCondition,
+  buildAllWordsOrGroup,
+  normalizeAllWordsPhrase,
+} from "./crustdataAllWords.ts";
 
 // ─── Re-exported types (callers use these, avoids duplicate declarations) ─────
 
@@ -241,14 +247,8 @@ export type FilterDraft = {
 
 // ─── Phrase helpers ───────────────────────────────────────────────────────────
 
-/** Normalize a user phrase: strip & punctuation noise, collapse whitespace. */
-function normalizePhrase(raw: string): string {
-  return raw
-    .trim()
-    .replace(/\s*&\s*/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
+// normalizePhrase / contains for (.) delegate to crustdataAllWords (live-verified
+// full-phrase all-words strategy). Skill chip expansion stays local.
 
 /**
  * Expand a skill chip into OR alternatives Crustdata is likely to index.
@@ -300,7 +300,13 @@ function expandSkillAlternatives(raw: string): string[] {
 // ─── Condition builders ───────────────────────────────────────────────────────
 
 function contains(field: string, value: string): CrustdataCondition {
-  return { field, type: "(.)", value };
+  return (
+    buildAllWordsCondition(field, value) ?? {
+      field,
+      type: "(.)",
+      value: normalizeAllWordsPhrase(value),
+    }
+  );
 }
 
 function notContains(field: string, value: string): CrustdataCondition {
@@ -339,14 +345,17 @@ function phraseOrGroup(
   terms: string[],
   matchType: "(.)" | "[.]" = "(.)",
 ): CrustdataCondition | CrustdataGroup | null {
-  const cleaned = terms.map(normalizePhrase).filter(Boolean);
-  if (cleaned.length === 0) return null;
   if (matchType === "[.]") {
+    const cleaned = terms.map(normalizeAllWordsPhrase).filter(Boolean);
+    if (cleaned.length === 0) return null;
     return orGroup(
       cleaned.map((t) => ({ field, type: "[.]" as const, value: t })),
     );
   }
-  return orGroup(cleaned.map((t) => contains(field, t)));
+  return buildAllWordsOrGroup(field, terms) as
+    | CrustdataCondition
+    | CrustdataGroup
+    | null;
 }
 
 /**
@@ -477,7 +486,7 @@ export function compileFilterDraft(draft: FilterDraft): CompileResult {
   // ── Location: single city (legacy) ──────────────────────────────────────
   const city = draft.locationCity?.trim();
   if (city && cities.length === 0) {
-    const normalized = normalizePhrase(city);
+    const normalized = normalizeAllWordsPhrase(city);
     if (normalized) {
       topLevel.push(contains(CRUSTDATA_FIELDS.locationCity, normalized));
       appliedGroups.push("city");

@@ -11,6 +11,11 @@ import {
   classifyPlace,
   parseLocationForFilter,
 } from "../_shared/crustdataClient.ts";
+import {
+  buildAllWordsCondition,
+  buildAllWordsOrGroup,
+  normalizeAllWordsPhrase,
+} from "../_shared/crustdataAllWords.ts";
 //
 // Crustdata second-provider addition (2026-07-23): added alongside the
 // existing coresignalProvider so the platform can switch or fall back
@@ -156,7 +161,6 @@ export const SENIORITY_TO_CRUSTDATA_TERMS: Record<string, string[] | null> = {
 };
 
 const MAX_DECOMPOSED_TERMS = 6;
-const SHINGLE_SIZE = 2;
 // How many of the required skills BEYOND the top one become the "at least
 // one of these" OR-group described in buildCrustdataFilters' skills section
 // below -- named to avoid a repeated magic "3" at each of its two use sites.
@@ -173,93 +177,57 @@ function splitCompoundPhrase(phrase: string): string[] {
     .filter((t) => t.length > 0);
 }
 
-// Critical gotcha fix (confirmed by live Crustdata testing this session,
-// not a guess): Crustdata's "(.)" operator does LITERAL, non-word-split
-// phrase matching per OR-alternative -- a value like "AI Engineer|.NET AI|
-// Azure OpenAI Engineer" returned 0 results even though relevant candidates
-// exist, because none of those exact 3-word phrases appear verbatim in
-// indexed titles. "AI Engineer" alone (2 words, a common phrase) returned
-// real, correct matches in the same test. This is the Crustdata analog of
-// buildCoresignalSkillClause's "/"-splitting in index.ts -- same underlying
-// problem (a long, over-specific phrase never appears verbatim in real
-// profile text), a different fix shape because "(.)" has no ES-style
-// "operator: and" word-matching mode to fall back on.
+// Expand a user/JD phrase into atomic alternative phrases for `(.)` matching.
 //
-// Fix: any candidate phrase longer than SHINGLE_SIZE words is broken into
-// overlapping SHINGLE_SIZE-word shingles ("Azure OpenAI Engineer" ->
-// ["Azure OpenAI", "OpenAI Engineer"]) rather than kept as one long literal
-// phrase or blown out to single words (single words are usually too broad --
-// "Engineer" alone would match almost anyone). Short phrases (<= SHINGLE_SIZE
-// words) are kept as-is, matching the "AI Engineer" case that worked.
-// Deliberately tuned by the same trial-and-error discipline as Coresignal's
-// majority-match fraction (CORESIGNAL_TOP_SKILLS_MAJORITY_FRACTION in
-// index.ts) -- SHINGLE_SIZE=2 is the smallest window that reproduces the
-// live-confirmed "AI Engineer" success case; a future calibration pass
-// against real Crustdata result counts (the same kind of tuning that
-// produced Coresignal's 0.6 majority fraction) may adjust this further.
+// Live comparison 2026-07-29 (Machine Learning Engineer): full-phrase `(.)`
+// beat 2-word shingle OR (65k relevant vs 102k over-broad). So we NO LONGER
+// shingle. We only split compound separators ("AWS/Azure", "A|B") into
+// separate full phrases that the caller OR-groups.
+//
+// `shingleSize` is retained for signature compatibility but ignored.
 export function decomposeSearchPhrase(
   phrase: string,
   maxTerms: number = MAX_DECOMPOSED_TERMS,
-  shingleSize: number = SHINGLE_SIZE,
+  _shingleSize?: number,
 ): string[] {
-  const variants = splitCompoundPhrase(phrase);
   const terms = new Set<string>();
-
-  for (const variant of variants) {
-    const words = variant.split(/\s+/).filter((w) => w.length > 0);
-    if (words.length <= shingleSize) {
-      if (words.length > 0) terms.add(words.join(" "));
-      continue;
-    }
-    for (let i = 0; i + shingleSize <= words.length; i++) {
-      terms.add(words.slice(i, i + shingleSize).join(" "));
-    }
+  for (const variant of splitCompoundPhrase(phrase)) {
+    const normalized = normalizeAllWordsPhrase(variant);
+    if (normalized) terms.add(normalized);
   }
-
   return Array.from(terms).slice(0, maxTerms);
 }
 
-// Builds one or more "(.)" conditions from phrases, decomposing each phrase
-// first (see decomposeSearchPhrase). Returns a single condition when there is
-// only one term; otherwise an explicit OR-group -- never a pipe-joined value
-// inside one condition (live bisection 2026-07-24: pipe-joining multiple title
-// alternatives collapsed ANDed searches to zero even when each term alone
-// matches millions of profiles).
+// Builds one or more `(.)` conditions from phrases via the shared all-words
+// helper. Each phrase is sent whole (no shingle OR, no pipe-join). Multiple
+// alternatives → explicit OR-group.
 export function buildContainsOrGroupFromPhrases(
   field: string,
   phrases: string[],
 ): CrustdataFilterCondition | CrustdataFilterGroup | null {
   const allTerms = phrases.flatMap((p) => decomposeSearchPhrase(p));
-  const deduped = Array.from(new Set(allTerms)).filter((t) => t.length > 0);
-  if (deduped.length === 0) return null;
-
-  const conditions: CrustdataFilterCondition[] = deduped.map((value) => ({
-    field,
-    type: "(.)",
-    value,
-  }));
-
-  if (conditions.length === 1) return conditions[0];
-  return { op: "or", conditions };
+  return buildAllWordsOrGroup(field, allTerms) as
+    | CrustdataFilterCondition
+    | CrustdataFilterGroup
+    | null;
 }
 
-// Builds a single "(.)" condition for one source phrase. When decomposeSearchPhrase
-// yields multiple shingles for that phrase, they are OR-joined with "|" inside the
-// value (safe for a single logical phrase). For multiple alternative phrases
-// (expanded title synonyms, seniority aliases), use buildContainsOrGroupFromPhrases.
+// Builds `(.)` condition(s) for one source phrase. Compound separators inside
+// the phrase become an OR-group of full-phrase conditions (never pipe-joined —
+// pipe is AND-of-words per Crustdata docs). For multiple alternative phrases
+// (expanded title synonyms), use buildContainsOrGroupFromPhrases.
 export function buildContainsCondition(
   field: string,
   phrases: string[],
-): CrustdataFilterCondition | null {
+): CrustdataFilterCondition | CrustdataFilterGroup | null {
   if (phrases.length !== 1) return null;
   const terms = decomposeSearchPhrase(phrases[0]);
-  const deduped = Array.from(new Set(terms)).filter((t) => t.length > 0);
-  if (deduped.length === 0) return null;
-  return {
-    field,
-    type: "(.)",
-    value: deduped.slice(0, MAX_DECOMPOSED_TERMS).join("|"),
-  };
+  if (terms.length === 0) return null;
+  if (terms.length === 1) return buildAllWordsCondition(field, terms[0]);
+  return buildAllWordsOrGroup(field, terms) as
+    | CrustdataFilterCondition
+    | CrustdataFilterGroup
+    | null;
 }
 
 // "(!)" excludes rows whose value contains this substring (case-insensitive,
@@ -331,7 +299,7 @@ export function buildCrustdataFilters(
       conditions.push(titleFilter);
       if (criteria.titles.length > 1) {
         notes.push(
-          `Searching ${criteria.titles.length} equivalent titles: ${criteria.titles.join(", ")} (each decomposed into shorter literal phrases and combined as an OR-group -- contains-match only matches exact phrases, not word-split text; see decomposeSearchPhrase).`,
+          `Searching ${criteria.titles.length} equivalent titles: ${criteria.titles.join(", ")} (each sent as a full-phrase (.) all-words condition and OR-grouped — see crustdataAllWords / decomposeSearchPhrase).`,
         );
       } else {
         notes.push(`Requiring title match: "${criteria.titles[0]}".`);

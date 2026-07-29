@@ -2,13 +2,14 @@
 // Vendor names (crustdata, unipile, exa, etc.) are never shown to recruiters —
 // raw source values are kept in the DB but mapped to friendly labels here.
 import { useState } from "react";
-import { useGetList, useRecordContext } from "ra-core";
+import { useGetList, useGetMany, useRecordContext } from "ra-core";
 import { ExternalLink, ChevronDown, ChevronUp, Briefcase } from "lucide-react";
 import { Show } from "@/components/admin/show";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import type { Candidate, DealCandidate } from "../types";
+import { normalizeLinkedinUrl } from "../misc/normalizeLinkedinUrl";
+import type { Candidate, Deal, DealCandidate } from "../types";
 
 const FRIENDLY_SOURCE: Record<string, string> = {
   crustdata: "Web search",
@@ -76,7 +77,10 @@ const DevProfileSection = ({ record }: { record: Candidate }) => {
         <div className="px-4 pb-4 flex flex-col gap-2 border-t">
           {hasGitHub && (
             <a
-              href={record.github_url ?? `https://github.com/${record.github_username}`}
+              href={
+                record.github_url ??
+                `https://github.com/${record.github_username}`
+              }
               target="_blank"
               rel="noreferrer"
               className="flex items-center gap-1.5 text-sm text-blue-700 hover:underline mt-3"
@@ -102,12 +106,26 @@ const DevProfileSection = ({ record }: { record: Candidate }) => {
   );
 };
 
-const PipelineRolesSection = ({ candidateId }: { candidateId: string | number }) => {
+const PipelineRolesSection = ({
+  candidateId,
+}: {
+  candidateId: string | number;
+}) => {
   const { data: links } = useGetList<DealCandidate>("deal_candidates", {
     filter: { candidate_id: candidateId },
     sort: { field: "created_at", order: "DESC" },
     pagination: { page: 1, perPage: 10 },
   });
+  const dealIds = links?.map((l) => l.deal_id).filter(Boolean) ?? [];
+  const { data: deals } = useGetMany<Deal>(
+    "deals",
+    { ids: dealIds },
+    { enabled: dealIds.length > 0 },
+  );
+  const dealMap = Object.fromEntries(
+    (deals ?? []).map((d) => [String(d.id), d.name]),
+  );
+
   if (!links?.length) return null;
 
   return (
@@ -116,17 +134,32 @@ const PipelineRolesSection = ({ candidateId }: { candidateId: string | number })
         Pipeline roles
       </p>
       <div className="flex flex-col gap-1">
-        {links.map((link) => (
-          <div key={link.id} className="flex items-center gap-2 text-sm">
-            <Briefcase className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-            <span className="text-muted-foreground">Role #{link.deal_id}</span>
-            {link.match_score != null && (
-              <Badge variant="outline" className="text-xs py-0">
-                {Math.round(link.match_score * 100)}% match
-              </Badge>
-            )}
-          </div>
-        ))}
+        {links.map((link) => {
+          const roleName =
+            dealMap[String(link.deal_id)] ?? `Role #${link.deal_id}`;
+          const whyFit = (link as Record<string, unknown>).why_fit as
+            | string
+            | null
+            | undefined;
+          return (
+            <div key={link.id} className="flex flex-col gap-0.5">
+              <div className="flex items-center gap-2 text-sm">
+                <Briefcase className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                <span className="font-medium">{roleName}</span>
+                {link.match_score != null && (
+                  <Badge variant="outline" className="text-xs py-0">
+                    {Math.round(link.match_score * 100)}% match
+                  </Badge>
+                )}
+              </div>
+              {whyFit && (
+                <p className="text-xs text-foreground pl-5 leading-relaxed">
+                  {whyFit}
+                </p>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -136,24 +169,38 @@ const CandidateShowContent = () => {
   const record = useRecordContext<Candidate>();
   if (!record) return null;
 
-  const name = [record.first_name, record.last_name].filter(Boolean).join(" ") || "Candidate";
+  const name =
+    [record.first_name, record.last_name].filter(Boolean).join(" ") ||
+    "Candidate";
   const subtitle = [record.current_title].filter(Boolean).join(" ");
   const sourceLabel = friendlySource(record.source);
-  const resumeStatus = (record as Record<string, unknown>).resume_status as string | null | undefined;
-  const whyFit = (record as Record<string, unknown>).why_fit as string | null | undefined;
-  const skills = (record as Record<string, unknown>).skills as string[] | null | undefined;
-  const location = (record as Record<string, unknown>).location as string | null | undefined;
+  const resumeStatus = (record as Record<string, unknown>).resume_status as
+    | string
+    | null
+    | undefined;
+  const whyFit = (record as Record<string, unknown>).why_fit as
+    | string
+    | null
+    | undefined;
+  const skills = (record as Record<string, unknown>).skills as
+    | string[]
+    | null
+    | undefined;
+  const location = (record as Record<string, unknown>).location as
+    | string
+    | null
+    | undefined;
 
   return (
     <div className="max-w-2xl flex flex-col gap-6">
       {/* Hero: name + headline */}
       <div>
         <h1 className="text-2xl font-bold tracking-tight">{name}</h1>
-        {subtitle && (
-          <p className="text-muted-foreground mt-1">{subtitle}</p>
-        )}
+        {subtitle && <p className="text-muted-foreground mt-1">{subtitle}</p>}
         {location && (
-          <p className="text-sm text-muted-foreground mt-0.5">{location as string}</p>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            {location as string}
+          </p>
         )}
         <div className="flex items-center gap-2 mt-3 flex-wrap">
           <Badge variant="secondary" className="text-xs">
@@ -165,7 +212,10 @@ const CandidateShowContent = () => {
             </Badge>
           )}
           {resumeStatus === "received" && (
-            <Badge variant="outline" className="text-xs border-green-300 text-green-700 bg-green-50">
+            <Badge
+              variant="outline"
+              className="text-xs border-green-300 text-green-700 bg-green-50"
+            >
               Resume received
             </Badge>
           )}
@@ -173,11 +223,11 @@ const CandidateShowContent = () => {
       </div>
 
       {/* LinkedIn CTA */}
-      {record.linkedin_url && (
+      {normalizeLinkedinUrl(record.linkedin_url) && (
         <div>
           <Button asChild variant="outline" size="sm" className="gap-2">
             <a
-              href={record.linkedin_url.startsWith("http") ? record.linkedin_url : `https://${record.linkedin_url}`}
+              href={normalizeLinkedinUrl(record.linkedin_url)!}
               target="_blank"
               rel="noreferrer"
             >
@@ -224,7 +274,9 @@ const CandidateShowContent = () => {
 
       {/* Resume / contact status (minimal) */}
       {record.contact_enrichment_status === "enriched" && (
-        <p className="text-xs text-muted-foreground">Contact details available</p>
+        <p className="text-xs text-muted-foreground">
+          Contact details available
+        </p>
       )}
     </div>
   );

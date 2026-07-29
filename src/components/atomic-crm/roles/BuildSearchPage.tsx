@@ -11,7 +11,6 @@ import { useDataProvider, useGetOne } from "ra-core";
 import { useMutation } from "@tanstack/react-query";
 import { useSearchParams } from "react-router";
 import {
-  ExternalLink,
   Search,
   X,
   Plus,
@@ -30,6 +29,7 @@ import {
   dealBriefToDraft,
   type DealBriefFields,
 } from "./BuildSearchTab";
+import { CandidateCard } from "./CandidateCard";
 
 // Autocomplete field paths (mirrors crustdataCapabilityManifest CRUSTDATA_FIELDS)
 const AC_FIELD_TITLE = "experience.employment_details.current.title";
@@ -296,57 +296,17 @@ type SearchCandidate = {
 };
 
 function CandidateRow({ c }: { c: SearchCandidate }) {
-  const linkedinHref = c.linkedin_url
-    ? c.linkedin_url.startsWith("http")
-      ? c.linkedin_url
-      : `https://www.${c.linkedin_url.replace(/^www\./, "")}`
-    : null;
-
+  const headline =
+    [c.job_title, c.job_company_name].filter(Boolean).join(" · ") || undefined;
   return (
-    <div className="flex items-start justify-between gap-4 py-3 border-b border-border last:border-0">
-      <div className="flex flex-col gap-0.5 min-w-0">
-        <span className="text-sm font-medium truncate">
-          {c.full_name ?? "—"}
-        </span>
-        <span className="text-xs text-muted-foreground truncate">
-          {[c.job_title, c.job_company_name].filter(Boolean).join(" · ") || "—"}
-        </span>
-        {c.location_name && (
-          <span className="text-xs text-muted-foreground truncate">
-            {c.location_name}
-          </span>
-        )}
-        {c.skills && c.skills.length > 0 && (
-          <div className="flex flex-wrap gap-1 mt-1">
-            {c.skills.slice(0, 5).map((s) => (
-              <Badge
-                key={s}
-                variant="outline"
-                className="text-[10px] py-0 px-1.5 h-4"
-              >
-                {s}
-              </Badge>
-            ))}
-            {c.skills.length > 5 && (
-              <span className="text-[10px] text-muted-foreground">
-                +{c.skills.length - 5}
-              </span>
-            )}
-          </div>
-        )}
-      </div>
-      {linkedinHref && (
-        <a
-          href={linkedinHref}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="shrink-0 text-muted-foreground hover:text-foreground"
-          aria-label="Open LinkedIn profile"
-        >
-          <ExternalLink className="h-4 w-4" />
-        </a>
-      )}
-    </div>
+    <CandidateCard
+      density="row"
+      name={c.full_name ?? "—"}
+      headline={headline}
+      location={c.location_name}
+      linkedinUrl={c.linkedin_url}
+      skills={c.skills}
+    />
   );
 }
 

@@ -1,12 +1,5 @@
 import { useGetList, useDataProvider, useNotify } from "ra-core";
 import { useState, useMemo } from "react";
-import {
-  MapPin,
-  CheckCircle2,
-  XCircle,
-  Circle,
-  ExternalLink,
-} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { CrmDataProvider } from "../providers/types";
 import type { RoleConversationTurn } from "../types";
@@ -15,7 +8,7 @@ import {
   isPendingTier3Proposal,
 } from "./agentActionTiers";
 import { PendingApprovalCard } from "./PendingApprovalCard";
-import { normalizeLinkedinUrl } from "../misc/normalizeLinkedinUrl";
+import { CandidateCard } from "../roles/CandidateCard";
 
 // Loop B calibration: inline candidate card — pipeline action only.
 // Yes / Not-a-fit appears once as a BatchFooter after the latest batch.
@@ -29,82 +22,19 @@ function CandidateCardTurn({
   pipelineSaveState?: "idle" | "saving" | "saved";
 }) {
   return (
-    <li className="border rounded-md p-3 flex flex-col gap-1.5 text-sm bg-muted/20">
-      <div className="font-medium flex items-center gap-2 flex-wrap">
-        {metadata.name}
-        {metadata.match_score != null && (
-          <span className="text-xs font-normal text-muted-foreground border rounded px-1.5 py-0.5">
-            Match {Math.round(metadata.match_score * 100)}%
-          </span>
-        )}
-      </div>
-      {metadata.headline && (
-        <div className="text-xs text-muted-foreground">{metadata.headline}</div>
-      )}
-      {/* why_fit is always non-empty from the server; show it prominently */}
-      {metadata.why_fit && (
-        <div className="text-xs text-foreground leading-relaxed">
-          {metadata.why_fit}
-        </div>
-      )}
-      {metadata.location_name && (
-        <div className="text-xs text-muted-foreground flex items-center gap-1">
-          <MapPin className="h-3 w-3 shrink-0" />
-          {metadata.location_name}
-        </div>
-      )}
-      {(() => {
-        const normalized = normalizeLinkedinUrl(metadata.linkedin_url);
-        return normalized ? (
-          <Button
-            asChild
-            variant="outline"
-            size="sm"
-            className="h-6 text-xs px-2 gap-1 self-start"
-          >
-            <a href={normalized} target="_blank" rel="noreferrer">
-              <ExternalLink className="h-3 w-3" />
-              LinkedIn
-            </a>
-          </Button>
-        ) : null;
-      })()}
-      {metadata.must_haves.length > 0 && (
-        <ul className="flex flex-col gap-0.5 mt-0.5">
-          {metadata.must_haves.map((m, i) => (
-            <li key={i} className="text-xs flex items-center gap-1.5">
-              {m.status === "found" ? (
-                <CheckCircle2 className="h-3 w-3 text-green-600 shrink-0" />
-              ) : m.status === "inferred" ? (
-                <Circle className="h-3 w-3 text-yellow-600 shrink-0" />
-              ) : (
-                <XCircle className="h-3 w-3 text-red-500 shrink-0" />
-              )}
-              {m.label}
-            </li>
-          ))}
-        </ul>
-      )}
-      {onAddToPipeline && (
-        <div className="flex gap-2 mt-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="h-6 text-xs px-2"
-            onClick={onAddToPipeline}
-            disabled={
-              pipelineSaveState === "saving" || pipelineSaveState === "saved"
-            }
-          >
-            {pipelineSaveState === "saved"
-              ? "Added to pipeline"
-              : pipelineSaveState === "saving"
-                ? "Adding…"
-                : "Add to pipeline"}
-          </Button>
-        </div>
-      )}
+    <li>
+      <CandidateCard
+        density="queue"
+        name={metadata.name}
+        headline={metadata.headline}
+        location={metadata.location_name}
+        fitScore={metadata.match_score}
+        whyFit={metadata.why_fit}
+        mustHaves={metadata.must_haves}
+        linkedinUrl={metadata.linkedin_url}
+        onAddToPipeline={onAddToPipeline}
+        pipelineSaveState={pipelineSaveState}
+      />
     </li>
   );
 }

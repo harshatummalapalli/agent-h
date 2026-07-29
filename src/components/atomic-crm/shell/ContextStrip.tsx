@@ -8,7 +8,7 @@ export const ContextStrip = ({ context }: ContextStripProps) => {
   const blockerLine =
     context.blockers.length > 0
       ? context.blockers.join(" · ")
-      : "Nothing blocking you right now.";
+      : "All good — no open actions";
 
   return (
     <div

@@ -1270,9 +1270,7 @@ const RoleSettingsDialog = ({
   open: boolean;
   onOpenChange: (v: boolean) => void;
 }) => {
-  const [section, setSection] = useState<"coordinator" | "autopilot">(
-    "coordinator",
-  );
+  const [section, setSection] = useState<"coordinator">("coordinator");
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -1286,7 +1284,7 @@ const RoleSettingsDialog = ({
             {(
               [
                 { key: "coordinator", label: "Coordinator" },
-                { key: "autopilot", label: "Autopilot" },
+                // Autopilot is not yet a live feature — hidden from nav
               ] as const
             ).map(({ key, label }) => (
               <button
@@ -1310,7 +1308,6 @@ const RoleSettingsDialog = ({
             {section === "coordinator" && (
               <CoordinatorSettings dealId={dealId} />
             )}
-            {section === "autopilot" && <AutopilotSettings />}
           </div>
         </div>
       </DialogContent>
@@ -1409,28 +1406,6 @@ const CoordinatorSettings = ({ dealId }: { dealId: string }) => {
     </div>
   );
 };
-
-/* ------------------------------------------------------------------ */
-/* Autopilot settings — honest "off" stub                             */
-/* ------------------------------------------------------------------ */
-
-const AutopilotSettings = () => (
-  <div className="flex flex-col gap-3">
-    <div className="flex items-center gap-3 rounded-lg border border-border p-4">
-      <div className="flex-1">
-        <p className="text-sm font-medium">Autopilot</p>
-        <p className="text-xs text-muted-foreground mt-0.5">Off</p>
-      </div>
-      <Badge variant="secondary" className="text-xs">
-        Disabled
-      </Badge>
-    </div>
-    <p className="text-sm text-muted-foreground">
-      Candidates remain in your review queue. Agent H drafts outreach for your
-      approval — nothing sends automatically.
-    </p>
-  </div>
-);
 
 /* ------------------------------------------------------------------ */
 /* Role Memory Panel (left sidebar on desktop)                        */

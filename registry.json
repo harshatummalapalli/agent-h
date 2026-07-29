@@ -346,6 +346,10 @@
           "type": "registry:component"
         },
         {
+          "path": "src/components/atomic-crm/roles/SearchIntentEditor.tsx",
+          "type": "registry:component"
+        },
+        {
           "path": "src/components/atomic-crm/roles/SearchIntentDisplay.tsx",
           "type": "registry:component"
         },
@@ -723,6 +727,10 @@
         },
         {
           "path": "src/components/atomic-crm/layout/AppShell.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/jd-intake/parsedBriefToConditions.ts",
           "type": "registry:component"
         },
         {

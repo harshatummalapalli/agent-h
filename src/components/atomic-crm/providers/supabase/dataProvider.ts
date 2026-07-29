@@ -12,6 +12,7 @@ import type {
   Deal,
   DealCandidate,
   DealNote,
+  FilterDraft,
   RAFile,
   Sale,
   SalesFormData,
@@ -1991,14 +1992,13 @@ const getDataProviderWithCustomMethods = () => {
     // produces a new versioned intent persisted on deals.role_brief_search_intent.
     // Also writes an intent_update transcript turn (non-fatal, server-side).
     async refineSearchIntent(dealId: Identifier, commandText: string) {
-      const { data, error } =
-        await getSupabaseClient().functions.invoke<{
-          intent: unknown;
-          record: unknown;
-        }>("resolve-search-intent", {
-          method: "POST",
-          body: { deal_id: Number(dealId), refine_history: [commandText] },
-        });
+      const { data, error } = await getSupabaseClient().functions.invoke<{
+        intent: unknown;
+        record: unknown;
+      }>("resolve-search-intent", {
+        method: "POST",
+        body: { deal_id: Number(dealId), refine_history: [commandText] },
+      });
       if (error) throw error;
       return data!;
     },
@@ -2119,6 +2119,75 @@ const getDataProviderWithCustomMethods = () => {
         previousData: existingRow,
       });
       return data.config as ConfigurationContextValue;
+    },
+
+    async autocompleteCrustdataField(
+      field: string,
+      query: string,
+      limit = 10,
+    ): Promise<string[]> {
+      const { data, error } = await getSupabaseClient().functions.invoke<{
+        suggestions: string[];
+      }>("search-crustdata-filters", {
+        method: "POST",
+        body: { mode: "autocomplete", field, query, limit },
+      });
+      if (!data || error) return [];
+      return data.suggestions ?? [];
+    },
+
+    async searchCrustdataFilters(
+      filterDraft: FilterDraft,
+      limit?: number,
+      dealId?: string,
+      relax = true,
+      cursor?: string,
+    ) {
+      const { data, error } = await getSupabaseClient().functions.invoke<{
+        candidates: Array<{
+          id: string;
+          full_name?: string;
+          job_title?: string;
+          job_company_name?: string;
+          location_name?: string;
+          linkedin_url?: string;
+          skills?: string[];
+          years_experience?: number | null;
+        }>;
+        compiled_filters: unknown;
+        applied_groups: string[];
+        total_count: number;
+        note?: string;
+        error?: string;
+        error_detail?: string;
+        crustdata_http_status?: number | null;
+        relaxed_away?: string[];
+        next_cursor?: string;
+      }>("search-crustdata-filters", {
+        method: "POST",
+        body: {
+          filter_draft: filterDraft,
+          relax,
+          ...(limit ? { limit } : {}),
+          ...(dealId ? { deal_id: dealId } : {}),
+          ...(cursor ? { cursor } : {}),
+        },
+      });
+      if (!data || error) {
+        const errorDetails = await (async () => {
+          try {
+            return (await error?.context?.json()) ?? {};
+          } catch {
+            return {};
+          }
+        })();
+        throw new Error(
+          errorDetails?.message ||
+            errorDetails?.error ||
+            "Crustdata filter search failed",
+        );
+      }
+      return data;
     },
   } satisfies DataProvider;
 };

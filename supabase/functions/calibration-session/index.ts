@@ -30,7 +30,7 @@ import * as jose from "jsr:@panva/jose@6";
 import {
   searchCrustdataForRoleBrief,
   parseLocationForFilter,
-  COUNTRY_ALIASES,
+  extractCanonicalCountry,
 } from "../_shared/crustdataClient.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
@@ -445,9 +445,7 @@ Deno.serve(async (req: Request) => {
       const { place } = locationStr
         ? parseLocationForFilter(locationStr)
         : { place: null };
-      const canonicalCountry = place
-        ? (COUNTRY_ALIASES[place.toLowerCase().trim()] ?? null)
-        : null;
+      const canonicalCountry = place ? extractCanonicalCountry(place) : null;
       const bench_note = canonicalCountry
         ? `No ${canonicalCountry}-based profiles found for this brief — try broadening the role title or required skills.`
         : "No matching profiles found for this brief — try broadening the criteria.";

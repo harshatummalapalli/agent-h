@@ -5,12 +5,10 @@
 // switches without re-burning vendor credits.
 //
 // Actions (POST body: { action, deal_id, ... }):
-//   start      — given already-pulled raw candidates + role brief from the
-//                browser, check the Talent Bench first (non-expired cache rows
-//                from OTHER deals in the same tenant), merge with vendor
-//                candidates, rank via rank-discovery-batch, persist, return
-//                the first batch. bench_note is set when bench candidates were
-//                found so the recruiter transcript can surface a plain-English note.
+//   start      — given a role brief from the browser, call Crustdata (sole
+//                active discovery vendor), rank via rank-discovery-batch,
+//                persist, return the first batch. bench_note is a diagnostic
+//                string surfaced when the pool is empty.
 //   next_batch — read cursor from DB, advance it, return next slice.
 //   rerank     — append a negative reason, re-rank the stored raw payload,
 //                reset cursor, persist, return the new top slice.
@@ -19,20 +17,20 @@
 // RLS on role_discovery_cache ensures tenant isolation automatically when
 // requests ride the user's JWT.
 //
-// Expired row cleanup: rows with expires_at < now() are excluded from bench
-// queries. Physical cleanup can be done with:
+// Expired row cleanup: rows with expires_at < now() are excluded from
+// role_discovery_cache. Physical cleanup can be done with:
 //   DELETE FROM role_discovery_cache WHERE expires_at < now();
 // (a scheduled pg_cron job or a manual periodic cleanup).
 //
-// UX copy: never say "cache" to recruiters — say "saved search results" /
-// "from recent searches". The bench_note field carries this copy.
+// UX copy: never say "cache" to recruiters. The bench_note field carries
+// diagnostics when the pool is empty.
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import * as jose from "jsr:@panva/jose@6";
 import {
   searchCrustdataForRoleBrief,
   parseLocationForFilter,
-  COUNTRY_ALIASES,
+  extractCanonicalCountry,
 } from "../_shared/crustdataClient.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
@@ -50,10 +48,10 @@ const BATCH_SIZE = 3;
 // runs thin. Raise to 15 explicitly if sourcing quality proves too variable.
 const CRUSTDATA_POOL_FLOOR = BATCH_SIZE * 3;
 
-// E2E override: set FORCE_CRUSTDATA_ONLY=true in Supabase Edge Function secrets
-// to bypass bench + cheap-pool gating and always call Crustdata. Default is off
-// so the Talent Bench and pool-floor gating are active in production.
-const FORCE_CRUSTDATA_ONLY = Deno.env.get("FORCE_CRUSTDATA_ONLY") === "true";
+// Talent Bench is permanently disabled — Crustdata is the sole discovery
+// source when CRUSTDATA_API_KEY is set. Never seed the pool from other deals'
+// caches (cross-deal contamination was the root cause of off-role results).
+const FORCE_CRUSTDATA_ONLY = true;
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -411,16 +409,10 @@ Deno.serve(async (req: Request) => {
     const rawCandidates = body.raw_candidates ?? [];
     const roleBrief = body.role_brief ?? {};
 
-    // Talent Bench: skipped when FORCE_CRUSTDATA_ONLY is on so bench alone
-    // can't satisfy the CRUSTDATA_POOL_FLOOR gate and prevent Crustdata from running.
-    const benchCandidates = FORCE_CRUSTDATA_ONLY
-      ? []
-      : await fetchBenchCandidates(deal_id, authHeader);
+    // Talent Bench permanently disabled — never pull from other deals' caches.
+    const benchCandidates: RawCandidate[] = [];
 
-    // Merge bench + cheap (free-portal + Exa) candidates passed by the client,
-    // deduping by linkedin_url then id.
-    // When FORCE_CRUSTDATA_ONLY is on, rawCandidates is also [] (client skips
-    // free portals + Exa), so merged starts empty and Crustdata always runs.
+    // Merge only freshly passed raw_candidates (bench is always empty).
     const seen = new Set<string>();
     const merged: RawCandidate[] = [];
     for (const c of [...benchCandidates, ...rawCandidates]) {
@@ -430,17 +422,12 @@ Deno.serve(async (req: Request) => {
       merged.push(c);
     }
 
-    // Crustdata gate: always run when FORCE_CRUSTDATA_ONLY is on (Crustdata E2E);
-    // otherwise only run when the pool is below the floor to avoid redundant calls.
+    // Always call Crustdata when the API key is present — no pool-floor gate.
     let crustdataNote: string | undefined;
-    if (
-      (FORCE_CRUSTDATA_ONLY || merged.length < CRUSTDATA_POOL_FLOOR) &&
-      CRUSTDATA_API_KEY
-    ) {
+    if (CRUSTDATA_API_KEY) {
       const crustdataResult = await searchCrustdataForRoleBrief(
         roleBrief,
-        // Request enough to fill the gap; cap at 30 to stay within API budget.
-        Math.min(CRUSTDATA_POOL_FLOOR - merged.length + 10, 30),
+        Math.min(CRUSTDATA_POOL_FLOOR + 10, 30),
         CRUSTDATA_API_KEY,
       );
       crustdataNote = crustdataResult.note;
@@ -461,9 +448,7 @@ Deno.serve(async (req: Request) => {
       const { place } = locationStr
         ? parseLocationForFilter(locationStr)
         : { place: null };
-      const canonicalCountry = place
-        ? (COUNTRY_ALIASES[place.toLowerCase().trim()] ?? null)
-        : null;
+      const canonicalCountry = place ? extractCanonicalCountry(place) : null;
 
       let bench_note: string;
       if (!CRUSTDATA_API_KEY) {
@@ -480,7 +465,7 @@ Deno.serve(async (req: Request) => {
       ) {
         bench_note = canonicalCountry
           ? `Found profiles in web search but none were based in ${canonicalCountry} — check the location in the brief.`
-          : crustdataNote;
+          : crustdataNote ?? "No profiles matched the location in this brief.";
       } else if (
         crustdataNote?.includes("No profiles matched") ||
         crustdataNote?.includes("too little detail")

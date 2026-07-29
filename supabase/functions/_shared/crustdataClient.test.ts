@@ -4,9 +4,22 @@ import {
   parseLocationForFilter,
   buildCalibrationFilters,
   filterByCountry,
+  extractCanonicalCountry,
   COUNTRY_ALIASES,
   type RawCalibrationCandidate,
 } from "./crustdataClient";
+
+// ── helpers ──────────────────────────────────────────────────────────────────
+
+type AnyFilter = { field?: string; type?: string; value?: unknown; op?: string; conditions?: AnyFilter[] };
+
+/** Recursively flatten a nested filter tree into a flat array of leaf conditions. */
+function flattenConditions(f: AnyFilter): AnyFilter[] {
+  if (f.op && Array.isArray(f.conditions)) {
+    return f.conditions.flatMap((c) => flattenConditions(c));
+  }
+  return [f];
+}
 
 describe("parseLocationForFilter", () => {
   it("extracts India from 'Remote, India'", () => {
@@ -371,5 +384,184 @@ describe("buildCalibrationFilters — location handling", () => {
     const locationCond = conds.find((c) => c.field?.includes("location"));
     expect(locationCond!.field).toBe("basic_profile.location.country");
     expect(locationCond!.value).toBe("India");
+  });
+});
+
+// ── NEW: paren-country form in parseLocationForFilter ─────────────────────────
+
+describe("parseLocationForFilter — paren-country form (regression: Hyderabad (India))", () => {
+  it("Hyderabad (India) → place='Hyderabad, India', not remoteOnly", () => {
+    const r = parseLocationForFilter("Hyderabad (India)");
+    expect(r.place).toBe("Hyderabad, India");
+    expect(r.remoteOnly).toBe(false);
+  });
+
+  it("Hyderabad (india) lowercase paren → same result", () => {
+    const r = parseLocationForFilter("Hyderabad (india)");
+    expect(r.place).toBe("Hyderabad, india");
+    // Still routes to India via classifyPlace downstream
+    expect(r.remoteOnly).toBe(false);
+  });
+
+  it("Remote, Hyderabad (India) → place includes Hyderabad", () => {
+    const r = parseLocationForFilter("Remote, Hyderabad (India)");
+    expect(r.place).not.toBeNull();
+    expect(r.place).toContain("Hyderabad");
+  });
+
+  it("Mumbai (India) → place='Mumbai, India'", () => {
+    const r = parseLocationForFilter("Mumbai (India)");
+    expect(r.place).toBe("Mumbai, India");
+  });
+
+  it("London (UK) → place='London, UK' (UK is a known alias)", () => {
+    const r = parseLocationForFilter("London (UK)");
+    // UK is in COUNTRY_ALIASES, so (UK) → ", UK"
+    expect(r.place).toBe("London, UK");
+  });
+
+  it("Bangalore (unknown) → still returns a place (unknown paren dropped)", () => {
+    const r = parseLocationForFilter("Bangalore (Tech Hub)");
+    // "(Tech Hub)" is not a country — dropped
+    expect(r.place).toBe("Bangalore");
+    expect(r.remoteOnly).toBe(false);
+  });
+
+  // Regression: existing paren-remote forms must still work
+  it("India (Remote) still → place='India', remoteOnly=false", () => {
+    const r = parseLocationForFilter("India (Remote)");
+    expect(r.place).toBe("India");
+    expect(r.remoteOnly).toBe(false);
+  });
+});
+
+// ── NEW: buildCalibrationFilters — all Hyderabad/India variants → India country filter ──
+
+const INDIA_COUNTRY_FIELD = "basic_profile.location.country";
+const INDIA_COUNTRY_FILTER = { field: INDIA_COUNTRY_FIELD, type: "=", value: "India" };
+
+const INDIA_LOCATION_VARIANTS: Array<[string, string]> = [
+  ["India", "bare country"],
+  ["Hyderabad, India", "City,Country comma form"],
+  ["Hyderabad (India)", "City(Country) paren form"],
+  ["Remote, India", "Remote,Country"],
+  ["India (Remote)", "Country(Remote)"],
+];
+
+describe("buildCalibrationFilters — India location variants all produce India country filter", () => {
+  for (const [loc, label] of INDIA_LOCATION_VARIANTS) {
+    it(`'${loc}' (${label}) → country='India' exact filter`, () => {
+      const filters = buildCalibrationFilters({ name: "Software Engineer", location: loc });
+      expect(filters).not.toBeNull();
+      const flat = flattenConditions(filters as AnyFilter);
+      expect(flat).toContainEqual(INDIA_COUNTRY_FILTER);
+    });
+  }
+});
+
+// ── NEW: extractCanonicalCountry ──────────────────────────────────────────────
+
+describe("extractCanonicalCountry", () => {
+  it("bare 'India' → 'India'", () => {
+    expect(extractCanonicalCountry("India")).toBe("India");
+  });
+
+  it("bare 'india' (lowercase) → 'India'", () => {
+    expect(extractCanonicalCountry("india")).toBe("India");
+  });
+
+  it("'Hyderabad, India' → 'India' (last segment)", () => {
+    expect(extractCanonicalCountry("Hyderabad, India")).toBe("India");
+  });
+
+  it("'Hyderabad, india' lowercase → 'India'", () => {
+    expect(extractCanonicalCountry("Hyderabad, india")).toBe("India");
+  });
+
+  it("'Seattle, WA' → null (WA is not a country alias)", () => {
+    expect(extractCanonicalCountry("Seattle, WA")).toBeNull();
+  });
+
+  it("'Bangalore' → null (city only, no country)", () => {
+    expect(extractCanonicalCountry("Bangalore")).toBeNull();
+  });
+
+  it("'US' → 'United States'", () => {
+    expect(extractCanonicalCountry("US")).toBe("United States");
+  });
+
+  it("'New York, US' → 'United States'", () => {
+    expect(extractCanonicalCountry("New York, US")).toBe("United States");
+  });
+});
+
+// ── NEW: title shingle decomposition in buildCalibrationFilters ───────────────
+
+describe("buildCalibrationFilters — title shingle decomposition (regression: Cyber Incident)", () => {
+  it("'Cyber Incident Review Team Lead' produces shingles, not a lone 'Cyber Incident'", () => {
+    const filters = buildCalibrationFilters({
+      name: "Cyber Incident Review Team Lead",
+      location: "Hyderabad, India",
+    });
+    expect(filters).not.toBeNull();
+    const flat = flattenConditions(filters as AnyFilter);
+    const titleTerms = flat
+      .filter((c) => c.field === "experience.employment_details.current.title")
+      .map((c) => c.value as string);
+
+    // Must include role-specific shingles
+    expect(titleTerms).toContain("Review Team");
+    expect(titleTerms).toContain("Team Lead");
+
+    // 'Cyber Incident' alone as the only title term is forbidden
+    if (titleTerms.length === 1) {
+      expect(titleTerms[0]).not.toBe("Cyber Incident");
+    }
+
+    // Shingles must not include the raw 5-word full phrase (too long for literal match)
+    const hasFiveWordPhrase = titleTerms.some(
+      (t) => t.split(/\s+/).length > 2,
+    );
+    expect(hasFiveWordPhrase).toBe(false);
+  });
+
+  it("'Software Engineer' (2 words) stays as a single condition", () => {
+    const filters = buildCalibrationFilters({ name: "Software Engineer", location: "India" });
+    expect(filters).not.toBeNull();
+    const flat = flattenConditions(filters as AnyFilter);
+    const titleConds = flat.filter(
+      (c) => c.field === "experience.employment_details.current.title",
+    );
+    expect(titleConds.length).toBe(1);
+    expect(titleConds[0].value).toBe("Software Engineer");
+  });
+
+  it("'Senior Software Engineer' (3 words) produces 2 shingles: 'Senior Software' + 'Software Engineer'", () => {
+    const filters = buildCalibrationFilters({ name: "Senior Software Engineer", location: "India" });
+    expect(filters).not.toBeNull();
+    const flat = flattenConditions(filters as AnyFilter);
+    const titleTerms = flat
+      .filter((c) => c.field === "experience.employment_details.current.title")
+      .map((c) => c.value as string);
+    expect(titleTerms).toContain("Senior Software");
+    expect(titleTerms).toContain("Software Engineer");
+  });
+
+  it("title shingles are all exactly 2 words (within the 6-term cap)", () => {
+    const filters = buildCalibrationFilters({
+      name: "Cyber Incident Response Team Lead Manager",
+      location: "India",
+    });
+    expect(filters).not.toBeNull();
+    const flat = flattenConditions(filters as AnyFilter);
+    const titleTerms = flat
+      .filter((c) => c.field === "experience.employment_details.current.title")
+      .map((c) => c.value as string);
+    for (const term of titleTerms) {
+      expect(term.split(/\s+/).length).toBe(2);
+    }
+    // 6-word title → 5 shingles; cap at 6 so all 5 are present
+    expect(titleTerms.length).toBeLessThanOrEqual(6);
+    expect(titleTerms.length).toBeGreaterThan(0);
   });
 });

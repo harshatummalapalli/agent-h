@@ -7,7 +7,7 @@
 // can resume mid-session. Cleared via the Reset button.
 
 import { useState, useCallback, useEffect, useRef } from "react";
-import { useDataProvider } from "ra-core";
+import { useDataProvider, useGetOne } from "ra-core";
 import { useMutation } from "@tanstack/react-query";
 import { useSearchParams } from "react-router";
 import {
@@ -23,8 +23,13 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import type { FilterDraft } from "../types";
+import type { Deal, FilterDraft } from "../types";
 import type { CrmDataProvider } from "../providers/types";
+import {
+  intentToDraft,
+  dealBriefToDraft,
+  type DealBriefFields,
+} from "./BuildSearchTab";
 
 // Autocomplete field paths (mirrors crustdataCapabilityManifest CRUSTDATA_FIELDS)
 const AC_FIELD_TITLE = "experience.employment_details.current.title";
@@ -387,14 +392,38 @@ export function BuildSearchPage() {
   const [searchParams] = useSearchParams();
   const dealId = searchParams.get("deal_id") ?? undefined;
 
-  const [draft, setDraft] = useState<FilterDraft>(loadDraft);
+  // When deal_id is present, start with empty draft; prefill from deal on load.
+  // Without deal_id, load from localStorage as before.
+  const [draft, setDraft] = useState<FilterDraft>(() =>
+    dealId ? {} : loadDraft(),
+  );
+  const prefillApplied = useRef(false);
   const [limit, setLimit] = useState(25);
   const [compiledVisible, setCompiledVisible] = useState(false);
 
-  // Persist draft to localStorage on every change
+  // Fetch deal when deal_id is present — prefill draft from intent / brief fields.
+  const { data: dealRecord } = useGetOne<Deal>(
+    "deals",
+    { id: dealId! },
+    { enabled: !!dealId },
+  );
   useEffect(() => {
-    saveDraft(draft);
-  }, [draft]);
+    if (!dealId || !dealRecord || prefillApplied.current) return;
+    prefillApplied.current = true;
+    const deal = dealRecord as DealBriefFields;
+    const fromIntent = intentToDraft(deal.role_brief_search_intent?.current);
+    const hasIntent =
+      (fromIntent.currentTitlesInclude?.length ?? 0) > 0 ||
+      (fromIntent.locationCountries?.length ?? 0) > 0 ||
+      !!fromIntent.locationCountry ||
+      (fromIntent.skillsRequired?.length ?? 0) > 0;
+    setDraft(hasIntent ? fromIntent : dealBriefToDraft(deal));
+  }, [dealId, dealRecord]);
+
+  // Persist draft to localStorage on every change (only when not in deal_id mode)
+  useEffect(() => {
+    if (!dealId) saveDraft(draft);
+  }, [draft, dealId]);
 
   const {
     mutate: runSearch,
@@ -403,8 +432,7 @@ export function BuildSearchPage() {
     error,
     reset,
   } = useMutation({
-    mutationFn: () =>
-      dataProvider.searchCrustdataFilters(draft, limit, dealId),
+    mutationFn: () => dataProvider.searchCrustdataFilters(draft, limit, dealId),
     onError: () => {},
   });
 
@@ -420,16 +448,16 @@ export function BuildSearchPage() {
     reset();
   };
 
+  const prefillPending = !!dealId && !prefillApplied.current && !dealRecord;
   const empty = isDraftEmpty(draft);
-  const candidates = (data as { candidates?: SearchCandidate[] } | undefined)
-    ?.candidates ?? [];
-  const totalCount = (data as { total_count?: number } | undefined)
-    ?.total_count ?? 0;
-  const appliedGroups = (data as { applied_groups?: string[] } | undefined)
-    ?.applied_groups ?? [];
-  const compiledFilters = (
-    data as { compiled_filters?: unknown } | undefined
-  )?.compiled_filters;
+  const candidates =
+    (data as { candidates?: SearchCandidate[] } | undefined)?.candidates ?? [];
+  const totalCount =
+    (data as { total_count?: number } | undefined)?.total_count ?? 0;
+  const appliedGroups =
+    (data as { applied_groups?: string[] } | undefined)?.applied_groups ?? [];
+  const compiledFilters = (data as { compiled_filters?: unknown } | undefined)
+    ?.compiled_filters;
   const hasSearched = !!data;
   const zeroResults = hasSearched && candidates.length === 0;
 
@@ -443,8 +471,8 @@ export function BuildSearchPage() {
               Build your search
             </h1>
             <p className="text-sm text-muted-foreground mt-0.5">
-              Manually tune Crustdata filters to find the right people.
-              Results are not added to any role pipeline automatically.
+              Manually tune Crustdata filters to find the right people. Results
+              are not added to any role pipeline automatically.
             </p>
           </div>
           <Button
@@ -457,6 +485,10 @@ export function BuildSearchPage() {
             Reset
           </Button>
         </div>
+
+        {prefillPending && (
+          <p className="text-sm text-muted-foreground">Loading role filters…</p>
+        )}
 
         <div className="grid grid-cols-1 lg:grid-cols-[380px_1fr] gap-8 items-start">
           {/* ── Filter panel ── */}
@@ -767,7 +799,9 @@ export function BuildSearchPage() {
                 />
               </div>
               <div className="flex flex-col gap-1.5">
-                <Label className="text-xs font-medium">Fields of study (OR)</Label>
+                <Label className="text-xs font-medium">
+                  Fields of study (OR)
+                </Label>
                 <TagInput
                   aria-label="Fields of study"
                   values={draft.educationFieldsOfStudy ?? []}
@@ -834,7 +868,7 @@ export function BuildSearchPage() {
             <div className="flex items-center gap-3 pt-1">
               <Button
                 onClick={() => runSearch()}
-                disabled={isPending || empty}
+                disabled={isPending || empty || prefillPending}
                 className="flex-1"
               >
                 <Search className="h-4 w-4 mr-2" />
@@ -852,7 +886,10 @@ export function BuildSearchPage() {
                   value={limit}
                   onChange={(e) =>
                     setLimit(
-                      Math.min(100, Math.max(1, parseInt(e.target.value, 10) || 25)),
+                      Math.min(
+                        100,
+                        Math.max(1, parseInt(e.target.value, 10) || 25),
+                      ),
                     )
                   }
                 />
@@ -872,9 +909,8 @@ export function BuildSearchPage() {
               <div className="flex flex-col items-center justify-center gap-3 py-20 text-center text-muted-foreground">
                 <Search className="h-10 w-10 opacity-20" />
                 <p className="text-sm max-w-xs">
-                  Configure your filters and hit{" "}
-                  <strong>Run search</strong> to find candidates directly
-                  from Crustdata.
+                  Configure your filters and hit <strong>Run search</strong> to
+                  find candidates directly from Crustdata.
                 </p>
               </div>
             )}
@@ -903,8 +939,7 @@ export function BuildSearchPage() {
                     </span>
                     {appliedGroups.length > 0 && (
                       <span className="text-muted-foreground">
-                        ·{" "}
-                        {appliedGroups.join(", ")}
+                        · {appliedGroups.join(", ")}
                       </span>
                     )}
                   </div>
@@ -943,13 +978,12 @@ export function BuildSearchPage() {
                       </li>
                       <li>
                         Country spelling — use full names like{" "}
-                        <strong>United States</strong> or{" "}
-                        <strong>India</strong> (not abbreviations)
+                        <strong>United States</strong> or <strong>India</strong>{" "}
+                        (not abbreviations)
                       </li>
                       <li>
-                        Seniority vocabulary — try{" "}
-                        <strong>Senior</strong>, <strong>Lead</strong>, or{" "}
-                        <strong>Principal</strong>
+                        Seniority vocabulary — try <strong>Senior</strong>,{" "}
+                        <strong>Lead</strong>, or <strong>Principal</strong>
                       </li>
                       <li>
                         Company HQ country requires ISO alpha-3 (

@@ -113,6 +113,7 @@ function sanitizeDraft(draft: FilterDraft): FilterDraft {
   setArr("headlineKeywordsExclude", draft.headlineKeywordsExclude);
   setArr("languages", draft.languages);
   setNum("connectionsMin", draft.connectionsMin);
+  if (draft.recentlyChangedJobs === true) out.recentlyChangedJobs = true;
   return out;
 }
 
@@ -155,6 +156,7 @@ function activeFilterChips(draft: FilterDraft): string[] {
   pushMany("Not headline", d.headlineKeywordsExclude);
   pushMany("Language", d.languages);
   if (d.connectionsMin != null) chips.push(`Connections ≥ ${d.connectionsMin}`);
+  if (d.recentlyChangedJobs) chips.push("Recently changed jobs");
   return chips;
 }
 
@@ -485,6 +487,8 @@ export function BuildSearchPage() {
   const [draft, setDraft] = useState<FilterDraft>(loadDraft);
   const [limit, setLimit] = useState(25);
   const [compiledVisible, setCompiledVisible] = useState(false);
+  /** When on, edge function progressively drops soft constraints if Crustdata returns 0. */
+  const [autoWiden, setAutoWiden] = useState(true);
 
   // ── Selection + outreach state ───────────────────────────────────────────
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -526,7 +530,12 @@ export function BuildSearchPage() {
     mutationFn: () => {
       const cleaned = sanitizeDraft(draft);
       setDraft(cleaned);
-      return dataProvider.searchCrustdataFilters(cleaned, limit, dealId);
+      return dataProvider.searchCrustdataFilters(
+        cleaned,
+        limit,
+        dealId,
+        autoWiden,
+      );
     },
     onSuccess: (res) => {
       const r = res as SearchResponse;
@@ -929,6 +938,23 @@ export function BuildSearchPage() {
                   />
                 </div>
               </div>
+              <label className="flex items-start gap-2 cursor-pointer pt-1">
+                <Checkbox
+                  checked={draft.recentlyChangedJobs === true}
+                  onCheckedChange={(v) =>
+                    set("recentlyChangedJobs", v === true)
+                  }
+                  className="mt-0.5"
+                  aria-label="Recently changed jobs"
+                />
+                <span className="text-xs leading-snug">
+                  <span className="font-medium">Recently changed jobs</span>
+                  <span className="text-muted-foreground block">
+                    Only people Crustdata flags as having started a new role
+                    recently
+                  </span>
+                </span>
+              </label>
             </FilterSection>
 
             {/* Section 5: Companies */}
@@ -1183,6 +1209,20 @@ export function BuildSearchPage() {
               </div>
             </div>
 
+            <label className="flex items-start gap-2 cursor-pointer">
+              <Checkbox
+                checked={autoWiden}
+                onCheckedChange={(v) => setAutoWiden(v === true)}
+                className="mt-0.5"
+                aria-label="Auto-widen if no results"
+              />
+              <span className="text-xs text-muted-foreground leading-snug">
+                Auto-widen if no results (drops company excludes, extra skills,
+                YoE, city — <em className="text-foreground">never</em> changes
+                your titles)
+              </span>
+            </label>
+
             {empty && (
               <p className="text-xs text-muted-foreground text-center py-2">
                 Add at least one filter to run a search.
@@ -1291,7 +1331,8 @@ export function BuildSearchPage() {
                     {searchNote && <p>{searchNote}</p>}
                     {relaxedAway.length > 0 && (
                       <p className="text-muted-foreground">
-                        Relaxed away: {relaxedAway.join(" → ")}
+                        Widened by dropping: {relaxedAway.join(" → ")}. Titles
+                        you entered were kept as written.
                       </p>
                     )}
                     {searchErrorDetail && (

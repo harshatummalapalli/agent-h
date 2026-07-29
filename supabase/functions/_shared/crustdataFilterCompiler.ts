@@ -7,8 +7,12 @@
 // this module maps explicit form fields directly — no NLP, no ambiguity, pure
 // field-by-field translation. Unit-testable with no Deno imports.
 //
-// Re-uses CRUSTDATA_FIELDS from the capability manifest and applies the shingle
-// decomposition rule for long title/education phrases.
+// Re-uses CRUSTDATA_FIELDS from the capability manifest.
+//
+// Title matching: Crustdata `(.)` is case-insensitive ALL-WORDS (every word must
+// appear, any order). We send each user title as one full-phrase condition —
+// NOT 2-word shingle ORs. Shingle-OR turned "AI Software Engineer" into
+// ("AI Software" OR "Software Engineer"), which matched every Software Engineer.
 //
 // Multi-value boolean semantics (documented in UI helper text):
 //   currentTitlesInclude   — OR (any matching title counts)
@@ -31,10 +35,7 @@
 //   languages              — OR (any listed language)
 //   currentSeniorities     — OR
 
-import {
-  CRUSTDATA_FIELDS,
-  PHRASE_DECOMPOSITION,
-} from "./crustdataCapabilityManifest.ts";
+import { CRUSTDATA_FIELDS } from "./crustdataCapabilityManifest.ts";
 import { COUNTRY_ALIASES } from "./crustdataClient.ts";
 
 // ─── Re-exported types (callers use these, avoids duplicate declarations) ─────
@@ -42,7 +43,7 @@ import { COUNTRY_ALIASES } from "./crustdataClient.ts";
 export type CrustdataCondition = {
   field: string;
   type: "=" | "!=" | "(.)" | "(!)" | "not_in" | "=<" | "=>" | "in";
-  value: string | number | string[] | number[];
+  value: string | number | boolean | string[] | number[];
 };
 
 export type CrustdataGroup = {
@@ -146,39 +147,22 @@ export type FilterDraft = {
    * Uses professional_network.connections field.
    */
   connectionsMin?: number | null;
+  /**
+   * When true, require Crustdata's recently_changed_jobs flag
+   * (people who recently started a new role).
+   */
+  recentlyChangedJobs?: boolean;
 };
 
-// ─── Shingle decomposition (mirrors crustdataQueryBuilder + manifest rule) ────
-//
-// Crustdata (.) does LITERAL phrase matching — a 3+ word phrase may not appear
-// verbatim in indexed titles. Decompose into overlapping 2-word windows.
+// ─── Phrase helpers ───────────────────────────────────────────────────────────
 
-function decomposePhrase(
-  phrase: string,
-  shingleSize = PHRASE_DECOMPOSITION.shingleSize,
-  maxTerms = PHRASE_DECOMPOSITION.maxTerms,
-): string[] {
-  const words = phrase.trim().split(/\s+/).filter(Boolean);
-  if (words.length <= shingleSize)
-    return words.length > 0 ? [phrase.trim()] : [];
-  const shingles = new Set<string>();
-  for (let i = 0; i + shingleSize <= words.length; i++) {
-    shingles.add(words.slice(i, i + shingleSize).join(" "));
-  }
-  return Array.from(shingles).slice(0, maxTerms);
-}
-
-/** Expand a single user-entered term into (possibly shingle-decomposed) terms. */
-function expandTerm(raw: string): string[] {
-  // "&" is punctuation in titles ("AI & Software Engineer") — treat as space
-  // so it doesn't become a required all-words token.
-  const trimmed = raw
+/** Normalize a user phrase: strip & punctuation noise, collapse whitespace. */
+function normalizePhrase(raw: string): string {
+  return raw
     .trim()
     .replace(/\s*&\s*/g, " ")
     .replace(/\s+/g, " ")
     .trim();
-  if (!trimmed) return [];
-  return decomposePhrase(trimmed);
 }
 
 /**
@@ -261,24 +245,20 @@ function orGroup(
 }
 
 /**
- * Expand an array of user-entered title/company/skill terms, decompose long
- * phrases into shingles, and build an OR-group of (.) conditions.
+ * OR-group of full-phrase (.) conditions — one condition per user term.
+ * Used for titles/cities/education. Does NOT shingle-decompose (see file header).
  */
-function titleOrGroup(
+function phraseOrGroup(
   field: string,
   terms: string[],
 ): CrustdataCondition | CrustdataGroup | null {
-  const conditions: CrustdataCondition[] = [];
-  for (const term of terms) {
-    for (const expanded of expandTerm(term)) {
-      conditions.push(contains(field, expanded));
-    }
-  }
-  return orGroup(conditions);
+  const cleaned = terms.map(normalizePhrase).filter(Boolean);
+  if (cleaned.length === 0) return null;
+  return orGroup(cleaned.map((t) => contains(field, t)));
 }
 
 /**
- * Build a simple OR-group of (.) conditions for a list of terms (no shingle decomp).
+ * Build a simple OR-group of (.) conditions for a list of terms (trim only).
  * Used for short-valued fields like languages, industries.
  */
 function simpleOrGroup(
@@ -324,7 +304,7 @@ export function compileFilterDraft(draft: FilterDraft): CompileResult {
   // ── Current title include ────────────────────────────────────────────────
   const titleIncludes = (draft.currentTitlesInclude ?? []).filter(Boolean);
   if (titleIncludes.length > 0) {
-    const g = titleOrGroup(CRUSTDATA_FIELDS.currentTitle, titleIncludes);
+    const g = phraseOrGroup(CRUSTDATA_FIELDS.currentTitle, titleIncludes);
     if (g) {
       topLevel.push(g);
       appliedGroups.push("current title include");
@@ -344,7 +324,7 @@ export function compileFilterDraft(draft: FilterDraft): CompileResult {
   // ── Past title include ───────────────────────────────────────────────────
   const pastTitles = (draft.pastTitlesInclude ?? []).filter(Boolean);
   if (pastTitles.length > 0) {
-    const g = titleOrGroup(CRUSTDATA_FIELDS.pastTitle, pastTitles);
+    const g = phraseOrGroup(CRUSTDATA_FIELDS.pastTitle, pastTitles);
     if (g) {
       topLevel.push(g);
       appliedGroups.push("past title include");
@@ -376,7 +356,7 @@ export function compileFilterDraft(draft: FilterDraft): CompileResult {
   // ── Location: cities (multi, OR) ────────────────────────────────────────
   const cities = (draft.locationCities ?? []).filter(Boolean);
   if (cities.length > 0) {
-    const g = titleOrGroup(CRUSTDATA_FIELDS.locationCity, cities);
+    const g = phraseOrGroup(CRUSTDATA_FIELDS.locationCity, cities);
     if (g) {
       topLevel.push(g);
       appliedGroups.push("cities");
@@ -386,12 +366,9 @@ export function compileFilterDraft(draft: FilterDraft): CompileResult {
   // ── Location: single city (legacy) ──────────────────────────────────────
   const city = draft.locationCity?.trim();
   if (city && cities.length === 0) {
-    const cityTerms = expandTerm(city);
-    const g = orGroup(
-      cityTerms.map((t) => contains(CRUSTDATA_FIELDS.locationCity, t)),
-    );
-    if (g) {
-      topLevel.push(g);
+    const normalized = normalizePhrase(city);
+    if (normalized) {
+      topLevel.push(contains(CRUSTDATA_FIELDS.locationCity, normalized));
       appliedGroups.push("city");
     }
   }
@@ -399,7 +376,7 @@ export function compileFilterDraft(draft: FilterDraft): CompileResult {
   // ── Location: states (multi, OR) ────────────────────────────────────────
   const states = (draft.locationStates ?? []).filter(Boolean);
   if (states.length > 0) {
-    const g = titleOrGroup(CRUSTDATA_FIELDS.locationState, states);
+    const g = phraseOrGroup(CRUSTDATA_FIELDS.locationState, states);
     if (g) {
       topLevel.push(g);
       appliedGroups.push("states");
@@ -556,7 +533,7 @@ export function compileFilterDraft(draft: FilterDraft): CompileResult {
   // ── Education: schools (OR-group) ────────────────────────────────────────
   const schools = (draft.educationSchools ?? []).filter(Boolean);
   if (schools.length > 0) {
-    const g = titleOrGroup(CRUSTDATA_FIELDS.educationSchool, schools);
+    const g = phraseOrGroup(CRUSTDATA_FIELDS.educationSchool, schools);
     if (g) {
       topLevel.push(g);
       appliedGroups.push("education schools");
@@ -566,7 +543,7 @@ export function compileFilterDraft(draft: FilterDraft): CompileResult {
   // ── Education: degrees (OR-group) ────────────────────────────────────────
   const degrees = (draft.educationDegrees ?? []).filter(Boolean);
   if (degrees.length > 0) {
-    const g = titleOrGroup(CRUSTDATA_FIELDS.educationDegree, degrees);
+    const g = phraseOrGroup(CRUSTDATA_FIELDS.educationDegree, degrees);
     if (g) {
       topLevel.push(g);
       appliedGroups.push("education degrees");
@@ -576,7 +553,7 @@ export function compileFilterDraft(draft: FilterDraft): CompileResult {
   // ── Education: fields of study (OR-group) ────────────────────────────────
   const fieldsOfStudy = (draft.educationFieldsOfStudy ?? []).filter(Boolean);
   if (fieldsOfStudy.length > 0) {
-    const g = titleOrGroup(
+    const g = phraseOrGroup(
       CRUSTDATA_FIELDS.educationFieldOfStudy,
       fieldsOfStudy,
     );
@@ -630,6 +607,16 @@ export function compileFilterDraft(draft: FilterDraft): CompileResult {
   if (connectionsMin !== null) {
     topLevel.push(gte(CRUSTDATA_FIELDS.connections, connectionsMin));
     appliedGroups.push("connections min");
+  }
+
+  // ── Recently changed jobs (boolean flag) ─────────────────────────────────
+  if (draft.recentlyChangedJobs === true) {
+    topLevel.push({
+      field: CRUSTDATA_FIELDS.recentlyChangedJobs,
+      type: "=",
+      value: true,
+    });
+    appliedGroups.push("recently changed jobs");
   }
 
   // ── Assemble ─────────────────────────────────────────────────────────────
@@ -748,6 +735,14 @@ export function relaxFilterDraft(
         currentSeniorities: [],
       },
       dropped: "extra filters (education/headline/seniority/etc.)",
+    };
+  }
+
+  // 8. Recently changed jobs (user asked for it — drop last)
+  if (draft.recentlyChangedJobs === true) {
+    return {
+      draft: { ...draft, recentlyChangedJobs: false },
+      dropped: "recently changed jobs",
     };
   }
 

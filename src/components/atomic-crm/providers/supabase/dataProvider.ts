@@ -2140,6 +2140,7 @@ const getDataProviderWithCustomMethods = () => {
       filterDraft: FilterDraft,
       limit?: number,
       dealId?: string,
+      relax = true,
     ) {
       const { data, error } = await getSupabaseClient().functions.invoke<{
         candidates: Array<{
@@ -2164,6 +2165,7 @@ const getDataProviderWithCustomMethods = () => {
         method: "POST",
         body: {
           filter_draft: filterDraft,
+          relax,
           ...(limit ? { limit } : {}),
           ...(dealId ? { deal_id: dealId } : {}),
         },

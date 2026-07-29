@@ -128,16 +128,22 @@ describe("compileFilterDraft – current title include", () => {
     expect(values).toContain("Incident Responder");
   });
 
-  it("long title phrase (>2 words) is shingle-decomposed into 2-word OR conditions", () => {
+  it("long title phrase is kept as one all-words (.) condition (no shingle OR)", () => {
     const { filters } = compileFilterDraft({
       currentTitlesInclude: ["Cyber Incident Response Engineer"],
     });
     expect(filters).not.toBeNull();
     const titleConds = findContains(filters!, CRUSTDATA_FIELDS.currentTitle);
-    // Decomposed: "Cyber Incident", "Incident Response", "Response Engineer"
-    expect(titleConds.some((c) => c.value === "Cyber Incident")).toBe(true);
-    expect(titleConds.some((c) => c.value === "Incident Response")).toBe(true);
-    expect(titleConds.some((c) => c.value === "Response Engineer")).toBe(true);
+    expect(titleConds).toHaveLength(1);
+    expect(titleConds[0].value).toBe("Cyber Incident Response Engineer");
+  });
+
+  it("ampersand in title is normalized to spaces", () => {
+    const { filters } = compileFilterDraft({
+      currentTitlesInclude: ["AI & Software Engineer"],
+    });
+    const titleConds = findContains(filters!, CRUSTDATA_FIELDS.currentTitle);
+    expect(titleConds[0].value).toBe("AI Software Engineer");
   });
 });
 
@@ -587,6 +593,30 @@ describe("compileFilterDraft – companyHQCountry", () => {
     );
     expect(cond).toBeDefined();
     expect(cond!.value).toBe("USA");
+  });
+});
+
+describe("compileFilterDraft – recentlyChangedJobs", () => {
+  it("emits recently_changed_jobs = true", () => {
+    const { filters, appliedGroups } = compileFilterDraft({
+      recentlyChangedJobs: true,
+    });
+    expect(appliedGroups).toContain("recently changed jobs");
+    const cond = filters!.conditions.find(
+      (c): c is CrustdataCondition =>
+        "field" in c &&
+        c.field === CRUSTDATA_FIELDS.recentlyChangedJobs &&
+        c.type === "=",
+    );
+    expect(cond).toBeDefined();
+    expect(cond!.value).toBe(true);
+  });
+
+  it("false / undefined does not emit the flag", () => {
+    expect(
+      compileFilterDraft({ recentlyChangedJobs: false }).filters,
+    ).toBeNull();
+    expect(compileFilterDraft({}).filters).toBeNull();
   });
 });
 

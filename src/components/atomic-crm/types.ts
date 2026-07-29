@@ -448,4 +448,6 @@ export type FilterDraft = {
   /** Full language names e.g. "English", "Spanish", "Hindi" */
   languages?: string[];
   connectionsMin?: number | null;
+  /** Crustdata recently_changed_jobs boolean flag */
+  recentlyChangedJobs?: boolean;
 };

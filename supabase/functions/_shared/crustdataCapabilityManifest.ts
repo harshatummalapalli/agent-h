@@ -64,6 +64,11 @@ export const CRUSTDATA_FIELDS = {
 
   // ── Experience ────────────────────────────────────────────────────────────
   yearsOfExperience: "years_of_experience",
+  /**
+   * Boolean flag — true if the person recently changed jobs.
+   * Filter with type "=" and value true. Also sortable.
+   */
+  recentlyChangedJobs: "recently_changed_jobs",
 
   // ── Basic profile ─────────────────────────────────────────────────────────
   headline: "basic_profile.headline",
@@ -154,6 +159,7 @@ export const CAN_FILTER = [
   "location continent (contains)",
   "skills (professional_network_skills, contains per skill)",
   "years of experience (numeric range, =< and =>)",
+  "recently changed jobs (boolean flag recently_changed_jobs = true)",
   "current company headcount (numeric range)",
   "current company industries (string[], contains per industry label)",
   "current company HQ country (exact = match, ISO 3166-1 alpha-3 code: USA, IND, GBR)",
@@ -185,13 +191,17 @@ export const CAN_FILTER = [
 export const CANNOT_FILTER = [
   {
     category: "skill_recency",
-    description: "Skill recency or recency of experience (e.g. 'used React in last 2 years', '5 years in Go')",
-    reason: "No date-of-skill or skill-duration field in the Crustdata person-search API. Only presence/absence via the skills field.",
+    description:
+      "Skill recency or recency of experience (e.g. 'used React in last 2 years', '5 years in Go')",
+    reason:
+      "No date-of-skill or skill-duration field in the Crustdata person-search API. Only presence/absence via the skills field.",
   },
   {
     category: "ranking_soft",
-    description: "Soft/ranking-only preferences (e.g. 'prefer candidates with startup background', 'nice to have ML experience')",
-    reason: "Crustdata filters are hard AND conditions only; no boost/should/ranking operators exist in the filter API.",
+    description:
+      "Soft/ranking-only preferences (e.g. 'prefer candidates with startup background', 'nice to have ML experience')",
+    reason:
+      "Crustdata filters are hard AND conditions only; no boost/should/ranking operators exist in the filter API.",
   },
   {
     category: "compensation",
@@ -201,7 +211,8 @@ export const CANNOT_FILTER = [
   {
     category: "availability",
     description: "Open to work, actively looking, notice period",
-    reason: "open_to_cards covers CAREER_INTEREST / HIRING_MANAGER / VOLUNTEERING codes only — no freeform availability signal.",
+    reason:
+      "open_to_cards covers CAREER_INTEREST / HIRING_MANAGER / VOLUNTEERING codes only — no freeform availability signal.",
   },
 ] as const;
 

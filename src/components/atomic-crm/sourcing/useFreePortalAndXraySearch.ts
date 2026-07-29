@@ -23,13 +23,14 @@ export type FreePortalSearchDeps = {
   setCandidateDbIds: SetState<Record<string, number>>;
 };
 
-// Temporary: mirrors dataProvider.ts kill-switch — set to true to re-enable.
+// Free-portal sourcing is permanently retired (product decision; Crustdata is the
+// sole sourcing vendor). Keep false — not a temporary flag.
 const FREE_PORTALS_ENABLED = false;
 
 export function createFreePortalAndXrayHandlers(d: FreePortalSearchDeps) {
   const handleSearchFreePortals = async () => {
     if (!FREE_PORTALS_ENABLED) {
-      d.notify("Free portals temporarily disabled (Crustdata E2E testing)", {
+      d.notify("Free portal sourcing is not available.", {
         type: "info",
       });
       return;

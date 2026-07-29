@@ -75,14 +75,14 @@ describe("NoteInputs", () => {
       <NoteInputsStory reference="deals" selectReference />,
     );
 
-    await expect.element(screen.getByText("Deal")).toBeVisible();
+    await expect.element(screen.getByText("Role")).toBeVisible();
   });
 
   it("does not render a reference selector when selectReference is not set", async () => {
     const screen = await render(<Default />);
 
     await expect.element(screen.getByText("Contact")).not.toBeInTheDocument();
-    await expect.element(screen.getByText("Deal")).not.toBeInTheDocument();
+    await expect.element(screen.getByText("Role")).not.toBeInTheDocument();
   });
 
   it("should have the current date as default value for the date input", async () => {

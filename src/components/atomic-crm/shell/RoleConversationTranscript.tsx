@@ -9,17 +9,14 @@ import {
 import { PendingApprovalCard } from "./PendingApprovalCard";
 import { normalizeLinkedinUrl } from "../misc/normalizeLinkedinUrl";
 
-// Loop B calibration: inline candidate card with Yes/No quick actions.
+// Loop B calibration: inline candidate card — pipeline action only.
+// Yes / Not-a-fit appears once as a BatchFooter after the latest batch.
 function CandidateCardTurn({
   metadata,
-  onCalibrationYes,
-  onCalibrationNo,
   onAddToPipeline,
   pipelineSaveState,
 }: {
   metadata: NonNullable<ConversationTurnMetadata["candidate_card"]>;
-  onCalibrationYes?: () => void;
-  onCalibrationNo?: () => void;
   onAddToPipeline?: () => void;
   pipelineSaveState?: "idle" | "saving" | "saved";
 }) {
@@ -36,21 +33,35 @@ function CandidateCardTurn({
       {metadata.headline && (
         <div className="text-xs text-muted-foreground">{metadata.headline}</div>
       )}
+      {/* why_fit is always non-empty from the server; show it prominently */}
       {metadata.why_fit && (
         <div className="text-xs text-muted-foreground italic">
           {metadata.why_fit}
         </div>
       )}
-      {normalizeLinkedinUrl(metadata.linkedin_url) && (
-        <a
-          href={normalizeLinkedinUrl(metadata.linkedin_url)!}
-          target="_blank"
-          rel="noreferrer"
-          className="text-xs text-blue-700 underline"
-        >
-          LinkedIn profile
-        </a>
+      {metadata.location_name && (
+        <div className="text-xs text-muted-foreground">
+          📍 {metadata.location_name}
+        </div>
       )}
+      {(() => {
+        const normalized = normalizeLinkedinUrl(metadata.linkedin_url);
+        const href =
+          normalized ??
+          (metadata.linkedin_url
+            ? `https://${metadata.linkedin_url.replace(/^https?:\/\//i, "")}`
+            : null);
+        return href ? (
+          <a
+            href={href}
+            target="_blank"
+            rel="noreferrer"
+            className="text-xs text-blue-700 underline"
+          >
+            LinkedIn profile
+          </a>
+        ) : null;
+      })()}
       {metadata.must_haves.length > 0 && (
         <ul className="flex flex-col gap-0.5 mt-0.5">
           {metadata.must_haves.map((m, i) => (
@@ -75,8 +86,8 @@ function CandidateCardTurn({
           ))}
         </ul>
       )}
-      <div className="flex gap-2 mt-2 flex-wrap">
-        {onAddToPipeline && (
+      {onAddToPipeline && (
+        <div className="flex gap-2 mt-2">
           <button
             type="button"
             className="text-xs border rounded px-2 py-1 transition-colors text-blue-700 border-blue-200 bg-blue-50/60 hover:bg-blue-100 disabled:opacity-50"
@@ -91,31 +102,42 @@ function CandidateCardTurn({
                 ? "Adding…"
                 : "+ Add to pipeline"}
           </button>
-        )}
-        {(onCalibrationYes || onCalibrationNo) && (
-          <>
-            {onCalibrationYes && (
-              <button
-                type="button"
-                className="text-xs border rounded px-2 py-1 hover:bg-muted transition-colors text-green-700 border-green-200 bg-green-50/60"
-                onClick={onCalibrationYes}
-              >
-                ✓ Yes, show more like this
-              </button>
-            )}
-            {onCalibrationNo && (
-              <button
-                type="button"
-                className="text-xs border rounded px-2 py-1 hover:bg-muted transition-colors text-muted-foreground"
-                onClick={onCalibrationNo}
-              >
-                ✗ Not a fit
-              </button>
-            )}
-          </>
-        )}
-      </div>
+        </div>
+      )}
     </li>
+  );
+}
+
+// Batch-level calibration actions — shown once after the latest candidate batch.
+function BatchFooter({
+  onCalibrationYes,
+  onCalibrationNo,
+}: {
+  onCalibrationYes?: () => void;
+  onCalibrationNo?: () => void;
+}) {
+  if (!onCalibrationYes && !onCalibrationNo) return null;
+  return (
+    <div className="flex gap-2 flex-wrap pt-1 border-t border-dashed">
+      {onCalibrationYes && (
+        <button
+          type="button"
+          className="text-xs border rounded px-2 py-1 hover:bg-muted transition-colors text-green-700 border-green-200 bg-green-50/60"
+          onClick={onCalibrationYes}
+        >
+          ✓ These look right — show more like this
+        </button>
+      )}
+      {onCalibrationNo && (
+        <button
+          type="button"
+          className="text-xs border rounded px-2 py-1 hover:bg-muted transition-colors text-muted-foreground"
+          onClick={onCalibrationNo}
+        >
+          ✗ Not a fit
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -209,16 +231,40 @@ export const RoleConversationTranscript = ({
     [list],
   );
 
-  // In collapsed state: show only the last 2 rendered turns + any pending approvals.
+  // Latest calibration batch: the trailing run of consecutive candidate_card turns.
+  // These stay visible even when the transcript is collapsed.
+  const latestBatchIds = useMemo(() => {
+    const ids: string[] = [];
+    for (let i = list.length - 1; i >= 0; i--) {
+      const m = list[i].metadata as ConversationTurnMetadata | undefined;
+      if (m?.kind === "candidate_card") {
+        ids.unshift(String(list[i].id));
+      } else if (m?.kind === "decision" || m?.kind === "refinement") {
+        // skip invisible turns
+        continue;
+      } else {
+        break;
+      }
+    }
+    return new Set(ids);
+  }, [list]);
+
+  // In collapsed state: show the latest candidate batch + any pending approvals.
+  // Falls back to last 2 rendered turns if there are no calibration cards.
   const visibleIds = useMemo(() => {
     if (showHistory) return null; // null = show all
     const rendered = list.filter((t) => {
       const m = t.metadata as ConversationTurnMetadata | undefined;
       return m?.kind !== "decision" && m?.kind !== "refinement";
     });
-    const lastTwo = rendered.slice(-2).map((t) => t.id);
-    return new Set([...lastTwo, ...pendingApprovalIds]);
-  }, [showHistory, list, pendingApprovalIds]);
+    if (latestBatchIds.size > 0) {
+      return new Set([...latestBatchIds, ...pendingApprovalIds]);
+    }
+    return new Set([
+      ...rendered.slice(-2).map((t) => String(t.id)),
+      ...pendingApprovalIds,
+    ]);
+  }, [showHistory, list, pendingApprovalIds, latestBatchIds]);
 
   return (
     <div className="ah-panel p-4 flex flex-col gap-3">
@@ -232,7 +278,7 @@ export const RoleConversationTranscript = ({
             className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2"
             onClick={() => setShowHistory((v) => !v)}
           >
-            {showHistory ? "Collapse" : `Show history (${list.length})`}
+            {showHistory ? "Collapse" : `Show history (${list.length} turns)`}
           </button>
         )}
       </div>
@@ -249,98 +295,112 @@ export const RoleConversationTranscript = ({
           Start sourcing to see Agent H's activity here.
         </p>
       ) : (
-        <ul className="flex flex-col gap-3 max-h-[60vh] overflow-y-auto">
-          {list.map((turn) => {
-            if (visibleIds !== null && !visibleIds.has(turn.id)) return null;
-            const metadata = turn.metadata as
-              | ConversationTurnMetadata
-              | undefined;
+        <>
+          <ul className="flex flex-col gap-3 max-h-[60vh] overflow-y-auto">
+            {list.map((turn) => {
+              if (visibleIds !== null && !visibleIds.has(String(turn.id)))
+                return null;
+              const metadata = turn.metadata as
+                | ConversationTurnMetadata
+                | undefined;
 
-            if (isPendingTier3Proposal(metadata)) {
-              const hasLaterDecision = list.some(
-                (other) =>
-                  other.in_reply_to === turn.id &&
-                  (other.metadata as ConversationTurnMetadata | undefined)
-                    ?.kind === "decision",
-              );
-              if (hasLaterDecision) return null;
+              if (isPendingTier3Proposal(metadata)) {
+                const hasLaterDecision = list.some(
+                  (other) =>
+                    other.in_reply_to === turn.id &&
+                    (other.metadata as ConversationTurnMetadata | undefined)
+                      ?.kind === "decision",
+                );
+                if (hasLaterDecision) return null;
 
-              return (
-                <PendingApprovalCard
-                  key={turn.id}
-                  turn={turn}
-                  allTurns={list}
-                  onApprove={onApprove}
-                  onStop={onStop}
-                  onRefine={onRefine}
-                  busy={actionBusy}
-                />
-              );
-            }
+                return (
+                  <PendingApprovalCard
+                    key={turn.id}
+                    turn={turn}
+                    allTurns={list}
+                    onApprove={onApprove}
+                    onStop={onStop}
+                    onRefine={onRefine}
+                    busy={actionBusy}
+                  />
+                );
+              }
 
-            if (
-              metadata?.kind === "decision" ||
-              metadata?.kind === "refinement"
-            ) {
-              return null;
-            }
+              if (
+                metadata?.kind === "decision" ||
+                metadata?.kind === "refinement"
+              ) {
+                return null;
+              }
 
-            if (
-              metadata?.kind === "candidate_card" &&
-              metadata.candidate_card
-            ) {
-              // Only the LAST candidate card turn shows the Yes/No buttons
-              // so the recruiter acts on the batch as a whole rather than per-card.
-              const isLastCard =
-                list
-                  .filter(
-                    (t) =>
-                      (t.metadata as ConversationTurnMetadata | undefined)
-                        ?.kind === "candidate_card",
-                  )
-                  .at(-1)?.id === turn.id;
-              const card = metadata.candidate_card;
-              const extId = card.calibration_external_id;
-              return (
-                <CandidateCardTurn
-                  key={turn.id}
-                  metadata={card}
-                  onCalibrationYes={isLastCard ? onCalibrationYes : undefined}
-                  onCalibrationNo={isLastCard ? onCalibrationNo : undefined}
-                  onAddToPipeline={
-                    extId ? () => handleAddToPipeline(card) : undefined
-                  }
-                  pipelineSaveState={
-                    extId ? (pipelineSaveStates[extId] ?? "idle") : undefined
-                  }
-                />
-              );
-            }
+              if (
+                metadata?.kind === "candidate_card" &&
+                metadata.candidate_card
+              ) {
+                const card = metadata.candidate_card;
+                const extId = card.calibration_external_id;
+                return (
+                  <CandidateCardTurn
+                    key={turn.id}
+                    metadata={card}
+                    onAddToPipeline={
+                      extId ? () => handleAddToPipeline(card) : undefined
+                    }
+                    pipelineSaveState={
+                      extId ? (pipelineSaveStates[extId] ?? "idle") : undefined
+                    }
+                  />
+                );
+              }
 
-            if (metadata?.kind === "calibration_question") {
+              if (metadata?.kind === "calibration_question") {
+                return (
+                  <li key={turn.id} className="flex flex-col gap-1 text-sm">
+                    <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                      Agent H
+                    </span>
+                    <span className="whitespace-pre-wrap text-foreground">
+                      {turn.content}
+                    </span>
+                  </li>
+                );
+              }
+
+              if (metadata?.kind === "intent_update") {
+                return (
+                  <li
+                    key={turn.id}
+                    className="rounded border border-border/50 bg-muted/40 px-3 py-2 text-xs space-y-0.5"
+                  >
+                    <span className="block font-semibold text-muted-foreground uppercase tracking-wide text-[10px] mb-1">
+                      Sourcing intent updated
+                    </span>
+                    <span className="whitespace-pre-wrap text-foreground/80">
+                      {turn.content}
+                    </span>
+                  </li>
+                );
+              }
+
               return (
                 <li key={turn.id} className="flex flex-col gap-1 text-sm">
                   <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                    Agent H
+                    {turn.speaker === "agent" ? "Agent H" : "You"}
+                    {metadata?.kind === "result" ? " — result" : ""}
                   </span>
-                  <span className="whitespace-pre-wrap text-foreground">
-                    {turn.content}
-                  </span>
+                  <span className="whitespace-pre-wrap">{turn.content}</span>
                 </li>
               );
-            }
-
-            return (
-              <li key={turn.id} className="flex flex-col gap-1 text-sm">
-                <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                  {turn.speaker === "agent" ? "Agent H" : "You"}
-                  {metadata?.kind === "result" ? " — result" : ""}
-                </span>
-                <span className="whitespace-pre-wrap">{turn.content}</span>
-              </li>
-            );
-          })}
-        </ul>
+            })}
+          </ul>
+          {/* Batch footer — shown once after the latest candidate batch */}
+          {latestBatchIds.size > 0 && (
+            <BatchFooter
+              onCalibrationYes={onCalibrationYes}
+              onCalibrationNo={onCalibrationNo}
+            />
+          )}
+        </>
       )}
     </div>
   );

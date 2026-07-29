@@ -66,9 +66,7 @@ function checkUnrealisticConstraints(text: string): boolean {
 
 function buildSummary(result: ParsedBrief): string {
   const skillsSummary =
-    (
-      (result.required_skills ?? result.must_have_keywords ?? []) as string[]
-    )
+    ((result.required_skills ?? result.must_have_keywords ?? []) as string[])
       .slice(0, 5)
       .join(", ") || "not specified";
   const expSummary =
@@ -141,10 +139,7 @@ export const HomePage = () => {
 
       // Expectation setting: fire once per conversation if unrealistic
       // constraints are detected (immediate joiner, hard salary band).
-      if (
-        checkUnrealisticConstraints(text) &&
-        !expectationShownRef.current
-      ) {
+      if (checkUnrealisticConstraints(text) && !expectationShownRef.current) {
         expectationShownRef.current = true;
         addTurn({ role: "agent", text: EXPECTATION_TURN });
       }
@@ -277,6 +272,7 @@ export const HomePage = () => {
         } else {
           await dataProvider.appendAgentConversationTurn(dealId, {
             content:
+              batch.bench_note ??
               "I couldn't find candidates right now — try relaxing the criteria once inside.",
             metadata: { kind: "agent" },
           });

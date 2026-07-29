@@ -67,6 +67,8 @@ import {
 } from "../shell/roleAgentOrchestrator";
 import type { ConversationTurnMetadata } from "../shell/agentActionTiers";
 import type { Deal, RoleConversationTurn } from "../types";
+import { SearchIntentDisplay } from "./SearchIntentDisplay";
+import { BuildSearchTab } from "./BuildSearchTab";
 import "../inbox/agent-h-theme.css";
 
 export const RoleWorkspacePage = () => {
@@ -79,7 +81,7 @@ export const RoleWorkspacePage = () => {
   );
 };
 
-type WorkspaceTab = "sourcing" | "review";
+type WorkspaceTab = "sourcing" | "review" | "build-search";
 
 const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
   const navigate = useNavigate();
@@ -583,6 +585,7 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
                     [
                       { value: "sourcing", label: "Sourcing" },
                       { value: "review", label: "Review & Contact" },
+                      { value: "build-search", label: "Build search" },
                     ] as const
                   ).map(({ value, label }) => (
                     <TabsTrigger
@@ -653,6 +656,14 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
                   </>
                 )}
               </div>
+            </TabsContent>
+
+            {/* Build search tab */}
+            <TabsContent
+              value="build-search"
+              className="flex-1 mt-0 overflow-y-auto"
+            >
+              <BuildSearchTab deal={deal} />
             </TabsContent>
 
             {/* Review & Contact tab */}
@@ -1547,6 +1558,31 @@ const RoleMemoryPanel = ({
             </ul>
           )}
         </div>
+
+        {/* T6: Search Intent block — rendered from deal.role_brief_search_intent
+            (inline here inside the RoleMemoryPanel section, not a separate file).
+            SearchIntentDisplay lives at src/components/atomic-crm/roles/SearchIntentDisplay.tsx. */}
+        {deal !== undefined && (
+          <>
+            <Separator />
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
+                Sourcing understanding
+              </p>
+              {deal?.role_brief_search_intent?.current ? (
+                <SearchIntentDisplay
+                  current={deal.role_brief_search_intent.current}
+                  history={deal.role_brief_search_intent.history ?? []}
+                />
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Sourcing understanding will appear here after the first
+                  search.
+                </p>
+              )}
+            </div>
+          </>
+        )}
 
         {/* Role must-haves from deal */}
         {((dealRecord?.must_have_keywords as string[] | undefined) ?? [])

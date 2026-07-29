@@ -8,6 +8,7 @@
 // sendFirstOutreach path already wired into RoleWorkspacePage, so no
 // duplicate code or risk of drift.
 import { useMemo, useState } from "react";
+import { normalizeLinkedinUrl } from "../misc/normalizeLinkedinUrl";
 import { Link } from "react-router";
 import { useDataProvider, type Identifier } from "ra-core";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -323,13 +324,9 @@ export const CandidateReviewTable = ({
                       >
                         {name}
                       </Link>
-                      {candidate.linkedin_url && (
+                      {normalizeLinkedinUrl(candidate.linkedin_url) && (
                         <a
-                          href={
-                            candidate.linkedin_url.startsWith("http")
-                              ? candidate.linkedin_url
-                              : `https://${candidate.linkedin_url}`
-                          }
+                          href={normalizeLinkedinUrl(candidate.linkedin_url)!}
                           target="_blank"
                           rel="noreferrer"
                           className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"

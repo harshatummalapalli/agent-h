@@ -158,15 +158,43 @@ For request_resume and send_first_outreach: set candidate_id when you can identi
 For send_first_outreach: use when the recruiter wants to initiate first contact with a candidate (LinkedIn or email outreach), not when they only want to browse candidates or request a resume.
 `.trim();
 
+// Literal-token fast path: exact matches for known action tokens sent by old
+// frontends that still call runFreeTextCommand() with a raw action string
+// instead of the direct dispatchCalibration* methods used by newer builds.
+// This runs BEFORE Anthropic so it works even when ANTHROPIC_API_KEY is unset.
+const LITERAL_TOKEN_MAP: Record<
+  string,
+  { action: string; explanation: string }
+> = {
+  calibration_no: {
+    action: "calibration_no",
+    explanation: "Marked as not a fit — we'll skip profiles like this.",
+  },
+  "not a fit": {
+    action: "calibration_no",
+    explanation: "Marked as not a fit — we'll skip profiles like this.",
+  },
+  "✗ not a fit": {
+    action: "calibration_no",
+    explanation: "Marked as not a fit — we'll skip profiles like this.",
+  },
+  calibration_yes: {
+    action: "calibration_yes",
+    explanation: "Great — showing more profiles like this.",
+  },
+  "yes, show more like this": {
+    action: "calibration_yes",
+    explanation: "Great — showing more profiles like this.",
+  },
+  start_sourcing: {
+    action: "start_sourcing",
+    explanation: "Starting candidate search for this role.",
+  },
+};
+
 const parseCommandHandler = async (req: Request) => {
   if (req.method !== "POST")
     return jsonResponse({ error: "Method Not Allowed" }, 405);
-  if (!ANTHROPIC_API_KEY) {
-    return jsonResponse(
-      { error: "ANTHROPIC_API_KEY is not set for this project." },
-      500,
-    );
-  }
 
   let commandText: string | undefined;
   let context: CommandContext | undefined;
@@ -182,6 +210,19 @@ const parseCommandHandler = async (req: Request) => {
     return jsonResponse(
       { error: "command_text and context are required" },
       400,
+    );
+  }
+
+  // Fast path: resolve known literal tokens without an LLM call.
+  const literalResult = LITERAL_TOKEN_MAP[commandText.trim().toLowerCase()];
+  if (literalResult) {
+    return jsonResponse(literalResult);
+  }
+
+  if (!ANTHROPIC_API_KEY) {
+    return jsonResponse(
+      { error: "ANTHROPIC_API_KEY is not set for this project." },
+      500,
     );
   }
 

@@ -5,12 +5,10 @@
 // switches without re-burning vendor credits.
 //
 // Actions (POST body: { action, deal_id, ... }):
-//   start      — given already-pulled raw candidates + role brief from the
-//                browser, check the Talent Bench first (non-expired cache rows
-//                from OTHER deals in the same tenant), merge with vendor
-//                candidates, rank via rank-discovery-batch, persist, return
-//                the first batch. bench_note is set when bench candidates were
-//                found so the recruiter transcript can surface a plain-English note.
+//   start      — given a role brief from the browser, call Crustdata (sole
+//                active discovery vendor), rank via rank-discovery-batch,
+//                persist, return the first batch. bench_note is a diagnostic
+//                string surfaced when the pool is empty.
 //   next_batch — read cursor from DB, advance it, return next slice.
 //   rerank     — append a negative reason, re-rank the stored raw payload,
 //                reset cursor, persist, return the new top slice.
@@ -19,17 +17,21 @@
 // RLS on role_discovery_cache ensures tenant isolation automatically when
 // requests ride the user's JWT.
 //
-// Expired row cleanup: rows with expires_at < now() are excluded from bench
-// queries. Physical cleanup can be done with:
+// Expired row cleanup: rows with expires_at < now() are excluded from
+// role_discovery_cache. Physical cleanup can be done with:
 //   DELETE FROM role_discovery_cache WHERE expires_at < now();
 // (a scheduled pg_cron job or a manual periodic cleanup).
 //
-// UX copy: never say "cache" to recruiters — say "saved search results" /
-// "from recent searches". The bench_note field carries this copy.
+// UX copy: never say "cache" to recruiters. The bench_note field carries
+// diagnostics when the pool is empty.
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import * as jose from "jsr:@panva/jose@6";
-import { searchCrustdataForRoleBrief } from "../_shared/crustdataClient.ts";
+import {
+  searchCrustdataForRoleBrief,
+  parseLocationForFilter,
+  extractCanonicalCountry,
+} from "../_shared/crustdataClient.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY");
@@ -40,14 +42,15 @@ const SUPABASE_JWT_KEYS = jose.createRemoteJWKSet(
 );
 const CRUSTDATA_API_KEY = Deno.env.get("CRUSTDATA_API_KEY");
 
-const BATCH_SIZE = 5;
+const BATCH_SIZE = 3;
 // Pull Crustdata server-side when bench + cheap pool is below this floor.
-// BATCH_SIZE * 3 = 15 ensures we have enough for a few calibration batches
-// before presenting thinly-sourced results to the recruiter.
+// BATCH_SIZE * 3 = 9 — enough for ~3 calibration rounds before the pool
+// runs thin. Raise to 15 explicitly if sourcing quality proves too variable.
 const CRUSTDATA_POOL_FLOOR = BATCH_SIZE * 3;
 
-// Temporary: Crustdata E2E testing flag.
-// Set FORCE_CRUSTDATA_ONLY = false to re-enable bench + normal pool gating.
+// Talent Bench is permanently disabled — Crustdata is the sole discovery
+// source when CRUSTDATA_API_KEY is set. Never seed the pool from other deals'
+// caches (cross-deal contamination was the root cause of off-role results).
 const FORCE_CRUSTDATA_ONLY = true;
 
 const CORS_HEADERS = {
@@ -120,6 +123,11 @@ type CacheRow = {
   expires_at?: string;
 };
 
+type MustHaveCheck = {
+  label: string;
+  status: "found" | "inferred" | "missing";
+};
+
 type CalibrationCandidate = {
   external_id: string;
   name: string;
@@ -127,8 +135,79 @@ type CalibrationCandidate = {
   why_fit: string;
   match_score: number | null;
   linkedin_url: string | null;
+  location_name: string | null;
   from_bench: boolean;
+  must_haves: MustHaveCheck[];
 };
+
+// Common keyword aliases for must-have matching (expand as needed).
+const KW_ALIASES: Record<string, string[]> = {
+  ".net": ["c#", "csharp", "dotnet", "asp.net"],
+  "c#": [".net", "dotnet", "asp.net", "csharp"],
+  dotnet: [".net", "c#", "asp.net"],
+  "asp.net": [".net", "c#", "dotnet"],
+  "node.js": ["nodejs", "node js"],
+  nodejs: ["node.js", "node js"],
+  javascript: ["js", "ecmascript"],
+  typescript: ["ts"],
+  python: ["py"],
+  golang: ["go lang"],
+  kubernetes: ["k8s"],
+  postgresql: ["postgres", "pg"],
+};
+
+function checkMustHave(
+  keyword: string,
+  raw: RawCandidate,
+  whyFit: string,
+): "found" | "inferred" | "missing" {
+  const haystack = [
+    ...(raw.skills ?? []),
+    raw.job_title ?? "",
+    raw.job_company_name ?? "",
+    raw.location_name ?? "",
+    whyFit,
+  ]
+    .join(" ")
+    .toLowerCase();
+  const kw = keyword.toLowerCase();
+  if (haystack.includes(kw)) return "found";
+  const aliases = KW_ALIASES[kw] ?? [];
+  if (aliases.some((a) => haystack.includes(a))) return "inferred";
+  return "missing";
+}
+
+function synthWhyFit(
+  raw: RawCandidate,
+  roleBrief: Record<string, unknown>,
+): string {
+  const parts: string[] = [];
+  if (raw.job_title)
+    parts.push(
+      raw.job_title +
+        (raw.job_company_name ? ` at ${raw.job_company_name}` : ""),
+    );
+  if (raw.location_name) parts.push(`based in ${raw.location_name}`);
+  const required = [
+    ...((roleBrief.required_skills as string[] | null) ?? []),
+    ...((roleBrief.must_have_keywords as string[] | null) ?? []),
+  ];
+  const skills = raw.skills ?? [];
+  const overlap = skills.filter((s) =>
+    required.some(
+      (r) =>
+        s.toLowerCase().includes(r.toLowerCase()) ||
+        r.toLowerCase().includes(s.toLowerCase()),
+    ),
+  );
+  if (overlap.length > 0)
+    parts.push(`skills include ${overlap.slice(0, 3).join(", ")}`);
+  else if (skills.length > 0)
+    parts.push(`skills: ${skills.slice(0, 3).join(", ")}`);
+  return (
+    parts.join("; ") || "Profile available — no summary returned by ranking."
+  );
+}
 
 async function fetchCacheRow(
   dealId: number,
@@ -168,10 +247,13 @@ async function fetchBenchCandidates(
 }
 
 // Call rank-discovery-batch (sibling edge function) with the user's JWT.
+// searchIntent is optional — when present (T4 wiring), it is forwarded so the
+// ranking prompt can flag conflicts plainly (e.g. "currently Staff, which was excluded").
 async function rankCandidates(
   candidates: RawCandidate[],
   roleBrief: Record<string, unknown>,
   authHeader: string,
+  searchIntent?: Record<string, unknown> | null,
 ): Promise<RankedEntry[]> {
   if (candidates.length === 0) return [];
   try {
@@ -194,6 +276,7 @@ async function rankCandidates(
             skills: c.skills,
           })),
           role: roleBrief,
+          ...(searchIntent ? { search_intent: searchIntent } : {}),
         }),
       },
     );
@@ -246,21 +329,35 @@ function buildBatch(
       : cache.payload.map((c) => c.id);
   const whyFitById = new Map(cache.ranked.map((r) => [r.id, r.why_fit]));
 
+  const roleBrief = cache.role_brief_snapshot;
+  const mustHaveLabels: string[] = [
+    ...((roleBrief.required_skills as string[] | null) ?? []),
+    ...((roleBrief.must_have_keywords as string[] | null) ?? []),
+  ].slice(0, 5);
+
   const slice = orderedIds.slice(cache.cursor, cache.cursor + batchSize);
   const candidates: CalibrationCandidate[] = slice
     .map((id) => {
       const raw = rawById.get(id);
       if (!raw) return null;
+      const rankedWhyFit = whyFitById.get(id) ?? "";
+      const why_fit = rankedWhyFit.trim() || synthWhyFit(raw, roleBrief);
+      const must_haves: MustHaveCheck[] = mustHaveLabels.map((label) => ({
+        label,
+        status: checkMustHave(label, raw, why_fit),
+      }));
       return {
         external_id: id,
         name: raw.full_name ?? `Candidate ${id}`,
         headline:
           [raw.job_title, raw.job_company_name].filter(Boolean).join(" at ") ||
           null,
-        why_fit: whyFitById.get(id) ?? "",
+        why_fit,
         match_score: null,
         linkedin_url: raw.linkedin_url ?? null,
+        location_name: raw.location_name ?? null,
         from_bench: raw._from_bench ?? false,
+        must_haves,
       };
     })
     .filter((c): c is CalibrationCandidate => c !== null);
@@ -312,16 +409,10 @@ Deno.serve(async (req: Request) => {
     const rawCandidates = body.raw_candidates ?? [];
     const roleBrief = body.role_brief ?? {};
 
-    // Talent Bench: skipped when FORCE_CRUSTDATA_ONLY is on so bench alone
-    // can't satisfy the CRUSTDATA_POOL_FLOOR gate and prevent Crustdata from running.
-    const benchCandidates = FORCE_CRUSTDATA_ONLY
-      ? []
-      : await fetchBenchCandidates(deal_id, authHeader);
+    // Talent Bench permanently disabled — never pull from other deals' caches.
+    const benchCandidates: RawCandidate[] = [];
 
-    // Merge bench + cheap (free-portal + Exa) candidates passed by the client,
-    // deduping by linkedin_url then id.
-    // When FORCE_CRUSTDATA_ONLY is on, rawCandidates is also [] (client skips
-    // free portals + Exa), so merged starts empty and Crustdata always runs.
+    // Merge only freshly passed raw_candidates (bench is always empty).
     const seen = new Set<string>();
     const merged: RawCandidate[] = [];
     for (const c of [...benchCandidates, ...rawCandidates]) {
@@ -331,19 +422,16 @@ Deno.serve(async (req: Request) => {
       merged.push(c);
     }
 
-    // Crustdata gate: always run when FORCE_CRUSTDATA_ONLY is on (Crustdata E2E);
-    // otherwise only run when the pool is below the floor to avoid redundant calls.
-    if (
-      (FORCE_CRUSTDATA_ONLY || merged.length < CRUSTDATA_POOL_FLOOR) &&
-      CRUSTDATA_API_KEY
-    ) {
-      const crustdataCandidates = await searchCrustdataForRoleBrief(
+    // Always call Crustdata when the API key is present — no pool-floor gate.
+    let crustdataNote: string | undefined;
+    if (CRUSTDATA_API_KEY) {
+      const crustdataResult = await searchCrustdataForRoleBrief(
         roleBrief,
-        // Request enough to fill the gap; cap at 30 to stay within API budget.
-        Math.min(CRUSTDATA_POOL_FLOOR - merged.length + 10, 30),
+        Math.min(CRUSTDATA_POOL_FLOOR + 10, 30),
         CRUSTDATA_API_KEY,
       );
-      for (const c of crustdataCandidates) {
+      crustdataNote = crustdataResult.note;
+      for (const c of crustdataResult.candidates) {
         const key = c.linkedin_url || c.id;
         if (seen.has(key)) continue;
         seen.add(key);
@@ -351,7 +439,84 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    const ranked = await rankCandidates(merged, roleBrief, authHeader);
+    // If pool is empty, return a diagnostic bench_note rather than persisting
+    // an empty pool. Prefer the structured note from the Crustdata client when
+    // available; otherwise derive a country-specific or generic fallback.
+    if (merged.length === 0) {
+      const locationStr =
+        typeof roleBrief.location === "string" ? roleBrief.location.trim() : "";
+      const { place } = locationStr
+        ? parseLocationForFilter(locationStr)
+        : { place: null };
+      const canonicalCountry = place ? extractCanonicalCountry(place) : null;
+
+      let bench_note: string;
+      if (!CRUSTDATA_API_KEY) {
+        bench_note =
+          "Search is not configured on this server yet — ask your admin to set up web search.";
+      } else if (crustdataNote?.includes("not configured")) {
+        bench_note =
+          "Search is not configured on this server yet — ask your admin to set up web search.";
+      } else if (crustdataNote?.includes("returned an error")) {
+        bench_note =
+          "Web search is temporarily unavailable — try again shortly.";
+      } else if (
+        crustdataNote?.includes("none matched the requested location")
+      ) {
+        bench_note = canonicalCountry
+          ? `Found profiles in web search but none were based in ${canonicalCountry} — check the location in the brief.`
+          : crustdataNote ?? "No profiles matched the location in this brief.";
+      } else if (
+        crustdataNote?.includes("No profiles matched") ||
+        crustdataNote?.includes("too little detail")
+      ) {
+        bench_note = canonicalCountry
+          ? `No ${canonicalCountry}-based profiles found for this brief — try a shorter title or fewer required skills.`
+          : "No matching profiles found — try broadening the brief.";
+      } else if (canonicalCountry) {
+        bench_note = `No ${canonicalCountry}-based profiles found for this brief — try broadening the role title or required skills.`;
+      } else {
+        bench_note =
+          "No matching profiles found for this brief — try broadening the criteria.";
+      }
+
+      return jsonResponse({
+        candidates: [],
+        pool_size: 0,
+        cursor: 0,
+        pool_exhausted: true,
+        bench_note,
+      });
+    }
+
+    // Fetch stored SearchIntent for conflict-aware why-fit ranking (T4).
+    // Non-blocking read — missing or failed intent does not block ranking.
+    let storedSearchIntent: Record<string, unknown> | null = null;
+    try {
+      const dealRes = await fetch(
+        `${SUPABASE_URL}/rest/v1/deals?id=eq.${deal_id}&select=role_brief_search_intent`,
+        {
+          headers: {
+            apikey: SUPABASE_ANON_KEY ?? "",
+            Authorization: authHeader,
+          },
+        },
+      );
+      if (dealRes.ok) {
+        const rows = await dealRes.json();
+        const record = rows[0]?.role_brief_search_intent;
+        if (record?.current?.conditions) storedSearchIntent = record.current;
+      }
+    } catch {
+      // non-fatal
+    }
+
+    const ranked = await rankCandidates(
+      merged,
+      roleBrief,
+      authHeader,
+      storedSearchIntent,
+    );
 
     const expiresAt = new Date(
       Date.now() + 30 * 24 * 60 * 60 * 1000,
@@ -420,7 +585,7 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({ ...buildBatch(cache, BATCH_SIZE), bench_note: null });
   }
 
-  // ── rerank: add negative reason, re-rank, reset cursor, persist ──
+  // ── rerank: add negative reason, update SearchIntent, re-rank, reset cursor ──
   if (action === "rerank") {
     const cache = await fetchCacheRow(deal_id, authHeader);
     if (!cache || cache.payload.length === 0) {
@@ -436,14 +601,61 @@ Deno.serve(async (req: Request) => {
       ...cache.negative_reasons,
       ...(body.negative_reason ? [body.negative_reason] : []),
     ];
+
+    // T5 WIRING: call resolve-search-intent with the new calibration feedback.
+    // Fire-and-forget — re-ranking proceeds regardless of whether this succeeds.
+    // The updated SearchIntent will be used on the NEXT ranking pass; immediate
+    // re-rank still uses the old intent (consistent with the transition period).
+    // Note: role_brief_learned_criteria remains for legacy display; SearchIntent
+    // is now the source of truth for filter/rank going forward.
+    // Forward the caller's JWT so resolve-search-intent runs under RLS
+    // (tenant isolation). Service-role is never used for this call.
+    if (body.negative_reason && SUPABASE_URL) {
+      void fetch(`${SUPABASE_URL}/functions/v1/resolve-search-intent`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          apikey: SUPABASE_ANON_KEY ?? "",
+          Authorization: authHeader,
+        },
+        body: JSON.stringify({
+          deal_id,
+          calibration_feedback: reasons,
+        }),
+      }).catch((err) => {
+        console.warn("resolve-search-intent (rerank) failed (non-fatal):", err);
+      });
+    }
+
     const enrichedBrief = {
       ...cache.role_brief_snapshot,
       avoid_signals: reasons.join("; "),
     };
+    // Fetch current SearchIntent for conflict-aware why-fit (T4, rerank path).
+    let reRankIntent: Record<string, unknown> | null = null;
+    try {
+      const dRes = await fetch(
+        `${SUPABASE_URL}/rest/v1/deals?id=eq.${deal_id}&select=role_brief_search_intent`,
+        {
+          headers: {
+            apikey: SUPABASE_ANON_KEY ?? "",
+            Authorization: authHeader,
+          },
+        },
+      );
+      if (dRes.ok) {
+        const dRows = await dRes.json();
+        const rec = dRows[0]?.role_brief_search_intent;
+        if (rec?.current?.conditions) reRankIntent = rec.current;
+      }
+    } catch {
+      /* non-fatal */
+    }
     const reranked = await rankCandidates(
       cache.payload,
       enrichedBrief,
       authHeader,
+      reRankIntent,
     );
     cache.ranked = reranked;
     cache.cursor = 0;

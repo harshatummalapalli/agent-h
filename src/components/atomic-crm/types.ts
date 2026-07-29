@@ -167,7 +167,47 @@ export type Deal = {
   // Pause sourcing toggle — blocks start_sourcing / calibration_next_batch.
   // Autopilot (when added) will also check this before auto-triggering runs.
   sourcing_paused?: boolean;
+  // T1/T2: taxonomy-aware sourcing intent, versioned. Stored as
+  // { current: VersionedSearchIntent, history: VersionedSearchIntent[] }.
+  role_brief_search_intent?: SearchIntentRecord | null;
 } & Pick<RaRecord, "id">;
+
+// ─── SearchIntent frontend types (mirrors supabase/functions/_shared/searchIntent.ts) ───
+
+export type SearchIntentCategory =
+  | "seniority"
+  | "company"
+  | "title"
+  | "skill"
+  | "experience_range"
+  | "location"
+  | "other";
+
+export type SearchIntentDisposition = "require" | "exclude" | "prefer";
+
+export type SearchIntentCondition = {
+  category: SearchIntentCategory;
+  disposition: SearchIntentDisposition;
+  value: string;
+  note?: string;
+};
+
+export type UnenforcedConstraint = {
+  description: string;
+  reason: string;
+};
+
+export type VersionedSearchIntent = {
+  version: number;
+  updated_at: string;
+  conditions: SearchIntentCondition[];
+  unenforceable_constraints: UnenforcedConstraint[];
+};
+
+export type SearchIntentRecord = {
+  current: VersionedSearchIntent;
+  history: VersionedSearchIntent[];
+};
 
 // See docs/adr/ADR-617f-phase-b-role-conversation-turns.md
 export type RoleConversationTurn = {
@@ -345,3 +385,23 @@ export interface ContactGender {
   label: string;
   icon: ComponentType<{ className?: string }>;
 }
+
+// ─── FilterDraft — typed form fields for the "Build search" tab ──────────────
+// Mirrors _shared/crustdataFilterCompiler.ts FilterDraft (kept in sync manually;
+// no shared import because frontend and Deno runtimes are separate).
+
+export type FilterDraft = {
+  currentTitlesInclude?: string[];
+  currentTitlesExclude?: string[];
+  pastTitlesInclude?: string[];
+  locationCountry?: string;
+  locationCity?: string;
+  skillsRequired?: string[];
+  seniority?: string;
+  yoeMin?: number | null;
+  yoeMax?: number | null;
+  currentCompaniesInclude?: string[];
+  currentCompaniesExclude?: string[];
+  headcountMin?: number | null;
+  headcountMax?: number | null;
+};

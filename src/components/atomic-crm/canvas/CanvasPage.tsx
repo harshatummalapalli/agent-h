@@ -285,6 +285,21 @@ export const CanvasPage = () => {
           summary: parsed.explanation,
         });
         navigate("/deals");
+      } else if (parsed.action === "refine_search_intent") {
+        if (!dealId) {
+          updateActivityEntry(logId, {
+            status: "info",
+            summary: "No role is open — please navigate to a role first.",
+          });
+          toast("Please open a role first to refine its search intent.");
+        } else {
+          await dataProvider.refineSearchIntent(dealId, commandText);
+          queryClient.invalidateQueries({ queryKey: ["deals", dealId] });
+          updateActivityEntry(logId, {
+            status: "success",
+            summary: parsed.explanation,
+          });
+        }
       } else {
         updateActivityEntry(logId, {
           status: "info",

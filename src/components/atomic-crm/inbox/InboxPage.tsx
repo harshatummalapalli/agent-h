@@ -153,6 +153,29 @@ export const InboxPage = () => {
           summary: parsed.explanation,
         });
         navigate("/deals");
+      } else if (parsed.action === "refine_search_intent") {
+        if (parsed.deal_id == null) {
+          updateActivityEntry(logId, {
+            status: "info",
+            summary:
+              "Please mention which role to adjust, or open a specific role first.",
+          });
+          toast(
+            "Please mention which role to adjust, or open a specific role first.",
+          );
+        } else {
+          await dataProvider.refineSearchIntent(parsed.deal_id, commandText);
+          queryClient.invalidateQueries({
+            queryKey: ["inbox_per_deal_signals"],
+          });
+          queryClient.invalidateQueries({
+            queryKey: ["deals", parsed.deal_id],
+          });
+          updateActivityEntry(logId, {
+            status: "success",
+            summary: parsed.explanation,
+          });
+        }
       } else {
         updateActivityEntry(logId, {
           status: "info",

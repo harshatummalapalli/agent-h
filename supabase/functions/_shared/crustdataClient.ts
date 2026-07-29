@@ -22,9 +22,90 @@ const F = {
   currentTitle: "experience.employment_details.current.title",
   currentSeniority: "experience.employment_details.current.seniority_level",
   locationCity: "basic_profile.location.city",
+  locationCountry: "basic_profile.location.country",
   yearsOfExperience: "years_of_experience",
   currentSkills: "skills.professional_network_skills",
 } as const;
+
+// ── Country alias map ─────────────────────────────────────────────────────
+// Maps common aliases (lowercase) → Crustdata's canonical full country name.
+// Used by classifyPlace() to route known countries to the country field with
+// an exact "=" match instead of the city contains "(.)".
+
+export const COUNTRY_ALIASES: Record<string, string> = {
+  india: "India",
+  "united states": "United States",
+  us: "United States",
+  usa: "United States",
+  america: "United States",
+  "united kingdom": "United Kingdom",
+  uk: "United Kingdom",
+  britain: "United Kingdom",
+  "great britain": "United Kingdom",
+  england: "United Kingdom",
+  canada: "Canada",
+  germany: "Germany",
+  deutschland: "Germany",
+  singapore: "Singapore",
+  australia: "Australia",
+  "united arab emirates": "United Arab Emirates",
+  uae: "United Arab Emirates",
+  dubai: "United Arab Emirates",
+  france: "France",
+  netherlands: "Netherlands",
+  holland: "Netherlands",
+  brazil: "Brazil",
+  japan: "Japan",
+  "south korea": "South Korea",
+  korea: "South Korea",
+  china: "China",
+  israel: "Israel",
+  ireland: "Ireland",
+  sweden: "Sweden",
+  norway: "Norway",
+  denmark: "Denmark",
+  finland: "Finland",
+  switzerland: "Switzerland",
+  poland: "Poland",
+  spain: "Spain",
+  portugal: "Portugal",
+  italy: "Italy",
+  mexico: "Mexico",
+  colombia: "Colombia",
+  argentina: "Argentina",
+  nigeria: "Nigeria",
+  kenya: "Kenya",
+  "south africa": "South Africa",
+  indonesia: "Indonesia",
+  malaysia: "Malaysia",
+  philippines: "Philippines",
+  vietnam: "Vietnam",
+  pakistan: "Pakistan",
+  bangladesh: "Bangladesh",
+  "new zealand": "New Zealand",
+};
+
+/**
+ * Classify a geographic place as either a Crustdata country filter (exact "=")
+ * or a city filter (contains "(.)").  Exported so the discovery query-builder
+ * can reuse the same logic without re-implementing the alias map.
+ *
+ * Examples:
+ *   classifyPlace("India")      → { field: locationCountry, type: "=", value: "India" }
+ *   classifyPlace("US")         → { field: locationCountry, type: "=", value: "United States" }
+ *   classifyPlace("Bangalore")  → { field: locationCity,   type: "(.)"}
+ */
+export function classifyPlace(place: string): {
+  field: string;
+  type: "=" | "(.)";
+  value: string;
+} {
+  const canonical = COUNTRY_ALIASES[place.toLowerCase().trim()];
+  if (canonical) {
+    return { field: F.locationCountry, type: "=", value: canonical };
+  }
+  return { field: F.locationCity, type: "(.)", value: place };
+}
 
 // ── Filter types (minimal subset) ────────────────────────────────────────
 
@@ -41,6 +122,7 @@ type Filters = Condition | Group;
 const SENIORITY_TERMS: Record<string, string | null> = {
   intern: "Intern",
   entry_level: "Junior",
+  mid_level: null, // no Crustdata seniority term for mid-level — skip the filter
   senior: "Senior",
   staff: "Staff",
   principal: "Principal",
@@ -68,6 +150,7 @@ const REMOTE_STRIP_RE =
  *   "Remote, India"          → { place: "India", remoteOnly: false }
  *   "Remote - India"         → { place: "India", remoteOnly: false }
  *   "India (Remote)"         → { place: "India", remoteOnly: false }
+ *   "Hyderabad (India)"      → { place: "Hyderabad, India", remoteOnly: false }
  *   "Remote people based in India" → { place: "India", remoteOnly: false }
  *   "based in India, remote OK"    → { place: "India", remoteOnly: false }
  *   "Remote"                 → { place: null, remoteOnly: true }
@@ -87,12 +170,23 @@ export function parseLocationForFilter(location: string): {
     return { place: null, remoteOnly: true };
   }
 
-  // Strip parenthetical remote markers like "(Remote)" or "(remote ok)"
-  const withoutParens = trimmed.replace(/\(\s*remote[^)]*\)/gi, "");
-  const place = withoutParens
+  // Normalise parenthetical annotations:
+  //   "(Remote)"  → drop (remote marker)
+  //   "(India)"   → convert to ", India" so comma-segment country detection works
+  //   other parens → drop (unknown annotation, keep result clean)
+  const withParenNorm = trimmed.replace(/\(\s*([^)]+)\s*\)/g, (_, inner) => {
+    const innerTrim = inner.trim();
+    if (/remote/i.test(innerTrim)) return ""; // remote marker — drop
+    if (COUNTRY_ALIASES[innerTrim.toLowerCase()]) return `, ${innerTrim}`; // known country — comma form
+    return ""; // unknown paren — drop
+  });
+
+  const place = withParenNorm
     .replace(REMOTE_STRIP_RE, " ")
+    .replace(/\s*,\s*/g, ", ") // normalise "City , Country" → "City, Country"
     .replace(/[,\s-]+$/, "")
     .replace(/^[,\s-]+/, "")
+    .replace(/\s{2,}/g, " ") // collapse any remaining double-spaces
     .trim();
 
   return { place: place || null, remoteOnly: hasRemote && !place };
@@ -110,6 +204,29 @@ export type CalibrationRoleBrief = {
   years_experience_max?: unknown;
 };
 
+/**
+ * Break a title phrase into overlapping 2-word shingles (max 6 terms).
+ * Short titles (≤ 2 words) are returned as-is.
+ *
+ * Why: Crustdata "(.)" is a LITERAL phrase match.  A 5-word title like
+ * "Cyber Incident Review Team Lead" will match zero profiles because no
+ * one writes that exact phrase in their current-title field.  Shingles
+ * decompose it into ["Cyber Incident", "Incident Review", "Review Team",
+ * "Team Lead"] — all plausible, on-role 2-word phrases.
+ *
+ * Do NOT import this from crustdataQueryBuilder.ts — that file has its own
+ * copy and this module must remain import-free.
+ */
+function shingleTitle(title: string): string[] {
+  const words = title.split(/\s+/).filter((w) => w.length > 0);
+  if (words.length <= 2) return words.length > 0 ? [title] : [];
+  const shingles: string[] = [];
+  for (let i = 0; i + 2 <= words.length; i++) {
+    shingles.push(words[i] + " " + words[i + 1]);
+  }
+  return shingles.slice(0, 6);
+}
+
 /** Build Crustdata filters from a role-brief snapshot.  Returns null when
  *  there is not enough information to form a useful query (no title, no
  *  skills). */
@@ -118,24 +235,62 @@ export function buildCalibrationFilters(
 ): Filters | null {
   const conditions: Array<Condition | Group> = [];
 
-  // Title: use the role name as a contains match.
+  // Title: decompose into 2-word shingles so the literal-phrase "(.)" operator
+  // can match real profiles.  A single long phrase like "Cyber Incident Review
+  // Team Lead" matches nothing; its 4 shingles each match thousands.
   const title = typeof brief.name === "string" ? brief.name.trim() : null;
   if (title) {
-    conditions.push({ field: F.currentTitle, type: "(.)", value: title });
+    const terms = shingleTitle(title);
+    if (terms.length === 1) {
+      conditions.push({ field: F.currentTitle, type: "(.)", value: terms[0] });
+    } else {
+      conditions.push({
+        op: "or",
+        conditions: terms.map((t) => ({
+          field: F.currentTitle,
+          type: "(.)" as const,
+          value: t,
+        })),
+      } as Group);
+    }
   }
 
-  // Location — extract the geographic place even when "remote" is mentioned.
+  // Location — extract the geographic place even when "remote" is mentioned,
+  // then route to country (exact "=") or city (contains "(.)")  so that
+  // "India" queries the country field rather than the city field.
   const location =
     typeof brief.location === "string" ? brief.location.trim() : null;
   const { place } = location
     ? parseLocationForFilter(location)
     : { place: null };
   if (place) {
-    conditions.push({
-      field: F.locationCity,
-      type: "(.)",
-      value: place,
-    });
+    const classified = classifyPlace(place);
+    if (classified.type === "=") {
+      // Already a known country — use as-is.
+      conditions.push(classified);
+    } else {
+      // City filter: Crustdata city fields store only the bare city name.
+      // Take the first comma-segment so "Hyderabad, India" → "Hyderabad".
+      // Optional: if the last comma-segment is a known country, prefer the
+      // broader country exact filter (e.g. "Hyderabad, India" → country India).
+      const segments = place.split(",").map((s) => s.trim());
+      const lastSegment = segments[segments.length - 1].toLowerCase();
+      const countryCanonical =
+        segments.length > 1 ? COUNTRY_ALIASES[lastSegment] : undefined;
+      if (countryCanonical) {
+        conditions.push({
+          field: F.locationCountry,
+          type: "=",
+          value: countryCanonical,
+        });
+      } else {
+        conditions.push({
+          field: classified.field,
+          type: "(.)",
+          value: segments[0],
+        });
+      }
+    }
   }
 
   // Seniority
@@ -165,25 +320,21 @@ export function buildCalibrationFilters(
     conditions.push({ field: F.yearsOfExperience, type: "=<", value: yoeMax });
   }
 
-  // Required skills: at least one must appear (OR group)
+  // Required skills: only use the FIRST skill as a hard Crustdata filter.
+  // AND-ing multiple skill conditions is the most common cause of zero results
+  // when the API's skill vocabulary doesn't match the brief's exact phrasing.
+  // Remaining skills are used downstream for ranking/must_haves, not here.
   const skills = Array.isArray(brief.required_skills)
-    ? (brief.required_skills as unknown[])
-        .filter(
-          (s): s is string => typeof s === "string" && s.trim().length > 0,
-        )
-        .slice(0, 5)
+    ? (brief.required_skills as unknown[]).filter(
+        (s): s is string => typeof s === "string" && s.trim().length > 0,
+      )
     : [];
   if (skills.length > 0) {
-    const skillConds: Condition[] = skills.map((s) => ({
+    conditions.push({
       field: F.currentSkills,
       type: "(.)",
-      value: s.trim(),
-    }));
-    conditions.push(
-      skillConds.length === 1
-        ? skillConds[0]
-        : { op: "or", conditions: skillConds },
-    );
+      value: skills[0].trim(),
+    });
   }
 
   if (conditions.length === 0) return null;
@@ -247,8 +398,16 @@ export function normalizeCrustdataProfile(
     string,
     unknown
   >;
+  // Prefer social_handles.professional_network_identifier.profile_url; fall
+  // back to pni.public_identifier slug, then any top-level linkedin_url field.
   const rawLinkedin =
-    typeof pni.profile_url === "string" ? pni.profile_url : null;
+    (typeof pni.profile_url === "string" && pni.profile_url
+      ? pni.profile_url
+      : null) ??
+    (typeof pni.public_identifier === "string" && pni.public_identifier
+      ? `linkedin.com/in/${pni.public_identifier}`
+      : null) ??
+    (typeof raw.linkedin_url === "string" ? raw.linkedin_url : null);
 
   const personId =
     typeof raw.crustdata_person_id === "number" ||
@@ -275,18 +434,109 @@ export function normalizeCrustdataProfile(
   };
 }
 
+// ── Soft country safety net ───────────────────────────────────────────────
+
+// Per-country patterns that location_name must contain at least one of.
+// Only applied when the place is a known country (COUNTRY_ALIASES hit).
+const COUNTRY_LOCATION_PATTERNS: Record<string, RegExp> = {
+  India:
+    /\b(india|IN|bengaluru|bangalore|mumbai|delhi|hyderabad|chennai|pune|kolkata|calcutta|ahmedabad|jaipur|surat|lucknow|kanpur|nagpur|visakhapatnam|indore|thane|bhopal|patna|vadodara|ghaziabad|ludhiana|agra|nashik|faridabad|meerut|rajkot|kalyan|vasai|srinagar|aurangabad|dhanbad|amritsar|navi mumbai)\b/i,
+  "United States":
+    /\b(united states|usa|us\b|new york|los angeles|san francisco|chicago|houston|phoenix|philadelphia|san antonio|san diego|dallas|san jose|austin|jacksonville|fort worth|columbus|charlotte|indianapolis|seattle|denver|boston|el paso|detroit|nashville|portland|las vegas|memphis|louisville|baltimore|milwaukee|albuquerque|tucson|fresno|sacramento|mesa|kansas city|atlanta|omaha|colorado springs|raleigh|long beach|virginia beach|minneapolis|tampa|new orleans|arlington|wichita|bakersfield|aurora|anaheim|santa ana|corpus christi|riverside|st louis|lexington|pittsburgh|anchorage|stockton|cincinnati|st paul|toledo|greensboro|newark|plano|henderson|lincoln|buffalo|fort wayne|jersey city|chula vista|orlando|st petersburg|norfolk|chandler|laredo|madison|durham|lubbock|winston|garland|glendale|hialeah|reno|baton rouge|irvine|chesapeake|scottsdale|north las vegas|fremont|gilbert|san bernardino|birmingham|rochester|richmond|spokane|des moines|montgomery|modesto|fayetteville|tacoma|shreveport|san jose|akron|salt lake city|huntsville|grand rapids|tallahassee|worcester|knoxville|newport news|brownsville|santa clarita|providence|garden grove|oceanside|fort lauderdale|rancho cucamonga|tempe|ontario|springfield|cape coral|sioux falls|peoria|elk grove|pembroke pines|corona|eugene|cary|fort collins|jackson|alexandria|hayward|lancaster|salinas|palmdale|sunnyvale|pomona|escondido|surprise|roseville|kansas city|savannah|clarksville|paterson|torrance|bridgeport|mcallen|joliet|syracuse|pasadena|rockford|hollywood|macon|kansas city|fontana|moreno valley|glendale|akron|yonkers|amarillo|worcester|aurora|little rock|columbus|huntington beach|tallahassee|grand prairie|overland park|columbus|olympia)\b/i,
+  "United Kingdom":
+    /\b(united kingdom|uk\b|england|wales|scotland|northern ireland|london|manchester|birmingham|leeds|glasgow|sheffield|bradford|edinburgh|liverpool|bristol|cardiff|belfast|leicester|wakefield|coventry|nottingham|newcastle|sunderland|brighton|hull|plymouth|stoke|wolverhampton|derby|swansea|southampton|salford|aberdeen|westminster|portsmouth|york|peterborough|dundee|lancaster|oxford|cambridge|bath|exeter|chester|gloucester|cheltenham|northampton|milton keynes|reading|slough|swindon|ipswich|norwich|luton|bolton|stockport|blackpool|oldham|rotherham|middlesbrough|telford|worthing|huddersfield|poole|eastbourne)\b/i,
+};
+
+// Fallback for countries not in COUNTRY_LOCATION_PATTERNS: require location_name
+// to contain the canonical country name.
+function locationMatchesCountry(
+  locationName: string | null,
+  canonicalCountry: string,
+): boolean {
+  // Null/empty location is KEPT — the API already applied the country filter.
+  // Discarding profiles whose display string didn't parse would silently empty
+  // the pool even when the API returned valid matches.
+  if (!locationName) return true;
+
+  const pattern = COUNTRY_LOCATION_PATTERNS[canonicalCountry];
+  if (pattern) {
+    // Explicitly reject profiles whose location_name matches a DIFFERENT country
+    // pattern, then KEEP everything else (ambiguous text, city names, etc.).
+    if (pattern.test(locationName)) return true;
+    // Check whether it clearly belongs to another known country.
+    for (const [country, otherPattern] of Object.entries(
+      COUNTRY_LOCATION_PATTERNS,
+    )) {
+      if (country !== canonicalCountry && otherPattern.test(locationName)) {
+        return false; // clear contradiction — different country
+      }
+    }
+    return true; // ambiguous — keep
+  }
+  // Generic fallback for countries without a COUNTRY_LOCATION_PATTERNS entry:
+  // keep when location contains the country name; reject when it contains a
+  // different known country name instead.
+  if (locationName.toLowerCase().includes(canonicalCountry.toLowerCase())) {
+    return true;
+  }
+  for (const [country, otherPattern] of Object.entries(
+    COUNTRY_LOCATION_PATTERNS,
+  )) {
+    if (country !== canonicalCountry && otherPattern.test(locationName)) {
+      return false;
+    }
+  }
+  return true; // ambiguous — keep
+}
+
+/** Drop profiles whose location_name clearly contradicts the expected country.
+ *  Only active when place resolved to a known country (COUNTRY_ALIASES hit). */
+export function filterByCountry(
+  candidates: RawCalibrationCandidate[],
+  canonicalCountry: string,
+): RawCalibrationCandidate[] {
+  return candidates.filter((c) =>
+    locationMatchesCountry(c.location_name, canonicalCountry),
+  );
+}
+
+// ── Country extraction helper ─────────────────────────────────────────────
+
+/**
+ * Extract a canonical country name from a place string for use as a
+ * post-filter. Arms for:
+ *   "India"           → "India"          (bare country alias)
+ *   "Hyderabad, India" → "India"          (last comma-segment is a known country)
+ *   "Seattle, WA"     → null             (WA is not a COUNTRY_ALIASES key)
+ *   "Bangalore"       → null             (city-only, no country)
+ */
+export function extractCanonicalCountry(place: string): string | null {
+  if (!place) return null;
+  // Bare country alias
+  const direct = COUNTRY_ALIASES[place.toLowerCase().trim()];
+  if (direct) return direct;
+  // Last comma-segment might be a country (e.g. "Hyderabad, India")
+  const segments = place.split(",").map((s) => s.trim());
+  if (segments.length > 1) {
+    const lastAlias =
+      COUNTRY_ALIASES[segments[segments.length - 1].toLowerCase()];
+    if (lastAlias) return lastAlias;
+  }
+  return null;
+}
+
 // ── HTTP search ───────────────────────────────────────────────────────────
 
-/** Search Crustdata for candidates matching a role brief.
- *  Returns an empty array on any error (non-fatal for calibration gate). */
-export async function searchCrustdataForRoleBrief(
-  roleBrief: CalibrationRoleBrief,
+export type CrustdataSearchResult = {
+  candidates: RawCalibrationCandidate[];
+  note?: string;
+};
+
+async function callCrustdataApi(
+  filters: Filters,
   limit: number,
   apiKey: string,
-): Promise<RawCalibrationCandidate[]> {
-  const filters = buildCalibrationFilters(roleBrief);
-  if (!filters) return [];
-
+): Promise<{ profiles: Array<Record<string, unknown>> } | { error: string }> {
   try {
     const response = await fetch(CRUSTDATA_SEARCH_URL, {
       method: "POST",
@@ -297,12 +547,136 @@ export async function searchCrustdataForRoleBrief(
       },
       body: JSON.stringify({ filters, limit }),
     });
-    if (!response.ok) return [];
+    if (!response.ok) {
+      let bodySnippet = "";
+      try {
+        bodySnippet = (await response.text()).slice(0, 200);
+      } catch {
+        // ignore
+      }
+      console.error(
+        `crustdata HTTP error ${response.status}:`,
+        bodySnippet || "(no body)",
+      );
+      return { error: `HTTP ${response.status}` };
+    }
     const result = (await response.json()) as {
       profiles?: Array<Record<string, unknown>>;
     };
-    return (result.profiles ?? []).map(normalizeCrustdataProfile);
-  } catch {
-    return [];
+    return { profiles: result.profiles ?? [] };
+  } catch (err) {
+    console.error("crustdata fetch error:", err);
+    return { error: String(err) };
   }
+}
+
+/** Search Crustdata for candidates matching a role brief.
+ *  Returns `{ candidates, note? }` — note is set when the pool is empty or an
+ *  error occurred so callers can surface a recruiter-safe diagnostic. */
+export async function searchCrustdataForRoleBrief(
+  roleBrief: CalibrationRoleBrief,
+  limit: number,
+  apiKey: string,
+): Promise<CrustdataSearchResult> {
+  if (!apiKey) {
+    return {
+      candidates: [],
+      note: "Search is not configured on this server yet.",
+    };
+  }
+
+  const filters = buildCalibrationFilters(roleBrief);
+  if (!filters) {
+    return {
+      candidates: [],
+      note: "Brief has too little detail to search.",
+    };
+  }
+
+  // Determine canonical country for post-filter.
+  // Arms for bare countries ("India"), City,Country ("Hyderabad, India"),
+  // and paren forms ("Hyderabad (India)") — the latter is normalised to
+  // "Hyderabad, India" by parseLocationForFilter before we reach here.
+  const location =
+    typeof roleBrief.location === "string" ? roleBrief.location.trim() : null;
+  const { place } = location
+    ? parseLocationForFilter(location)
+    : { place: null };
+  const canonicalCountry = place ? extractCanonicalCountry(place) : null;
+
+  const applyCountryFilter = (
+    raw: RawCalibrationCandidate[],
+  ): RawCalibrationCandidate[] =>
+    canonicalCountry ? filterByCountry(raw, canonicalCountry) : raw;
+
+  // First attempt: full filters.
+  const firstResult = await callCrustdataApi(filters, limit, apiKey);
+  if ("error" in firstResult) {
+    return {
+      candidates: [],
+      note: "Web search returned an error — results may be limited.",
+    };
+  }
+
+  const firstNormalized = firstResult.profiles.map(normalizeCrustdataProfile);
+  const firstFiltered = applyCountryFilter(firstNormalized);
+
+  if (firstFiltered.length > 0) {
+    console.warn(
+      "crustdata: first pass returned",
+      firstFiltered.length,
+      "candidates",
+    );
+    return { candidates: firstFiltered };
+  }
+
+  // Zero results from first pass — distinguish why before deciding on retry.
+  if (firstNormalized.length > 0 && firstFiltered.length === 0) {
+    // Post-filter wiped everything: API returned profiles but none matched country.
+    // No point retrying with a looser query since the API already applied country.
+    return {
+      candidates: [],
+      note: "Web search returned profiles but none matched the requested location.",
+    };
+  }
+
+  // API returned 0 profiles. Try a broad retry: title + country only (no skills/seniority/yoe).
+  const broadFilters = buildCalibrationFilters({
+    name: roleBrief.name,
+    location: roleBrief.location,
+  });
+  if (!broadFilters) {
+    return {
+      candidates: [],
+      note: "No profiles matched in web search for this brief.",
+    };
+  }
+
+  console.warn(
+    "crustdata: first pass returned 0 — retrying with broader filters (title + location only)",
+  );
+  const retryResult = await callCrustdataApi(broadFilters, limit, apiKey);
+  if ("error" in retryResult) {
+    return {
+      candidates: [],
+      note: "Web search returned an error — results may be limited.",
+    };
+  }
+
+  const retryNormalized = retryResult.profiles.map(normalizeCrustdataProfile);
+  const retryFiltered = applyCountryFilter(retryNormalized);
+
+  if (retryFiltered.length > 0) {
+    console.warn(
+      "crustdata: broad retry returned",
+      retryFiltered.length,
+      "candidates",
+    );
+    return { candidates: retryFiltered };
+  }
+
+  return {
+    candidates: [],
+    note: "No profiles matched in web search for this brief.",
+  };
 }

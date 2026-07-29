@@ -12,6 +12,7 @@ import type {
   Deal,
   DealCandidate,
   DealNote,
+  FilterDraft,
   RAFile,
   Sale,
   SalesFormData,
@@ -32,7 +33,12 @@ export type CalibrationCandidate = {
   why_fit: string;
   match_score: number | null;
   linkedin_url?: string | null;
+  location_name?: string | null;
   from_bench?: boolean;
+  must_haves?: Array<{
+    label: string;
+    status: "found" | "inferred" | "missing";
+  }>;
 };
 
 export type CalibrationBatch = {
@@ -69,10 +75,10 @@ const processCompanyLogo = async (params: any) => {
   };
 };
 
-// Temporary sourcing kill-switches for Crustdata E2E testing.
-// Set both to `true` to re-enable free-portal and Exa sourcing.
+// Free-portal sourcing is permanently retired (product decision; Crustdata is the
+// sole sourcing vendor). Exa is also disabled. Neither flag is a temporary kill-switch.
 const FREE_PORTALS_ENABLED = false;
-const CHEAP_CLIENT_SOURCES_ENABLED = false; // disables Exa
+const CHEAP_CLIENT_SOURCES_ENABLED = false; // Exa — retired alongside free portals
 
 const getDataProviderWithCustomMethods = () => {
   const baseDataProvider = getBaseDataProvider();
@@ -1887,7 +1893,7 @@ const getDataProviderWithCustomMethods = () => {
       return data;
     },
 
-    // Return the next 3-5 candidates from the server-side pool.
+    // Return the next 3 candidates from the server-side pool (BATCH_SIZE=3).
     async calibrationNextBatch(dealId: Identifier): Promise<CalibrationBatch> {
       const { data, error } =
         await getSupabaseClient().functions.invoke<CalibrationBatch>(
@@ -1986,14 +1992,13 @@ const getDataProviderWithCustomMethods = () => {
     // produces a new versioned intent persisted on deals.role_brief_search_intent.
     // Also writes an intent_update transcript turn (non-fatal, server-side).
     async refineSearchIntent(dealId: Identifier, commandText: string) {
-      const { data, error } =
-        await getSupabaseClient().functions.invoke<{
-          intent: unknown;
-          record: unknown;
-        }>("resolve-search-intent", {
-          method: "POST",
-          body: { deal_id: Number(dealId), refine_history: [commandText] },
-        });
+      const { data, error } = await getSupabaseClient().functions.invoke<{
+        intent: unknown;
+        record: unknown;
+      }>("resolve-search-intent", {
+        method: "POST",
+        body: { deal_id: Number(dealId), refine_history: [commandText] },
+      });
       if (error) throw error;
       return data!;
     },
@@ -2114,6 +2119,52 @@ const getDataProviderWithCustomMethods = () => {
         previousData: existingRow,
       });
       return data.config as ConfigurationContextValue;
+    },
+
+    async searchCrustdataFilters(
+      filterDraft: FilterDraft,
+      limit?: number,
+      dealId?: string,
+    ) {
+      const { data, error } = await getSupabaseClient().functions.invoke<{
+        candidates: Array<{
+          id: string;
+          full_name?: string;
+          job_title?: string;
+          job_company_name?: string;
+          location_name?: string;
+          linkedin_url?: string;
+          skills?: string[];
+          years_experience?: number | null;
+        }>;
+        compiled_filters: unknown;
+        applied_groups: string[];
+        total_count: number;
+        note?: string;
+        error?: string;
+      }>("search-crustdata-filters", {
+        method: "POST",
+        body: {
+          filter_draft: filterDraft,
+          ...(limit ? { limit } : {}),
+          ...(dealId ? { deal_id: dealId } : {}),
+        },
+      });
+      if (!data || error) {
+        const errorDetails = await (async () => {
+          try {
+            return (await error?.context?.json()) ?? {};
+          } catch {
+            return {};
+          }
+        })();
+        throw new Error(
+          errorDetails?.message ||
+            errorDetails?.error ||
+            "Crustdata filter search failed",
+        );
+      }
+      return data;
     },
   } satisfies DataProvider;
 };

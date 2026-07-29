@@ -186,6 +186,18 @@ export const JdIntakePage = () => {
         navigate(`/roles/${command.deal_id}`);
       } else if (command.action === "show_roles") {
         navigate("/deals");
+      } else if (command.action === "refine_search_intent") {
+        if (command.deal_id == null) {
+          toast(
+            "Please mention which role to adjust, or open a specific role first.",
+          );
+        } else {
+          await dataProvider.refineSearchIntent(command.deal_id, commandText);
+          queryClient.invalidateQueries({
+            queryKey: ["deals", command.deal_id],
+          });
+          toast.success(command.explanation);
+        }
       } else {
         toast(command.explanation);
       }

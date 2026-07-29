@@ -29,6 +29,7 @@ import { ImportPage } from "../misc/ImportPage";
 import { ChangelogPage } from "../misc/ChangelogPage";
 import { JdIntakePage } from "../jd-intake/JdIntakePage";
 import { RoleWorkspacePage } from "../roles/RoleWorkspacePage";
+import { BuildSearchPage } from "../roles/BuildSearchPage";
 import { AnalyticsPage } from "../analytics/AnalyticsPage";
 import { TemplatesPage } from "../templates/TemplatesPage";
 import { CandidateApplicationPage } from "../apply/CandidateApplicationPage";
@@ -277,6 +278,7 @@ const DesktopAdmin = (
         <Route path={ChangelogPage.path} element={<ChangelogPage />} />
         <Route path={JdIntakePage.path} element={<JdIntakePage />} />
         <Route path={RoleWorkspacePage.path} element={<RoleWorkspacePage />} />
+        <Route path="/build-search" element={<BuildSearchPage />} />
         <Route path={CanvasPage.path} element={<CanvasPage />} />
         <Route path={AnalyticsPage.path} element={<AnalyticsPage />} />
         <Route path={TemplatesPage.path} element={<TemplatesPage />} />
@@ -377,6 +379,7 @@ const MobileAdmin = (
             path={RoleWorkspacePage.path}
             element={<RoleWorkspacePage />}
           />
+          <Route path="/build-search" element={<BuildSearchPage />} />
           <Route path={CanvasPage.path} element={<CanvasPage />} />
           <Route path={AnalyticsPage.path} element={<AnalyticsPage />} />
           <Route path={TemplatesPage.path} element={<TemplatesPage />} />

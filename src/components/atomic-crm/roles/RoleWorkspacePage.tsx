@@ -67,6 +67,7 @@ import {
 } from "../shell/roleAgentOrchestrator";
 import type { ConversationTurnMetadata } from "../shell/agentActionTiers";
 import type { Deal, RoleConversationTurn } from "../types";
+import { CandidateCard } from "./CandidateCard";
 import { SearchIntentDisplay } from "./SearchIntentDisplay";
 import { BuildSearchTab } from "./BuildSearchTab";
 import "../inbox/agent-h-theme.css";
@@ -81,7 +82,7 @@ export const RoleWorkspacePage = () => {
   );
 };
 
-type WorkspaceTab = "sourcing" | "review" | "build-search";
+type WorkspaceTab = "review" | "pipeline" | "build-search";
 
 const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
   const navigate = useNavigate();
@@ -107,6 +108,9 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
   const [lastBatch, setLastBatch] = useState<CalibrationBatch | null>(null);
   // True while a sourcing call is in flight (prevents double-trigger).
   const [sourcingInFlight, setSourcingInFlight] = useState(false);
+  const [cardSaveStates, setCardSaveStates] = useState<
+    Map<string, "idle" | "saving" | "saved">
+  >(new Map());
   const autostartFiredRef = useRef(false);
 
   const { data: openDeals } = useGetList<Deal>("deals", {
@@ -339,6 +343,33 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
     }
   };
 
+  const handleAddCardToPipeline = async (candidate: CalibrationCandidate) => {
+    const { external_id } = candidate;
+    if (pipelineExternalIds.has(external_id)) {
+      toast.info("Already in your pipeline.");
+      return;
+    }
+    setCardSaveStates((prev) => new Map(prev).set(external_id, "saving"));
+    try {
+      await dataProvider.saveSourcedCandidate(dealId, {
+        id: external_id,
+        full_name: candidate.name,
+        linkedin_url: candidate.linkedin_url ?? null,
+        job_title: candidate.headline ?? null,
+      });
+      queryClient.invalidateQueries({ queryKey: ["deal_candidates"] });
+      queryClient.invalidateQueries({
+        queryKey: ["deal_candidates_for_deal", dealId],
+      });
+      setCardSaveStates((prev) => new Map(prev).set(external_id, "saved"));
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Couldn't add candidate",
+      );
+      setCardSaveStates((prev) => new Map(prev).set(external_id, "idle"));
+    }
+  };
+
   const handleCalibrationYes = () => {
     if (deal?.sourcing_paused) {
       toast.info("Sourcing is paused — resume it before continuing.");
@@ -469,7 +500,7 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
   };
 
   const defaultTab: WorkspaceTab =
-    !pipelinePending && pipelineCount > 0 ? "review" : "sourcing";
+    !pipelinePending && pipelineCount > 0 ? "pipeline" : "review";
 
   // Candidates from last batch not yet in pipeline (for "Add N")
   const confidentCandidates = (lastBatch?.candidates ?? []).filter(
@@ -573,7 +604,7 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
             />
           </div>
 
-          {/* Two-tab spine */}
+          {/* Three-tab spine: Review / Pipeline / Search */}
           <Tabs
             defaultValue={defaultTab}
             className="flex-1 flex flex-col min-h-0"
@@ -583,9 +614,9 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
                 <TabsList className="h-auto gap-0 bg-transparent p-0 rounded-none">
                   {(
                     [
-                      { value: "sourcing", label: "Sourcing" },
-                      { value: "review", label: "Review & Contact" },
-                      { value: "build-search", label: "Build search" },
+                      { value: "review", label: "Review" },
+                      { value: "pipeline", label: "Pipeline" },
+                      { value: "build-search", label: "Search" },
                     ] as const
                   ).map(({ value, label }) => (
                     <TabsTrigger
@@ -600,40 +631,85 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
               </div>
             </div>
 
-            {/* Sourcing tab — simplified; Add candidates is now in the header */}
-            <TabsContent
-              value="sourcing"
-              className="flex-1 mt-0 overflow-y-auto"
-            >
-              <div className="max-w-4xl mx-auto px-6 py-8 flex flex-col items-center gap-4 text-center">
+            {/* Review tab — sourced/calibration CandidateCards */}
+            <TabsContent value="review" className="flex-1 mt-0 overflow-y-auto">
+              <div className="max-w-4xl mx-auto px-6 py-6">
                 {sourcingInFlight ? (
-                  <p className="text-sm text-muted-foreground max-w-sm animate-pulse">
-                    Sourcing candidates — this can take 30–90 seconds. You can
-                    stay on this page; no need to refresh.
+                  <p className="text-sm text-muted-foreground animate-pulse">
+                    Sourcing candidates — this usually takes 30–90 seconds.
+                    Results will appear here automatically.
                   </p>
-                ) : hasSearchRun ? (
-                  <>
-                    <p className="text-sm text-muted-foreground max-w-sm">
-                      Use the Role Memory panel to refine your search, or add
-                      candidates manually with the{" "}
-                      <strong>Add candidates</strong> button above.
+                ) : lastBatch && lastBatch.candidates.length > 0 ? (
+                  <div className="flex flex-col gap-3">
+                    <p className="text-xs text-muted-foreground">
+                      {lastBatch.candidates.length} candidate
+                      {lastBatch.candidates.length === 1 ? "" : "s"} from the
+                      latest search — add the ones you like to Pipeline.
                     </p>
-                    {hasCacheToken && (
+                    <ul className="flex flex-col gap-3 list-none p-0 m-0">
+                      {lastBatch.candidates.map((c) => (
+                        <li key={c.external_id}>
+                          <CandidateCard
+                            density="queue"
+                            name={c.name}
+                            headline={c.headline}
+                            location={c.location_name}
+                            fitScore={c.match_score}
+                            whyFit={c.why_fit}
+                            mustHaves={c.must_haves}
+                            linkedinUrl={c.linkedin_url}
+                            onAddToPipeline={
+                              pipelineExternalIds.has(c.external_id)
+                                ? undefined
+                                : () => handleAddCardToPipeline(c)
+                            }
+                            pipelineSaveState={
+                              pipelineExternalIds.has(c.external_id)
+                                ? "saved"
+                                : (cardSaveStates.get(c.external_id) ?? "idle")
+                            }
+                          />
+                        </li>
+                      ))}
+                    </ul>
+                    {/* Calibration actions */}
+                    <div className="flex gap-2 flex-wrap pt-2 border-t border-dashed">
                       <Button
                         size="sm"
-                        onClick={handleContinueSearch}
-                        disabled={commandBusy || sourcingInFlight}
+                        variant="outline"
+                        onClick={handleCalibrationYes}
+                        disabled={commandBusy}
+                        className="text-xs"
                       >
-                        <Sparkles className="h-4 w-4 mr-1.5" />
-                        Show more from search
+                        These look right — show more
                       </Button>
-                    )}
-                  </>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={handleCalibrationNo}
+                        disabled={commandBusy}
+                        className="text-xs text-muted-foreground"
+                      >
+                        Not a fit
+                      </Button>
+                      {hasCacheToken && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={handleContinueSearch}
+                          disabled={commandBusy || sourcingInFlight}
+                          className="text-xs ml-auto"
+                        >
+                          <Sparkles className="h-3.5 w-3.5 mr-1" />
+                          Show more from search
+                        </Button>
+                      )}
+                    </div>
+                  </div>
                 ) : (
-                  <>
+                  <div className="flex flex-col items-center gap-4 py-12 text-center">
                     <p className="text-sm text-muted-foreground max-w-sm">
-                      No search run yet. Start sourcing to find candidates, or
-                      add them manually.
+                      No candidates yet — start sourcing to see results here.
                     </p>
                     <div className="flex gap-2 flex-wrap justify-center">
                       <Button
@@ -642,7 +718,7 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
                         disabled={commandBusy || sourcingInFlight}
                       >
                         <Sparkles className="h-4 w-4 mr-1.5" />
-                        {sourcingInFlight ? "Sourcing…" : "Start sourcing"}
+                        Start sourcing
                       </Button>
                       <Button
                         size="sm"
@@ -653,21 +729,16 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
                         Add candidates
                       </Button>
                     </div>
-                  </>
+                  </div>
                 )}
               </div>
             </TabsContent>
 
-            {/* Build search tab */}
+            {/* Pipeline tab — review table + notes */}
             <TabsContent
-              value="build-search"
+              value="pipeline"
               className="flex-1 mt-0 overflow-y-auto"
             >
-              <BuildSearchTab deal={deal} />
-            </TabsContent>
-
-            {/* Review & Contact tab */}
-            <TabsContent value="review" className="flex-1 mt-0 overflow-y-auto">
               <div className="max-w-4xl mx-auto px-6 py-6 flex flex-col gap-6">
                 <div className="ah-panel p-6">
                   <div className="flex items-center justify-between mb-4">
@@ -712,6 +783,14 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
                   </InfiniteListBase>
                 </div>
               </div>
+            </TabsContent>
+
+            {/* Search tab */}
+            <TabsContent
+              value="build-search"
+              className="flex-1 mt-0 overflow-y-auto"
+            >
+              <BuildSearchTab deal={deal} />
             </TabsContent>
           </Tabs>
         </div>

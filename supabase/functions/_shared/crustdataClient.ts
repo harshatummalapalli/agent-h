@@ -201,6 +201,29 @@ export type CalibrationRoleBrief = {
   years_experience_max?: unknown;
 };
 
+/**
+ * Break a title phrase into overlapping 2-word shingles (max 6 terms).
+ * Short titles (≤ 2 words) are returned as-is.
+ *
+ * Why: Crustdata "(.)" is a LITERAL phrase match.  A 5-word title like
+ * "Cyber Incident Review Team Lead" will match zero profiles because no
+ * one writes that exact phrase in their current-title field.  Shingles
+ * decompose it into ["Cyber Incident", "Incident Review", "Review Team",
+ * "Team Lead"] — all plausible, on-role 2-word phrases.
+ *
+ * Do NOT import this from crustdataQueryBuilder.ts — that file has its own
+ * copy and this module must remain import-free.
+ */
+function shingleTitle(title: string): string[] {
+  const words = title.split(/\s+/).filter((w) => w.length > 0);
+  if (words.length <= 2) return words.length > 0 ? [title] : [];
+  const shingles: string[] = [];
+  for (let i = 0; i + 2 <= words.length; i++) {
+    shingles.push(words[i] + " " + words[i + 1]);
+  }
+  return shingles.slice(0, 6);
+}
+
 /** Build Crustdata filters from a role-brief snapshot.  Returns null when
  *  there is not enough information to form a useful query (no title, no
  *  skills). */
@@ -209,10 +232,24 @@ export function buildCalibrationFilters(
 ): Filters | null {
   const conditions: Array<Condition | Group> = [];
 
-  // Title: use the role name as a contains match.
+  // Title: decompose into 2-word shingles so the literal-phrase "(.)" operator
+  // can match real profiles.  A single long phrase like "Cyber Incident Review
+  // Team Lead" matches nothing; its 4 shingles each match thousands.
   const title = typeof brief.name === "string" ? brief.name.trim() : null;
   if (title) {
-    conditions.push({ field: F.currentTitle, type: "(.)", value: title });
+    const terms = shingleTitle(title);
+    if (terms.length === 1) {
+      conditions.push({ field: F.currentTitle, type: "(.)", value: terms[0] });
+    } else {
+      conditions.push({
+        op: "or",
+        conditions: terms.map((t) => ({
+          field: F.currentTitle,
+          type: "(.)" as const,
+          value: t,
+        })),
+      } as Group);
+    }
   }
 
   // Location — extract the geographic place even when "remote" is mentioned,

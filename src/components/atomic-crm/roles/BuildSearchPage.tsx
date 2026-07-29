@@ -513,6 +513,7 @@ export function BuildSearchPage() {
     error?: string;
     error_detail?: string;
     crustdata_http_status?: number | null;
+    relaxed_away?: string[];
   };
 
   const {
@@ -717,6 +718,7 @@ export function BuildSearchPage() {
   const searchNote = searchData?.note;
   const searchError = searchData?.error;
   const searchErrorDetail = searchData?.error_detail;
+  const relaxedAway = searchData?.relaxed_away ?? [];
   const hasSearched = !!searchData;
   const zeroResults = hasSearched && candidates.length === 0;
 
@@ -1273,18 +1275,25 @@ export function BuildSearchPage() {
                   </div>
                 )}
 
-                {(searchError || searchNote) && (
+                {(searchError || searchNote || relaxedAway.length > 0) && (
                   <div
                     className={`rounded-lg border p-3 text-xs space-y-1 ${
                       searchError
                         ? "border-destructive/30 bg-destructive/5 text-destructive"
-                        : "border-border bg-muted/30 text-muted-foreground"
+                        : relaxedAway.length > 0 && candidates.length > 0
+                          ? "border-amber-500/30 bg-amber-500/5 text-foreground"
+                          : "border-border bg-muted/30 text-muted-foreground"
                     }`}
                   >
                     {searchError && (
                       <p className="font-medium text-sm">{searchError}</p>
                     )}
                     {searchNote && <p>{searchNote}</p>}
+                    {relaxedAway.length > 0 && (
+                      <p className="text-muted-foreground">
+                        Relaxed away: {relaxedAway.join(" → ")}
+                      </p>
+                    )}
                     {searchErrorDetail && (
                       <pre className="mt-1 whitespace-pre-wrap break-all text-[10px] opacity-80">
                         {searchErrorDetail}
@@ -1304,28 +1313,10 @@ export function BuildSearchPage() {
                   <div className="rounded-lg border border-border bg-muted/30 p-5 flex flex-col gap-2">
                     <p className="text-sm font-medium">No candidates found</p>
                     <p className="text-xs text-muted-foreground">
-                      Check <strong>Active filters</strong> above — collapsed
-                      sections can still apply Location / YoE / company excludes
-                      from earlier runs. Hit <strong>Reset filters</strong>,
-                      then try a single skill like <em>LangChain</em> alone.
+                      Even after auto-relaxing constraints, Crustdata found
+                      nothing. Try broader titles (e.g.{" "}
+                      <em>Software Engineer</em>) or drop the country filter.
                     </p>
-                    <ul className="text-xs text-muted-foreground list-disc pl-4 space-y-1">
-                      <li>
-                        Too many AND skills — try removing one or two from{" "}
-                        <em>Must-have</em>, or move them to{" "}
-                        <em>Nice-to-have</em>
-                      </li>
-                      <li>
-                        Slash skills from autocomplete (e.g.{" "}
-                        <em>LangChain / LangGraph</em>) are now OR&apos;d —
-                        redeploy the edge function if you still see the slash in
-                        compiled filters as one phrase
-                      </li>
-                      <li>
-                        Country spelling — use full names like{" "}
-                        <strong>United States</strong> or <strong>India</strong>
-                      </li>
-                    </ul>
                   </div>
                 )}
 

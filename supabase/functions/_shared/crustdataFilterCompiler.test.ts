@@ -2,7 +2,10 @@
 // No Deno imports; runs under Vitest/Node via existing test infrastructure.
 
 import { describe, it, expect } from "vitest";
-import { compileFilterDraft } from "./crustdataFilterCompiler.ts";
+import {
+  compileFilterDraft,
+  relaxFilterDraft,
+} from "./crustdataFilterCompiler.ts";
 import type {
   CrustdataCondition,
   CrustdataGroup,
@@ -182,10 +185,46 @@ describe("compileFilterDraft – skills", () => {
     expect(skillConds.some((c) => c.value === "Python")).toBe(true);
   });
 
+  it("spaced skill expands to glued camelCase alternative", () => {
+    const { filters } = compileFilterDraft({
+      skillsRequired: ["Lang Chain"],
+    });
+    const skillConds = findContains(filters!, CRUSTDATA_FIELDS.skills);
+    expect(skillConds.some((c) => c.value === "Lang Chain")).toBe(true);
+    expect(skillConds.some((c) => c.value === "LangChain")).toBe(true);
+  });
+
+  it("parenthetical skill expands to phrase + acronym", () => {
+    const { filters } = compileFilterDraft({
+      skillsRequired: ["Retrieval-Augmented Generation (RAG)"],
+    });
+    const skillConds = findContains(filters!, CRUSTDATA_FIELDS.skills);
+    expect(skillConds.some((c) => c.value === "RAG")).toBe(true);
+    expect(
+      skillConds.some((c) => c.value === "Retrieval-Augmented Generation"),
+    ).toBe(true);
+  });
+
   it("single skill → direct (.) condition", () => {
     const { filters } = compileFilterDraft({ skillsRequired: ["LangChain"] });
     const conds = findContains(filters!, CRUSTDATA_FIELDS.skills);
     expect(conds.some((c) => c.value === "LangChain")).toBe(true);
+  });
+});
+
+describe("relaxFilterDraft", () => {
+  it("drops nice-to-have before company excludes", () => {
+    const step1 = relaxFilterDraft({
+      skillsNiceToHave: ["MCP"],
+      currentCompaniesExclude: ["Google"],
+      skillsRequired: ["Python", "LangChain"],
+    });
+    expect(step1?.dropped).toBe("nice-to-have skills");
+    const step2 = relaxFilterDraft(step1!.draft);
+    expect(step2?.dropped).toBe("company excludes");
+    const step3 = relaxFilterDraft(step2!.draft);
+    expect(step3?.dropped).toMatch(/extra must-have/);
+    expect(step3?.draft.skillsRequired).toEqual(["Python"]);
   });
 });
 

@@ -170,22 +170,62 @@ function decomposePhrase(
 
 /** Expand a single user-entered term into (possibly shingle-decomposed) terms. */
 function expandTerm(raw: string): string[] {
-  const trimmed = raw.trim();
+  // "&" is punctuation in titles ("AI & Software Engineer") — treat as space
+  // so it doesn't become a required all-words token.
+  const trimmed = raw
+    .trim()
+    .replace(/\s*&\s*/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
   if (!trimmed) return [];
   return decomposePhrase(trimmed);
 }
 
 /**
- * Split slash/pipe/ampersand skill alternatives ("LangChain / LangGraph")
- * into separate OR terms. Autocomplete often returns compound indexed
- * labels; Crustdata `(.)` all-words matching on the raw string with `/`
- * zeroes results. Within one skill chip → OR; across must-have chips → AND.
+ * Expand a skill chip into OR alternatives Crustdata is likely to index.
+ *
+ * Autocomplete / typed values often diverge from indexed forms:
+ *   - "Lang Chain" vs "LangChain" (space vs camelCase)
+ *   - "Retrieval-Augmented Generation (RAG)" → full phrase + acronym
+ *   - "LangChain / LangGraph" → slash alternatives
+ *   - hyphens vs spaces
+ *
+ * Within one chip → OR; across must-have chips → AND (caller).
  */
-function splitSkillAlternatives(raw: string): string[] {
-  return raw
-    .split(/\s*[/|&]\s*/)
-    .map((t) => t.trim())
-    .filter((t) => t.length > 0);
+function expandSkillAlternatives(raw: string): string[] {
+  const alts = new Set<string>();
+
+  const add = (s: string) => {
+    const t = s.trim();
+    if (t.length > 0) alts.add(t);
+  };
+
+  for (const part of raw.split(/\s*[/|&]\s*/)) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    add(trimmed);
+
+    // "Foo Bar (FB)" → "Foo Bar" + "FB"
+    const paren = trimmed.match(/^(.+?)\s*\(([^)]+)\)\s*$/);
+    if (paren) {
+      add(paren[1]);
+      add(paren[2]);
+    }
+
+    // "Lang Chain" → also "LangChain" (indexed camelCase / glued form)
+    const words = trimmed.split(/\s+/).filter(Boolean);
+    if (words.length >= 2 && words.length <= 4) {
+      add(words.join(""));
+    }
+
+    // Hyphen variants: "Retrieval-Augmented" ↔ "Retrieval Augmented"
+    if (trimmed.includes("-")) {
+      add(trimmed.replace(/-/g, " "));
+      add(trimmed.replace(/-/g, ""));
+    }
+  }
+
+  return Array.from(alts);
 }
 
 // ─── Condition builders ───────────────────────────────────────────────────────
@@ -366,13 +406,13 @@ export function compileFilterDraft(draft: FilterDraft): CompileResult {
     }
   }
 
-  // ── Skills: must-have (AND across chips; OR within slash alternatives) ──
+  // ── Skills: must-have (AND across chips; OR within expanded alternatives) ─
   const skillsRequired = (draft.skillsRequired ?? [])
     .map((s) => s.trim())
     .filter(Boolean);
   if (skillsRequired.length > 0) {
     for (const skill of skillsRequired) {
-      const alts = splitSkillAlternatives(skill);
+      const alts = expandSkillAlternatives(skill);
       const g = orGroup(alts.map((a) => contains(CRUSTDATA_FIELDS.skills, a)));
       if (g) topLevel.push(g);
     }
@@ -385,7 +425,7 @@ export function compileFilterDraft(draft: FilterDraft): CompileResult {
     .filter(Boolean);
   if (skillsNiceToHave.length > 0) {
     const conds = skillsNiceToHave.flatMap((s) =>
-      splitSkillAlternatives(s).map((a) =>
+      expandSkillAlternatives(s).map((a) =>
         contains(CRUSTDATA_FIELDS.skills, a),
       ),
     );
@@ -601,4 +641,115 @@ export function compileFilterDraft(draft: FilterDraft): CompileResult {
     filters: { op: "and", conditions: topLevel },
     appliedGroups,
   };
+}
+
+/**
+ * Progressive relaxation of an over-constrained FilterDraft.
+ * Each step drops one class of constraint that commonly zeros Crustdata.
+ * Returns null when no further relaxation is possible.
+ */
+export function relaxFilterDraft(
+  draft: FilterDraft,
+): { draft: FilterDraft; dropped: string } | null {
+  // 1. Nice-to-have skills (soft signal — shouldn't hard-filter)
+  if ((draft.skillsNiceToHave ?? []).some((s) => s.trim())) {
+    return {
+      draft: { ...draft, skillsNiceToHave: [] },
+      dropped: "nice-to-have skills",
+    };
+  }
+
+  // 2. Company excludes (FAANG excludes wipe most Hyderabad/India AI talent)
+  if ((draft.currentCompaniesExclude ?? []).some((s) => s.trim())) {
+    return {
+      draft: { ...draft, currentCompaniesExclude: [] },
+      dropped: "company excludes",
+    };
+  }
+
+  // 3. Extra must-have skills — keep only the first (matches calibration)
+  const must = (draft.skillsRequired ?? [])
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (must.length > 1) {
+    return {
+      draft: { ...draft, skillsRequired: [must[0]] },
+      dropped: `extra must-have skills (kept "${must[0]}")`,
+    };
+  }
+
+  // 4. Years of experience band
+  if (
+    (draft.yoeMin != null && draft.yoeMin > 0) ||
+    (draft.yoeMax != null && draft.yoeMax > 0)
+  ) {
+    return {
+      draft: { ...draft, yoeMin: null, yoeMax: null },
+      dropped: "years of experience",
+    };
+  }
+
+  // 5. City/state (keep country)
+  if (
+    (draft.locationCities ?? []).some((s) => s.trim()) ||
+    draft.locationCity?.trim() ||
+    (draft.locationStates ?? []).some((s) => s.trim())
+  ) {
+    return {
+      draft: {
+        ...draft,
+        locationCities: [],
+        locationCity: undefined,
+        locationStates: [],
+      },
+      dropped: "city/state (kept country)",
+    };
+  }
+
+  // 6. Remaining must-have skill
+  if (must.length === 1) {
+    return {
+      draft: { ...draft, skillsRequired: [] },
+      dropped: "must-have skills",
+    };
+  }
+
+  // 7. Headline / education / languages / connections extras
+  if (
+    (draft.headlineKeywordsInclude ?? []).some((s) => s.trim()) ||
+    (draft.headlineKeywordsExclude ?? []).some((s) => s.trim()) ||
+    (draft.educationSchools ?? []).some((s) => s.trim()) ||
+    (draft.educationDegrees ?? []).some((s) => s.trim()) ||
+    (draft.educationFieldsOfStudy ?? []).some((s) => s.trim()) ||
+    (draft.languages ?? []).some((s) => s.trim()) ||
+    (draft.connectionsMin != null && draft.connectionsMin > 0) ||
+    (draft.companyIndustries ?? []).some((s) => s.trim()) ||
+    draft.companyHQCountry?.trim() ||
+    (draft.headcountMin != null && draft.headcountMin > 0) ||
+    (draft.headcountMax != null && draft.headcountMax > 0) ||
+    draft.seniority?.trim() ||
+    (draft.currentSeniorities ?? []).some((s) => s.trim())
+  ) {
+    return {
+      draft: {
+        ...draft,
+        headlineKeywordsInclude: [],
+        headlineKeywordsExclude: [],
+        educationSchools: [],
+        educationDegrees: [],
+        educationFieldsOfStudy: [],
+        languages: [],
+        connectionsMin: null,
+        companyIndustries: [],
+        companyHQCountry: undefined,
+        headcountMin: null,
+        headcountMax: null,
+        seniority: undefined,
+        currentSeniorities: [],
+      },
+      dropped: "extra filters (education/headline/seniority/etc.)",
+    };
+  }
+
+  return null;
 }

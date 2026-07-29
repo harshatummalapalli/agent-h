@@ -2159,6 +2159,7 @@ const getDataProviderWithCustomMethods = () => {
         error?: string;
         error_detail?: string;
         crustdata_http_status?: number | null;
+        relaxed_away?: string[];
       }>("search-crustdata-filters", {
         method: "POST",
         body: {

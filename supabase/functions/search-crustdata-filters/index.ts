@@ -23,7 +23,9 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import * as jose from "jsr:@panva/jose@6";
 import {
   compileFilterDraft,
+  relaxFilterDraft,
   type FilterDraft,
+  type CrustdataFilters,
 } from "../_shared/crustdataFilterCompiler.ts";
 import {
   normalizeCrustdataProfile,
@@ -177,22 +179,11 @@ Deno.serve(async (req: Request) => {
   // ── Search mode (default) ────────────────────────────────────────────────
   const filterDraft = body.filter_draft as FilterDraft | undefined;
   const rawLimit = body.limit as number | undefined;
+  // Opt out of auto-relax when the UI wants a strict pass first.
+  const allowRelax = body.relax !== false;
 
   if (!filterDraft || typeof filterDraft !== "object") {
     return jsonResponse({ error: "filter_draft is required" }, 400);
-  }
-
-  // Compile UI draft → Crustdata filter tree.
-  const { filters, appliedGroups } = compileFilterDraft(filterDraft);
-
-  if (!filters) {
-    return jsonResponse({
-      candidates: [],
-      compiled_filters: null,
-      applied_groups: [],
-      total_count: 0,
-      note: "No filters provided — please fill in at least one filter field.",
-    });
   }
 
   const limit = Math.min(
@@ -200,106 +191,149 @@ Deno.serve(async (req: Request) => {
     MAX_LIMIT,
   );
 
-  // Call Crustdata person search.
-  // Request a minimal field set so responses always include identity +
-  // employment for the results list (default fields vary by account).
-  const searchBody = {
-    filters,
-    limit,
-    fields: [
-      "basic_profile",
-      "experience",
-      "social_handles",
-      "professional_network",
-    ],
-  };
-
-  let crustdataHttpStatus: number | null = null;
-  let crustdataResponse:
-    | {
-        profiles?: Array<Record<string, unknown>>;
-        total_count?: number;
-        error?: unknown;
-      }
-    | { error: string; detail?: string };
-  try {
-    const res = await fetch(CRUSTDATA_SEARCH_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${CRUSTDATA_API_KEY}`,
-        "x-api-version": CRUSTDATA_API_VERSION,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(searchBody),
-    });
-    crustdataHttpStatus = res.status;
-
-    if (!res.ok) {
-      let bodySnippet = "";
-      try {
-        bodySnippet = (await res.text()).slice(0, 500);
-      } catch {
-        /* ignore */
-      }
-      console.error(
-        `[search-crustdata-filters] HTTP ${res.status}:`,
-        bodySnippet || "(no body)",
-      );
-      crustdataResponse = {
-        error: `Crustdata returned HTTP ${res.status}`,
-        detail: bodySnippet || undefined,
-      };
-    } else {
-      crustdataResponse = (await res.json()) as {
-        profiles?: Array<Record<string, unknown>>;
-        total_count?: number;
-        error?: unknown;
-      };
-    }
-  } catch (err) {
-    console.error("[search-crustdata-filters] fetch error:", err);
-    crustdataResponse = { error: String(err) };
-  }
-
-  if (
-    "error" in crustdataResponse &&
-    typeof crustdataResponse.error === "string" &&
-    !("profiles" in crustdataResponse)
-  ) {
-    return jsonResponse(
-      {
-        candidates: [],
-        compiled_filters: filters,
-        applied_groups: appliedGroups,
-        total_count: 0,
-        crustdata_http_status: crustdataHttpStatus,
-        note: "Search provider returned an error — check compiled filters and try fewer constraints.",
-        error: crustdataResponse.error,
-        error_detail:
-          "detail" in crustdataResponse ? crustdataResponse.detail : undefined,
-      },
-      200, // return 200 so the UI can show diagnostics instead of a generic invoke failure
-    );
-  }
-
-  const okBody = crustdataResponse as {
+  type CrustOk = {
     profiles?: Array<Record<string, unknown>>;
     total_count?: number;
   };
-  const profiles = okBody.profiles ?? [];
+  type CrustErr = { error: string; detail?: string; httpStatus: number | null };
+
+  async function callCrustdata(
+    filters: CrustdataFilters,
+  ): Promise<CrustOk | CrustErr> {
+    try {
+      const res = await fetch(CRUSTDATA_SEARCH_URL, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${CRUSTDATA_API_KEY}`,
+          "x-api-version": CRUSTDATA_API_VERSION,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          filters,
+          limit,
+          fields: [
+            "basic_profile",
+            "experience",
+            "social_handles",
+            "professional_network",
+          ],
+        }),
+      });
+
+      if (!res.ok) {
+        let bodySnippet = "";
+        try {
+          bodySnippet = (await res.text()).slice(0, 500);
+        } catch {
+          /* ignore */
+        }
+        console.error(
+          `[search-crustdata-filters] HTTP ${res.status}:`,
+          bodySnippet || "(no body)",
+        );
+        return {
+          error: `Crustdata returned HTTP ${res.status}`,
+          detail: bodySnippet || undefined,
+          httpStatus: res.status,
+        };
+      }
+
+      const json = (await res.json()) as CrustOk;
+      return json;
+    } catch (err) {
+      console.error("[search-crustdata-filters] fetch error:", err);
+      return { error: String(err), httpStatus: null };
+    }
+  }
+
+  // Progressive search: try draft as-is, then relax constraints until we
+  // get profiles (same ladder philosophy as calibration's title+country retry).
+  let workingDraft: FilterDraft = filterDraft;
+  const dropped: string[] = [];
+  let lastFilters: CrustdataFilters | null = null;
+  let lastApplied: string[] = [];
+  let lastHttpStatus: number | null = null;
+  let profiles: Array<Record<string, unknown>> = [];
+  let totalCount = 0;
+  let lastError: CrustErr | null = null;
+
+  const MAX_RELAX_STEPS = 8;
+  for (let step = 0; step <= MAX_RELAX_STEPS; step++) {
+    const { filters, appliedGroups } = compileFilterDraft(workingDraft);
+    if (!filters) {
+      return jsonResponse({
+        candidates: [],
+        compiled_filters: null,
+        applied_groups: [],
+        total_count: 0,
+        note: "No filters provided — please fill in at least one filter field.",
+        relaxed_away: dropped,
+      });
+    }
+
+    lastFilters = filters;
+    lastApplied = appliedGroups;
+
+    const result = await callCrustdata(filters);
+    if ("error" in result) {
+      lastError = result;
+      lastHttpStatus = result.httpStatus;
+      // Don't relax through provider errors — surface them.
+      break;
+    }
+
+    profiles = result.profiles ?? [];
+    totalCount = result.total_count ?? profiles.length;
+    lastError = null;
+
+    if (profiles.length > 0) break;
+    if (!allowRelax) break;
+
+    const next = relaxFilterDraft(workingDraft);
+    if (!next) break;
+    dropped.push(next.dropped);
+    workingDraft = next.draft;
+    console.warn(
+      `[search-crustdata-filters] 0 results — relaxing: ${next.dropped}`,
+    );
+  }
+
+  if (lastError) {
+    return jsonResponse(
+      {
+        candidates: [],
+        compiled_filters: lastFilters,
+        applied_groups: lastApplied,
+        total_count: 0,
+        crustdata_http_status: lastHttpStatus,
+        note: "Search provider returned an error — check compiled filters and try fewer constraints.",
+        error: lastError.error,
+        error_detail: lastError.detail,
+        relaxed_away: dropped,
+      },
+      200,
+    );
+  }
+
   const candidates: RawCalibrationCandidate[] = profiles.map(
     normalizeCrustdataProfile,
   );
 
+  let note: string | undefined;
+  if (candidates.length === 0) {
+    note =
+      "Crustdata returned 0 profiles even after relaxing constraints. Try broader titles or a different country.";
+  } else if (dropped.length > 0) {
+    note = `Your exact filters returned 0 — showing results after dropping: ${dropped.join(", ")}.`;
+  }
+
   return jsonResponse({
     candidates,
-    compiled_filters: filters,
-    applied_groups: appliedGroups,
-    total_count: okBody.total_count ?? candidates.length,
-    crustdata_http_status: crustdataHttpStatus,
-    note:
-      candidates.length === 0
-        ? "Crustdata returned 0 profiles for these filters. Clear leftover Location / YoE / company excludes (Reset), or simplify skills."
-        : undefined,
+    compiled_filters: lastFilters,
+    applied_groups: lastApplied,
+    total_count: totalCount || candidates.length,
+    crustdata_http_status: lastHttpStatus,
+    relaxed_away: dropped,
+    note,
   });
 });

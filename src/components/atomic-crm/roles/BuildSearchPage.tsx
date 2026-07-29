@@ -49,7 +49,7 @@ const LS_KEY = "buildSearch:draft";
 function loadDraft(): FilterDraft {
   try {
     const raw = localStorage.getItem(LS_KEY);
-    if (raw) return JSON.parse(raw) as FilterDraft;
+    if (raw) return sanitizeDraft(JSON.parse(raw) as FilterDraft);
   } catch {
     /* ignore */
   }
@@ -64,38 +64,98 @@ function saveDraft(draft: FilterDraft) {
   }
 }
 
+function cleanStrArr(arr?: string[]): string[] {
+  return (arr ?? []).map((s) => s.trim()).filter(Boolean);
+}
+
+/** Drop blank / whitespace-only values so collapsed sticky fields don't leak. */
+function sanitizeDraft(draft: FilterDraft): FilterDraft {
+  const out: FilterDraft = {};
+  const setArr = (key: keyof FilterDraft, arr?: string[]) => {
+    const cleaned = cleanStrArr(arr);
+    if (cleaned.length > 0) (out as Record<string, unknown>)[key] = cleaned;
+  };
+  const setStr = (key: keyof FilterDraft, v?: string) => {
+    const t = v?.trim();
+    if (t) (out as Record<string, unknown>)[key] = t;
+  };
+  const setNum = (key: keyof FilterDraft, v?: number | null) => {
+    if (v != null && Number.isFinite(v) && v > 0) {
+      (out as Record<string, unknown>)[key] = v;
+    }
+  };
+
+  setArr("currentTitlesInclude", draft.currentTitlesInclude);
+  setArr("currentTitlesExclude", draft.currentTitlesExclude);
+  setArr("pastTitlesInclude", draft.pastTitlesInclude);
+  setArr("locationCountries", draft.locationCountries);
+  setStr("locationCountry", draft.locationCountry);
+  setArr("locationCities", draft.locationCities);
+  setStr("locationCity", draft.locationCity);
+  setArr("locationStates", draft.locationStates);
+  setArr("skillsRequired", draft.skillsRequired);
+  setArr("skillsNiceToHave", draft.skillsNiceToHave);
+  setStr("seniority", draft.seniority);
+  setArr("currentSeniorities", draft.currentSeniorities);
+  setNum("yoeMin", draft.yoeMin);
+  setNum("yoeMax", draft.yoeMax);
+  setArr("currentCompaniesInclude", draft.currentCompaniesInclude);
+  setArr("currentCompaniesExclude", draft.currentCompaniesExclude);
+  setArr("pastCompaniesInclude", draft.pastCompaniesInclude);
+  setArr("companyIndustries", draft.companyIndustries);
+  setStr("companyHQCountry", draft.companyHQCountry);
+  setNum("headcountMin", draft.headcountMin);
+  setNum("headcountMax", draft.headcountMax);
+  setArr("educationSchools", draft.educationSchools);
+  setArr("educationDegrees", draft.educationDegrees);
+  setArr("educationFieldsOfStudy", draft.educationFieldsOfStudy);
+  setArr("headlineKeywordsInclude", draft.headlineKeywordsInclude);
+  setArr("headlineKeywordsExclude", draft.headlineKeywordsExclude);
+  setArr("languages", draft.languages);
+  setNum("connectionsMin", draft.connectionsMin);
+  return out;
+}
+
 function isDraftEmpty(draft: FilterDraft): boolean {
-  const multiEmpty = (arr?: string[]) => !arr || arr.length === 0;
-  return (
-    multiEmpty(draft.currentTitlesInclude) &&
-    multiEmpty(draft.currentTitlesExclude) &&
-    multiEmpty(draft.pastTitlesInclude) &&
-    !draft.locationCountry &&
-    multiEmpty(draft.locationCountries) &&
-    !draft.locationCity &&
-    multiEmpty(draft.locationCities) &&
-    multiEmpty(draft.locationStates) &&
-    multiEmpty(draft.skillsRequired) &&
-    multiEmpty(draft.skillsNiceToHave) &&
-    !draft.seniority &&
-    multiEmpty(draft.currentSeniorities) &&
-    !draft.yoeMin &&
-    !draft.yoeMax &&
-    multiEmpty(draft.currentCompaniesInclude) &&
-    multiEmpty(draft.currentCompaniesExclude) &&
-    multiEmpty(draft.pastCompaniesInclude) &&
-    multiEmpty(draft.companyIndustries) &&
-    !draft.companyHQCountry &&
-    !draft.headcountMin &&
-    !draft.headcountMax &&
-    multiEmpty(draft.educationSchools) &&
-    multiEmpty(draft.educationDegrees) &&
-    multiEmpty(draft.educationFieldsOfStudy) &&
-    multiEmpty(draft.headlineKeywordsInclude) &&
-    multiEmpty(draft.headlineKeywordsExclude) &&
-    multiEmpty(draft.languages) &&
-    !draft.connectionsMin
-  );
+  return Object.keys(sanitizeDraft(draft)).length === 0;
+}
+
+/** Always-visible chips so collapsed accordion sections can't hide active filters. */
+function activeFilterChips(draft: FilterDraft): string[] {
+  const d = sanitizeDraft(draft);
+  const chips: string[] = [];
+  const pushMany = (label: string, vals?: string[]) => {
+    for (const v of vals ?? []) chips.push(`${label}: ${v}`);
+  };
+  pushMany("Title", d.currentTitlesInclude);
+  pushMany("Not title", d.currentTitlesExclude);
+  pushMany("Past title", d.pastTitlesInclude);
+  pushMany("Country", d.locationCountries);
+  if (d.locationCountry) chips.push(`Country: ${d.locationCountry}`);
+  pushMany("City", d.locationCities);
+  if (d.locationCity) chips.push(`City: ${d.locationCity}`);
+  pushMany("State", d.locationStates);
+  pushMany("Must skill", d.skillsRequired);
+  pushMany("Nice skill", d.skillsNiceToHave);
+  if (d.seniority) chips.push(`Seniority: ${d.seniority}`);
+  pushMany("Seniority", d.currentSeniorities);
+  if (d.yoeMin != null) chips.push(`YoE ≥ ${d.yoeMin}`);
+  if (d.yoeMax != null) chips.push(`YoE ≤ ${d.yoeMax}`);
+  pushMany("Company", d.currentCompaniesInclude);
+  pushMany("Not company", d.currentCompaniesExclude);
+  pushMany("Past company", d.pastCompaniesInclude);
+  pushMany("Industry", d.companyIndustries);
+  if (d.companyHQCountry) chips.push(`HQ: ${d.companyHQCountry}`);
+  if (d.headcountMin != null) chips.push(`Headcount ≥ ${d.headcountMin}`);
+  if (d.headcountMax != null) chips.push(`Headcount ≤ ${d.headcountMax}`);
+  pushMany("School", d.educationSchools);
+  pushMany("Degree", d.educationDegrees);
+  pushMany("Field", d.educationFieldsOfStudy);
+  pushMany("Headline", d.headlineKeywordsInclude);
+  pushMany("Not headline", d.headlineKeywordsExclude);
+  pushMany("Language", d.languages);
+  if (d.connectionsMin != null) chips.push(`Connections ≥ ${d.connectionsMin}`);
+  return chips;
 }
 
 // ─── TagInput ─────────────────────────────────────────────────────────────────
@@ -439,10 +499,21 @@ export function BuildSearchPage() {
   const [queueIdx, setQueueIdx] = useState(0);
   const [confirming, setConfirming] = useState(false);
 
-  // Persist draft to localStorage on every change
+  // Persist draft to localStorage on every change (sanitized)
   useEffect(() => {
-    saveDraft(draft);
+    saveDraft(sanitizeDraft(draft));
   }, [draft]);
+
+  type SearchResponse = {
+    candidates?: SearchCandidate[];
+    total_count?: number;
+    applied_groups?: string[];
+    compiled_filters?: unknown;
+    note?: string;
+    error?: string;
+    error_detail?: string;
+    crustdata_http_status?: number | null;
+  };
 
   const {
     mutate: runSearch,
@@ -451,7 +522,17 @@ export function BuildSearchPage() {
     error,
     reset,
   } = useMutation({
-    mutationFn: () => dataProvider.searchCrustdataFilters(draft, limit, dealId),
+    mutationFn: () => {
+      const cleaned = sanitizeDraft(draft);
+      setDraft(cleaned);
+      return dataProvider.searchCrustdataFilters(cleaned, limit, dealId);
+    },
+    onSuccess: (res) => {
+      const r = res as SearchResponse;
+      if ((r.candidates?.length ?? 0) === 0) {
+        setCompiledVisible(true);
+      }
+    },
     onError: () => {},
   });
 
@@ -464,6 +545,8 @@ export function BuildSearchPage() {
   const resetDraft = () => {
     setDraft({});
     localStorage.removeItem(LS_KEY);
+    setCompiledVisible(false);
+    setSelectedIds(new Set());
     reset();
   };
 
@@ -625,15 +708,16 @@ export function BuildSearchPage() {
   };
 
   const empty = isDraftEmpty(draft);
-  const candidates =
-    (data as { candidates?: SearchCandidate[] } | undefined)?.candidates ?? [];
-  const totalCount =
-    (data as { total_count?: number } | undefined)?.total_count ?? 0;
-  const appliedGroups =
-    (data as { applied_groups?: string[] } | undefined)?.applied_groups ?? [];
-  const compiledFilters = (data as { compiled_filters?: unknown } | undefined)
-    ?.compiled_filters;
-  const hasSearched = !!data;
+  const filterChips = activeFilterChips(draft);
+  const searchData = data as SearchResponse | undefined;
+  const candidates = searchData?.candidates ?? [];
+  const totalCount = searchData?.total_count ?? 0;
+  const appliedGroups = searchData?.applied_groups ?? [];
+  const compiledFilters = searchData?.compiled_filters;
+  const searchNote = searchData?.note;
+  const searchError = searchData?.error;
+  const searchErrorDetail = searchData?.error_detail;
+  const hasSearched = !!searchData;
   const zeroResults = hasSearched && candidates.length === 0;
 
   return (
@@ -651,13 +735,14 @@ export function BuildSearchPage() {
             </p>
           </div>
           <Button
-            variant="ghost"
+            variant={!empty ? "outline" : "ghost"}
             size="sm"
             onClick={resetDraft}
-            className="gap-1.5 text-muted-foreground"
+            className="gap-1.5"
+            title="Clear all filters (including ones hidden in collapsed sections)"
           >
             <RotateCcw className="h-3.5 w-3.5" />
-            Reset
+            Reset filters
           </Button>
         </div>
 
@@ -1035,6 +1120,35 @@ export function BuildSearchPage() {
               </div>
             </FilterSection>
 
+            {/* Active filters — always visible so collapsed sections can't hide constraints */}
+            {filterChips.length > 0 && (
+              <div className="rounded-lg border border-border bg-muted/20 p-3 flex flex-col gap-2">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs font-medium text-muted-foreground">
+                    Active filters ({filterChips.length})
+                  </p>
+                  <button
+                    type="button"
+                    className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
+                    onClick={resetDraft}
+                  >
+                    Clear all
+                  </button>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {filterChips.map((chip) => (
+                    <Badge
+                      key={chip}
+                      variant="secondary"
+                      className="text-[10px] font-normal"
+                    >
+                      {chip}
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Run button + limit */}
             <div className="flex items-center gap-3 pt-1">
               <Button
@@ -1094,7 +1208,8 @@ export function BuildSearchPage() {
 
             {error && (
               <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">
-                Search failed. Check your connection and try again.
+                {(error as Error).message ||
+                  "Search failed. Check your connection and try again."}
               </div>
             )}
 
@@ -1158,6 +1273,26 @@ export function BuildSearchPage() {
                   </div>
                 )}
 
+                {(searchError || searchNote) && (
+                  <div
+                    className={`rounded-lg border p-3 text-xs space-y-1 ${
+                      searchError
+                        ? "border-destructive/30 bg-destructive/5 text-destructive"
+                        : "border-border bg-muted/30 text-muted-foreground"
+                    }`}
+                  >
+                    {searchError && (
+                      <p className="font-medium text-sm">{searchError}</p>
+                    )}
+                    {searchNote && <p>{searchNote}</p>}
+                    {searchErrorDetail && (
+                      <pre className="mt-1 whitespace-pre-wrap break-all text-[10px] opacity-80">
+                        {searchErrorDetail}
+                      </pre>
+                    )}
+                  </div>
+                )}
+
                 {compiledVisible && (
                   <pre className="text-[10px] bg-muted rounded p-3 overflow-x-auto max-h-48 text-muted-foreground">
                     {JSON.stringify(compiledFilters, null, 2)}
@@ -1169,7 +1304,10 @@ export function BuildSearchPage() {
                   <div className="rounded-lg border border-border bg-muted/30 p-5 flex flex-col gap-2">
                     <p className="text-sm font-medium">No candidates found</p>
                     <p className="text-xs text-muted-foreground">
-                      Common causes:
+                      Check <strong>Active filters</strong> above — collapsed
+                      sections can still apply Location / YoE / company excludes
+                      from earlier runs. Hit <strong>Reset filters</strong>,
+                      then try a single skill like <em>LangChain</em> alone.
                     </p>
                     <ul className="text-xs text-muted-foreground list-disc pl-4 space-y-1">
                       <li>
@@ -1178,18 +1316,14 @@ export function BuildSearchPage() {
                         <em>Nice-to-have</em>
                       </li>
                       <li>
+                        Slash skills from autocomplete (e.g.{" "}
+                        <em>LangChain / LangGraph</em>) are now OR&apos;d —
+                        redeploy the edge function if you still see the slash in
+                        compiled filters as one phrase
+                      </li>
+                      <li>
                         Country spelling — use full names like{" "}
-                        <strong>United States</strong> or <strong>India</strong>{" "}
-                        (not abbreviations)
-                      </li>
-                      <li>
-                        Seniority vocabulary — try <strong>Senior</strong>,{" "}
-                        <strong>Lead</strong>, or <strong>Principal</strong>
-                      </li>
-                      <li>
-                        Company HQ country requires ISO alpha-3 (
-                        <strong>USA</strong>, <strong>IND</strong>,{" "}
-                        <strong>GBR</strong>)
+                        <strong>United States</strong> or <strong>India</strong>
                       </li>
                     </ul>
                   </div>

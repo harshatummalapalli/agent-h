@@ -2157,6 +2157,8 @@ const getDataProviderWithCustomMethods = () => {
         total_count: number;
         note?: string;
         error?: string;
+        error_detail?: string;
+        crustdata_http_status?: number | null;
       }>("search-crustdata-filters", {
         method: "POST",
         body: {

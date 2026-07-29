@@ -101,7 +101,10 @@ async function handleAutocomplete(body: {
   }
 
   const limit = Math.min(
-    Math.max(1, typeof rawLimit === "number" ? rawLimit : AUTOCOMPLETE_MAX_LIMIT),
+    Math.max(
+      1,
+      typeof rawLimit === "number" ? rawLimit : AUTOCOMPLETE_MAX_LIMIT,
+    ),
     AUTOCOMPLETE_MAX_LIMIT,
   );
 
@@ -124,7 +127,9 @@ async function handleAutocomplete(body: {
       return jsonResponse({ suggestions: [] });
     }
 
-    const data = (await res.json()) as { suggestions?: Array<{ value: string }> };
+    const data = (await res.json()) as {
+      suggestions?: Array<{ value: string }>;
+    };
     const suggestions = (data.suggestions ?? []).map((s) => s.value);
     return jsonResponse({ suggestions });
   } catch (err) {
@@ -196,9 +201,27 @@ Deno.serve(async (req: Request) => {
   );
 
   // Call Crustdata person search.
+  // Request a minimal field set so responses always include identity +
+  // employment for the results list (default fields vary by account).
+  const searchBody = {
+    filters,
+    limit,
+    fields: [
+      "basic_profile",
+      "experience",
+      "social_handles",
+      "professional_network",
+    ],
+  };
+
+  let crustdataHttpStatus: number | null = null;
   let crustdataResponse:
-    | { profiles?: Array<Record<string, unknown>>; total_count?: number }
-    | { error: string };
+    | {
+        profiles?: Array<Record<string, unknown>>;
+        total_count?: number;
+        error?: unknown;
+      }
+    | { error: string; detail?: string };
   try {
     const res = await fetch(CRUSTDATA_SEARCH_URL, {
       method: "POST",
@@ -207,25 +230,30 @@ Deno.serve(async (req: Request) => {
         "x-api-version": CRUSTDATA_API_VERSION,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ filters, limit }),
+      body: JSON.stringify(searchBody),
     });
+    crustdataHttpStatus = res.status;
 
     if (!res.ok) {
       let bodySnippet = "";
       try {
-        bodySnippet = (await res.text()).slice(0, 300);
+        bodySnippet = (await res.text()).slice(0, 500);
       } catch {
         /* ignore */
       }
       console.error(
         `[search-crustdata-filters] HTTP ${res.status}:`,
-        bodySnippet,
+        bodySnippet || "(no body)",
       );
-      crustdataResponse = { error: `Crustdata returned HTTP ${res.status}` };
+      crustdataResponse = {
+        error: `Crustdata returned HTTP ${res.status}`,
+        detail: bodySnippet || undefined,
+      };
     } else {
       crustdataResponse = (await res.json()) as {
         profiles?: Array<Record<string, unknown>>;
         total_count?: number;
+        error?: unknown;
       };
     }
   } catch (err) {
@@ -233,21 +261,32 @@ Deno.serve(async (req: Request) => {
     crustdataResponse = { error: String(err) };
   }
 
-  if ("error" in crustdataResponse) {
+  if (
+    "error" in crustdataResponse &&
+    typeof crustdataResponse.error === "string" &&
+    !("profiles" in crustdataResponse)
+  ) {
     return jsonResponse(
       {
         candidates: [],
         compiled_filters: filters,
         applied_groups: appliedGroups,
         total_count: 0,
-        note: "Search returned an error — credits are not consumed on errors.",
+        crustdata_http_status: crustdataHttpStatus,
+        note: "Search provider returned an error — check compiled filters and try fewer constraints.",
         error: crustdataResponse.error,
+        error_detail:
+          "detail" in crustdataResponse ? crustdataResponse.detail : undefined,
       },
-      502,
+      200, // return 200 so the UI can show diagnostics instead of a generic invoke failure
     );
   }
 
-  const profiles = crustdataResponse.profiles ?? [];
+  const okBody = crustdataResponse as {
+    profiles?: Array<Record<string, unknown>>;
+    total_count?: number;
+  };
+  const profiles = okBody.profiles ?? [];
   const candidates: RawCalibrationCandidate[] = profiles.map(
     normalizeCrustdataProfile,
   );
@@ -256,6 +295,11 @@ Deno.serve(async (req: Request) => {
     candidates,
     compiled_filters: filters,
     applied_groups: appliedGroups,
-    total_count: crustdataResponse.total_count ?? candidates.length,
+    total_count: okBody.total_count ?? candidates.length,
+    crustdata_http_status: crustdataHttpStatus,
+    note:
+      candidates.length === 0
+        ? "Crustdata returned 0 profiles for these filters. Clear leftover Location / YoE / company excludes (Reset), or simplify skills."
+        : undefined,
   });
 });

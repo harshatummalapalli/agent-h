@@ -162,24 +162,30 @@ describe("compileFilterDraft – title exclusions", () => {
 // ─── Skills (must-have AND) ───────────────────────────────────────────────────
 
 describe("compileFilterDraft – skills", () => {
-  it("multiple skills → AND (each must-have)", () => {
+  it("slash skill alternatives → OR within chip, AND across chips", () => {
     const { filters } = compileFilterDraft({
-      skillsRequired: ["Python", "Kubernetes", "Security"],
+      skillsRequired: ["LangChain / LangGraph", "Python"],
     });
     expect(filters).not.toBeNull();
     expect(filters!.op).toBe("and");
+    // First condition is OR(LangChain, LangGraph); second is Python
+    const first = filters!.conditions[0];
+    expect("op" in first && first.op === "or").toBe(true);
+    if ("op" in first) {
+      const vals = first.conditions
+        .filter((c): c is CrustdataCondition => "field" in c)
+        .map((c) => c.value);
+      expect(vals).toContain("LangChain");
+      expect(vals).toContain("LangGraph");
+    }
     const skillConds = findContains(filters!, CRUSTDATA_FIELDS.skills);
-    expect(skillConds).toHaveLength(3);
-    const vals = skillConds.map((c) => c.value);
-    expect(vals).toContain("Python");
-    expect(vals).toContain("Kubernetes");
-    expect(vals).toContain("Security");
+    expect(skillConds.some((c) => c.value === "Python")).toBe(true);
   });
 
   it("single skill → direct (.) condition", () => {
-    const { filters } = compileFilterDraft({ skillsRequired: ["Python"] });
+    const { filters } = compileFilterDraft({ skillsRequired: ["LangChain"] });
     const conds = findContains(filters!, CRUSTDATA_FIELDS.skills);
-    expect(conds.some((c) => c.value === "Python")).toBe(true);
+    expect(conds.some((c) => c.value === "LangChain")).toBe(true);
   });
 });
 
@@ -352,9 +358,7 @@ describe("compileFilterDraft – nice-to-have skills OR", () => {
     // must-have: direct (.) condition at top level (not inside an OR group)
     const directRequiredConds = filters!.conditions.filter(
       (c): c is CrustdataCondition =>
-        "field" in c &&
-        c.field === CRUSTDATA_FIELDS.skills &&
-        c.type === "(.)",
+        "field" in c && c.field === CRUSTDATA_FIELDS.skills && c.type === "(.)",
     );
     expect(directRequiredConds.length).toBe(1);
     expect(directRequiredConds[0].value).toBe("Python");
@@ -388,8 +392,7 @@ describe("compileFilterDraft – currentSeniorities OR", () => {
         c.op === "or" &&
         c.conditions.some(
           (i): boolean =>
-            "field" in i &&
-            i.field === CRUSTDATA_FIELDS.currentSeniorityLevel,
+            "field" in i && i.field === CRUSTDATA_FIELDS.currentSeniorityLevel,
         ),
     );
     expect(orG).toBeDefined();
@@ -433,7 +436,10 @@ describe("compileFilterDraft – education filters", () => {
     });
     expect(filters).not.toBeNull();
     expect(appliedGroups).toContain("education schools");
-    const schoolConds = findContains(filters!, CRUSTDATA_FIELDS.educationSchool);
+    const schoolConds = findContains(
+      filters!,
+      CRUSTDATA_FIELDS.educationSchool,
+    );
     expect(schoolConds.some((c) => c.value === "MIT")).toBe(true);
     expect(schoolConds.some((c) => c.value === "Stanford")).toBe(true);
   });
@@ -444,7 +450,10 @@ describe("compileFilterDraft – education filters", () => {
     });
     expect(filters).not.toBeNull();
     expect(appliedGroups).toContain("education degrees");
-    const degreeConds = findContains(filters!, CRUSTDATA_FIELDS.educationDegree);
+    const degreeConds = findContains(
+      filters!,
+      CRUSTDATA_FIELDS.educationDegree,
+    );
     expect(degreeConds.length).toBeGreaterThan(0);
   });
 

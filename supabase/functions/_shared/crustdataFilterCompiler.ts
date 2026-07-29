@@ -175,6 +175,19 @@ function expandTerm(raw: string): string[] {
   return decomposePhrase(trimmed);
 }
 
+/**
+ * Split slash/pipe/ampersand skill alternatives ("LangChain / LangGraph")
+ * into separate OR terms. Autocomplete often returns compound indexed
+ * labels; Crustdata `(.)` all-words matching on the raw string with `/`
+ * zeroes results. Within one skill chip → OR; across must-have chips → AND.
+ */
+function splitSkillAlternatives(raw: string): string[] {
+  return raw
+    .split(/\s*[/|&]\s*/)
+    .map((t) => t.trim())
+    .filter((t) => t.length > 0);
+}
+
 // ─── Condition builders ───────────────────────────────────────────────────────
 
 function contains(field: string, value: string): CrustdataCondition {
@@ -353,25 +366,30 @@ export function compileFilterDraft(draft: FilterDraft): CompileResult {
     }
   }
 
-  // ── Skills: must-have (AND — each listed skill is required) ─────────────
+  // ── Skills: must-have (AND across chips; OR within slash alternatives) ──
   const skillsRequired = (draft.skillsRequired ?? [])
     .map((s) => s.trim())
     .filter(Boolean);
   if (skillsRequired.length > 0) {
     for (const skill of skillsRequired) {
-      topLevel.push(contains(CRUSTDATA_FIELDS.skills, skill));
+      const alts = splitSkillAlternatives(skill);
+      const g = orGroup(alts.map((a) => contains(CRUSTDATA_FIELDS.skills, a)));
+      if (g) topLevel.push(g);
     }
     appliedGroups.push("skills");
   }
 
-  // ── Skills: nice-to-have (OR — any matching skill counts) ───────────────
+  // ── Skills: nice-to-have (OR — any matching skill / alternative counts) ─
   const skillsNiceToHave = (draft.skillsNiceToHave ?? [])
     .map((s) => s.trim())
     .filter(Boolean);
   if (skillsNiceToHave.length > 0) {
-    const g = orGroup(
-      skillsNiceToHave.map((s) => contains(CRUSTDATA_FIELDS.skills, s)),
+    const conds = skillsNiceToHave.flatMap((s) =>
+      splitSkillAlternatives(s).map((a) =>
+        contains(CRUSTDATA_FIELDS.skills, a),
+      ),
     );
+    const g = orGroup(conds);
     if (g) {
       topLevel.push(g);
       appliedGroups.push("skills nice-to-have");
@@ -381,9 +399,7 @@ export function compileFilterDraft(draft: FilterDraft): CompileResult {
   // ── Seniority: single (legacy) ──────────────────────────────────────────
   const seniority = draft.seniority?.trim();
   if (seniority && !(draft.currentSeniorities ?? []).length) {
-    topLevel.push(
-      contains(CRUSTDATA_FIELDS.currentSeniorityLevel, seniority),
-    );
+    topLevel.push(contains(CRUSTDATA_FIELDS.currentSeniorityLevel, seniority));
     appliedGroups.push("seniority");
   }
 
@@ -440,7 +456,9 @@ export function compileFilterDraft(draft: FilterDraft): CompileResult {
   if (companyExcludes.length > 0) appliedGroups.push("current company exclude");
 
   // ── Past company include (OR-group) ─────────────────────────────────────
-  const pastCompanyIncludes = (draft.pastCompaniesInclude ?? []).filter(Boolean);
+  const pastCompanyIncludes = (draft.pastCompaniesInclude ?? []).filter(
+    Boolean,
+  );
   if (pastCompanyIncludes.length > 0) {
     const conds = pastCompanyIncludes
       .map((c) => c.trim())
@@ -529,7 +547,9 @@ export function compileFilterDraft(draft: FilterDraft): CompileResult {
   }
 
   // ── Headline keywords include (OR-group) ─────────────────────────────────
-  const headlineIncludes = (draft.headlineKeywordsInclude ?? []).filter(Boolean);
+  const headlineIncludes = (draft.headlineKeywordsInclude ?? []).filter(
+    Boolean,
+  );
   if (headlineIncludes.length > 0) {
     const g = simpleOrGroup(CRUSTDATA_FIELDS.headline, headlineIncludes);
     if (g) {
@@ -539,7 +559,9 @@ export function compileFilterDraft(draft: FilterDraft): CompileResult {
   }
 
   // ── Headline keywords exclude (AND) ──────────────────────────────────────
-  const headlineExcludes = (draft.headlineKeywordsExclude ?? []).filter(Boolean);
+  const headlineExcludes = (draft.headlineKeywordsExclude ?? []).filter(
+    Boolean,
+  );
   for (const kw of headlineExcludes) {
     const trimmed = kw.trim();
     if (trimmed) {
@@ -570,12 +592,13 @@ export function compileFilterDraft(draft: FilterDraft): CompileResult {
     appliedGroups.push("connections min");
   }
 
-  // ── Assemble root AND-group ──────────────────────────────────────────────
+  // ── Assemble ─────────────────────────────────────────────────────────────
   if (topLevel.length === 0) {
     return { filters: null, appliedGroups: [] };
   }
 
-  const filters: CrustdataGroup = { op: "and", conditions: topLevel };
-
-  return { filters, appliedGroups };
+  return {
+    filters: { op: "and", conditions: topLevel },
+    appliedGroups,
+  };
 }

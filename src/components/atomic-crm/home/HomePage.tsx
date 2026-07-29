@@ -395,6 +395,27 @@ export const HomePage = () => {
             </div>
           )}
 
+          {/* Build Search CTA — quick access for manual Crustdata searches */}
+          {!hasConversation && (
+            <Link
+              to="/build-search"
+              className="flex items-center justify-between gap-3 rounded-lg border border-border bg-card px-4 py-3 no-underline hover:bg-accent/40 transition-colors group"
+            >
+              <div className="flex items-center gap-2.5">
+                <Search className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors shrink-0" />
+                <div>
+                  <p className="text-sm font-medium text-foreground leading-tight">
+                    Build your search
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Tune Crustdata filters directly — no role needed
+                  </p>
+                </div>
+              </div>
+              <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/50 group-hover:text-muted-foreground transition-colors shrink-0" />
+            </Link>
+          )}
+
           {/* Integrations strip — hidden during active conversation */}
           {!hasConversation && <IntegrationsStrip />}
         </div>

@@ -35,132 +35,110 @@ function buildEmptyCriteria(
 }
 
 describe("decomposeSearchPhrase", () => {
-  it("keeps a short phrase (at or under the shingle size) intact", () => {
-    // Arrange
-    const phrase = "AI Engineer";
-
-    // Act
-    const result = decomposeSearchPhrase(phrase);
-
-    // Assert
-    expect(result).toEqual(["AI Engineer"]);
+  it("keeps a short phrase intact", () => {
+    expect(decomposeSearchPhrase("AI Engineer")).toEqual(["AI Engineer"]);
   });
 
   it("keeps a single word intact", () => {
-    // Arrange & Act
-    const result = decomposeSearchPhrase("Java");
-
-    // Assert
-    expect(result).toEqual(["Java"]);
+    expect(decomposeSearchPhrase("Java")).toEqual(["Java"]);
   });
 
-  it("breaks a long compound phrase into overlapping shingles instead of one literal phrase", () => {
-    // Arrange: the live-confirmed gotcha case -- "Azure OpenAI Engineer" (3
-    // words) never appears verbatim in indexed titles, but its 2-word
-    // shingles are far more likely to.
-    const phrase = "Azure OpenAI Engineer";
-
-    // Act
-    const result = decomposeSearchPhrase(phrase);
-
-    // Assert
-    expect(result).toEqual(["Azure OpenAI", "OpenAI Engineer"]);
+  it("keeps a long phrase whole (no shingle OR — live 2026-07-29)", () => {
+    // Live compare: full-phrase (.) beat shingle OR for Machine Learning Engineer.
+    expect(decomposeSearchPhrase("Azure OpenAI Engineer")).toEqual([
+      "Azure OpenAI Engineer",
+    ]);
+    expect(decomposeSearchPhrase("Natural Language Processing")).toEqual([
+      "Natural Language Processing",
+    ]);
   });
 
   it("splits a slash-delimited compound string into separate variants", () => {
-    // Arrange
-    const phrase = "AWS/Azure/GCP";
-
-    // Act
-    const result = decomposeSearchPhrase(phrase);
-
-    // Assert
-    expect(result).toEqual(["AWS", "Azure", "GCP"]);
+    expect(decomposeSearchPhrase("AWS/Azure/GCP")).toEqual([
+      "AWS",
+      "Azure",
+      "GCP",
+    ]);
   });
 
-  it("splits a pipe-delimited compound string and shingles the long variants", () => {
-    // Arrange: the exact live-tested query from the gotcha report.
-    const phrase = "AI Engineer|.NET AI|Azure OpenAI Engineer";
-
-    // Act
-    const result = decomposeSearchPhrase(phrase);
-
-    // Assert
+  it("splits a pipe-delimited compound string into full-phrase alternatives", () => {
+    const result = decomposeSearchPhrase(
+      "AI Engineer|.NET AI|Azure OpenAI Engineer",
+    );
     expect(result).toContain("AI Engineer");
     expect(result).toContain(".NET AI");
-    expect(result).toContain("Azure OpenAI");
-    expect(result).toContain("OpenAI Engineer");
-    // The original 3-word phrase should never survive as one literal term.
-    expect(result).not.toContain("Azure OpenAI Engineer");
+    expect(result).toContain("Azure OpenAI Engineer");
+    expect(result).not.toContain("Azure OpenAI"); // no longer shingles
   });
 
-  it("de-duplicates repeated shingles across variants", () => {
-    // Arrange
-    const phrase = "Senior Backend Engineer / Backend Engineer";
-
-    // Act
-    const result = decomposeSearchPhrase(phrase);
-
-    // Assert: "Backend Engineer" shingle appears from both variants but only once
-    const occurrences = result.filter((t) => t === "Backend Engineer").length;
-    expect(occurrences).toBe(1);
+  it("de-duplicates repeated phrases across variants", () => {
+    const result = decomposeSearchPhrase(
+      "Senior Backend Engineer / Backend Engineer",
+    );
+    expect(result.filter((t) => t === "Backend Engineer").length).toBe(1);
+    expect(result).toContain("Senior Backend Engineer");
   });
 
   it("caps the number of decomposed terms at maxTerms", () => {
-    // Arrange
-    const phrase = "one two three four five six seven eight nine ten";
-
-    // Act
-    const result = decomposeSearchPhrase(phrase, 3);
-
-    // Assert
+    const result = decomposeSearchPhrase("one/two/three/four/five", 3);
     expect(result.length).toBe(3);
   });
 });
 
 describe("buildContainsCondition", () => {
   it("returns null when given no phrases", () => {
-    // Arrange & Act
-    const result = buildContainsCondition(CRUSTDATA_FIELDS.currentTitle, []);
-
-    // Assert
-    expect(result).toBeNull();
+    expect(
+      buildContainsCondition(CRUSTDATA_FIELDS.currentTitle, []),
+    ).toBeNull();
   });
 
   it("returns null when every phrase decomposes to nothing", () => {
-    // Arrange & Act
-    const result = buildContainsCondition(CRUSTDATA_FIELDS.currentTitle, [
-      "   ",
-      "",
-    ]);
-
-    // Assert
-    expect(result).toBeNull();
+    expect(
+      buildContainsCondition(CRUSTDATA_FIELDS.currentTitle, ["   ", ""]),
+    ).toBeNull();
   });
 
-  it("builds a single (.) condition joining decomposed terms with |", () => {
-    // Arrange & Act
-    const result = buildContainsCondition(CRUSTDATA_FIELDS.currentTitle, [
-      "AI Engineer",
-    ]);
-
-    // Assert
-    expect(result).toEqual({
+  it("builds a single (.) condition with the full phrase (no pipe-join)", () => {
+    expect(
+      buildContainsCondition(CRUSTDATA_FIELDS.currentTitle, [
+        "Machine Learning Engineer",
+      ]),
+    ).toEqual({
       field: CRUSTDATA_FIELDS.currentTitle,
       type: "(.)",
-      value: "AI Engineer",
+      value: "Machine Learning Engineer",
+    });
+  });
+
+  it("OR-groups compound alternatives instead of pipe-joining", () => {
+    expect(
+      buildContainsCondition(CRUSTDATA_FIELDS.currentTitle, [
+        "AI Engineer|ML Engineer",
+      ]),
+    ).toEqual({
+      op: "or",
+      conditions: [
+        {
+          field: CRUSTDATA_FIELDS.currentTitle,
+          type: "(.)",
+          value: "AI Engineer",
+        },
+        {
+          field: CRUSTDATA_FIELDS.currentTitle,
+          type: "(.)",
+          value: "ML Engineer",
+        },
+      ],
     });
   });
 
   it("returns null when given multiple phrases (use buildContainsOrGroupFromPhrases)", () => {
-    // Arrange & Act
-    const result = buildContainsCondition(CRUSTDATA_FIELDS.currentTitle, [
-      "Backend Engineer",
-      "Backend Developer",
-    ]);
-
-    // Assert
-    expect(result).toBeNull();
+    expect(
+      buildContainsCondition(CRUSTDATA_FIELDS.currentTitle, [
+        "Backend Engineer",
+        "Backend Developer",
+      ]),
+    ).toBeNull();
   });
 });
 

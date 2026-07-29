@@ -149,6 +149,7 @@ const REMOTE_STRIP_RE =
  *   "Remote, India"          → { place: "India", remoteOnly: false }
  *   "Remote - India"         → { place: "India", remoteOnly: false }
  *   "India (Remote)"         → { place: "India", remoteOnly: false }
+ *   "Hyderabad (India)"      → { place: "Hyderabad, India", remoteOnly: false }
  *   "Remote people based in India" → { place: "India", remoteOnly: false }
  *   "based in India, remote OK"    → { place: "India", remoteOnly: false }
  *   "Remote"                 → { place: null, remoteOnly: true }
@@ -168,9 +169,18 @@ export function parseLocationForFilter(location: string): {
     return { place: null, remoteOnly: true };
   }
 
-  // Strip parenthetical remote markers like "(Remote)" or "(remote ok)"
-  const withoutParens = trimmed.replace(/\(\s*remote[^)]*\)/gi, "");
-  const place = withoutParens
+  // Normalise parenthetical annotations:
+  //   "(Remote)"  → drop (remote marker)
+  //   "(India)"   → convert to ", India" so comma-segment country detection works
+  //   other parens → drop (unknown annotation, keep result clean)
+  const withParenNorm = trimmed.replace(/\(\s*([^)]+)\s*\)/g, (_, inner) => {
+    const innerTrim = inner.trim();
+    if (/remote/i.test(innerTrim)) return ""; // remote marker — drop
+    if (COUNTRY_ALIASES[innerTrim.toLowerCase()]) return `, ${innerTrim}`; // known country — comma form
+    return ""; // unknown paren — drop
+  });
+
+  const place = withParenNorm
     .replace(REMOTE_STRIP_RE, " ")
     .replace(/[,\s-]+$/, "")
     .replace(/^[,\s-]+/, "")
@@ -427,6 +437,31 @@ export function filterByCountry(
   );
 }
 
+// ── Country extraction helper ─────────────────────────────────────────────
+
+/**
+ * Extract a canonical country name from a place string for use as a
+ * post-filter. Arms for:
+ *   "India"           → "India"          (bare country alias)
+ *   "Hyderabad, India" → "India"          (last comma-segment is a known country)
+ *   "Seattle, WA"     → null             (WA is not a COUNTRY_ALIASES key)
+ *   "Bangalore"       → null             (city-only, no country)
+ */
+export function extractCanonicalCountry(place: string): string | null {
+  if (!place) return null;
+  // Bare country alias
+  const direct = COUNTRY_ALIASES[place.toLowerCase().trim()];
+  if (direct) return direct;
+  // Last comma-segment might be a country (e.g. "Hyderabad, India")
+  const segments = place.split(",").map((s) => s.trim());
+  if (segments.length > 1) {
+    const lastAlias =
+      COUNTRY_ALIASES[segments[segments.length - 1].toLowerCase()];
+    if (lastAlias) return lastAlias;
+  }
+  return null;
+}
+
 // ── HTTP search ───────────────────────────────────────────────────────────
 
 /** Search Crustdata for candidates matching a role brief.
@@ -439,15 +474,16 @@ export async function searchCrustdataForRoleBrief(
   const filters = buildCalibrationFilters(roleBrief);
   if (!filters) return [];
 
-  // Determine canonical country for post-filter (if location is a known country).
+  // Determine canonical country for the post-filter.
+  // Arms for bare countries ("India"), City,Country ("Hyderabad, India"),
+  // and paren forms ("Hyderabad (India)") — the latter is normalised to
+  // "Hyderabad, India" by parseLocationForFilter before we reach here.
   const location =
     typeof roleBrief.location === "string" ? roleBrief.location.trim() : null;
   const { place } = location
     ? parseLocationForFilter(location)
     : { place: null };
-  const canonicalCountry = place
-    ? (COUNTRY_ALIASES[place.toLowerCase().trim()] ?? null)
-    : null;
+  const canonicalCountry = place ? extractCanonicalCountry(place) : null;
 
   try {
     const response = await fetch(CRUSTDATA_SEARCH_URL, {

@@ -33,7 +33,7 @@ import type { CrmDataProvider } from "../providers/types";
 
 // Deal rows carry structured brief columns that aren't all on the Deal type
 // yet (location, skills, YoE) — read them defensively for prefill.
-type DealBriefFields = Deal & {
+export type DealBriefFields = Deal & {
   location?: string | null;
   seniority?: string | null;
   required_skills?: string[] | null;
@@ -75,7 +75,10 @@ function parseLocationString(raw: string): {
 
 // ─── Prefill helpers ─────────────────────────────────────────────────────────
 
-function intentToDraft(intent: VersionedSearchIntent | undefined): FilterDraft {
+/** Convert a VersionedSearchIntent into a FilterDraft for the Build Search form. Exported for use in BuildSearchPage. */
+export function intentToDraft(
+  intent: VersionedSearchIntent | undefined,
+): FilterDraft {
   if (!intent) return {};
   const conds = intent.conditions ?? [];
 
@@ -93,18 +96,33 @@ function intentToDraft(intent: VersionedSearchIntent | undefined): FilterDraft {
   const titleExcludes = pickValues(
     (c) => c.category === "title" && c.disposition === "exclude",
   );
-  const skills = pickValues(
+  const skillsRequired = pickValues(
     (c) => c.category === "skill" && c.disposition === "require",
+  );
+  const skillsNiceToHave = pickValues(
+    (c) => c.category === "skill" && c.disposition === "prefer",
   );
   const seniorityVals = pickValues(
     (c) => c.category === "seniority" && c.disposition === "require",
+  );
+  const companiesInclude = pickValues(
+    (c) => c.category === "company" && c.disposition === "require",
+  );
+  const companiesExclude = pickValues(
+    (c) => c.category === "company" && c.disposition === "exclude",
   );
 
   const locationVals = pickValues(
     (c) => c.category === "location" && c.disposition === "require",
   );
-  const loc =
-    locationVals.length > 0 ? parseLocationString(locationVals[0]) : {};
+  // Map ALL location values to country/city arrays (not just the first one).
+  const locationCountries: string[] = [];
+  const locationCities: string[] = [];
+  for (const val of locationVals) {
+    const parsed = parseLocationString(val);
+    if (parsed.locationCountry) locationCountries.push(parsed.locationCountry);
+    if (parsed.locationCity) locationCities.push(parsed.locationCity);
+  }
 
   const yoeVals = pickValues(
     (c) => c.category === "experience_range" && c.disposition === "require",
@@ -129,16 +147,24 @@ function intentToDraft(intent: VersionedSearchIntent | undefined): FilterDraft {
   return {
     currentTitlesInclude: titleIncludes.length > 0 ? titleIncludes : undefined,
     currentTitlesExclude: titleExcludes.length > 0 ? titleExcludes : undefined,
-    skillsRequired: skills.length > 0 ? skills : undefined,
+    skillsRequired: skillsRequired.length > 0 ? skillsRequired : undefined,
+    skillsNiceToHave:
+      skillsNiceToHave.length > 0 ? skillsNiceToHave : undefined,
+    currentCompaniesInclude:
+      companiesInclude.length > 0 ? companiesInclude : undefined,
+    currentCompaniesExclude:
+      companiesExclude.length > 0 ? companiesExclude : undefined,
     seniority: seniorityVals.length > 0 ? seniorityVals[0] : undefined,
-    locationCountry: loc.locationCountry,
-    locationCity: loc.locationCity,
+    locationCountries:
+      locationCountries.length > 0 ? locationCountries : undefined,
+    locationCities: locationCities.length > 0 ? locationCities : undefined,
     yoeMin,
     yoeMax,
   };
 }
 
-function dealBriefToDraft(deal: DealBriefFields): FilterDraft {
+/** Convert deal brief fields into a FilterDraft for the Build Search form. Exported for use in BuildSearchPage. */
+export function dealBriefToDraft(deal: DealBriefFields): FilterDraft {
   const loc =
     typeof deal.location === "string" && deal.location.trim()
       ? parseLocationString(deal.location.trim())
@@ -338,8 +364,8 @@ export function BuildSearchTab({ deal }: { deal: Deal }) {
         <ExternalLink className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors shrink-0" />
       </a>
       <p className="text-xs text-muted-foreground text-center">
-        Results stay local to your session — they are not added to the
-        candidate pipeline automatically.
+        Results stay local to your session — they are not added to the candidate
+        pipeline automatically.
       </p>
     </div>
   );

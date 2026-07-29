@@ -2141,6 +2141,7 @@ const getDataProviderWithCustomMethods = () => {
       limit?: number,
       dealId?: string,
       relax = true,
+      cursor?: string,
     ) {
       const { data, error } = await getSupabaseClient().functions.invoke<{
         candidates: Array<{
@@ -2161,6 +2162,7 @@ const getDataProviderWithCustomMethods = () => {
         error_detail?: string;
         crustdata_http_status?: number | null;
         relaxed_away?: string[];
+        next_cursor?: string;
       }>("search-crustdata-filters", {
         method: "POST",
         body: {
@@ -2168,6 +2170,7 @@ const getDataProviderWithCustomMethods = () => {
           relax,
           ...(limit ? { limit } : {}),
           ...(dealId ? { deal_id: dealId } : {}),
+          ...(cursor ? { cursor } : {}),
         },
       });
       if (!data || error) {

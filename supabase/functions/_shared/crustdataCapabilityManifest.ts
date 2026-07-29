@@ -13,7 +13,7 @@
 //
 // No Deno-specific imports — Vitest-compatible.
 
-export const MANIFEST_VERSION = "2.0.0";
+export const MANIFEST_VERSION = "3.0.0";
 
 // ─── Field paths ──────────────────────────────────────────────────────────────
 //
@@ -48,6 +48,12 @@ export const CRUSTDATA_FIELDS = {
     "experience.employment_details.current.company_website_domain",
   currentFunctionCategory:
     "experience.employment_details.current.function_category",
+  /**
+   * Current employment type (string). Use (.) contains.
+   * Values e.g. "Full-time", "Part-time", "Contract", "Self-employed".
+   */
+  currentEmploymentType:
+    "experience.employment_details.current.employment_type",
 
   // ── Company fields (past employer) ────────────────────────────────────────
   pastCompanyName: "experience.employment_details.past.company_name",
@@ -81,6 +87,13 @@ export const CRUSTDATA_FIELDS = {
   // ── Professional network ──────────────────────────────────────────────────
   /** LinkedIn connection count (integer). Use => / =< operators. */
   connections: "professional_network.connections",
+  /** LinkedIn follower count (integer). Use => / =< operators. */
+  followers: "professional_network.followers",
+  /**
+   * Raw location string from LinkedIn (free-text).
+   * Use (.) for fuzzy geo matching when city/state/country precision is not needed.
+   */
+  geoLocationRaw: "professional_network.location.raw",
   /**
    * Open-to signal codes (string[]). Use "in" operator with closed enum values:
    * "CAREER_INTEREST", "HIRING_MANAGER", "VOLUNTEERING".
@@ -96,22 +109,6 @@ export const CRUSTDATA_FIELDS = {
   educationFieldOfStudy: "education.schools.field_of_study",
 } as const;
 
-// ─── Operators ────────────────────────────────────────────────────────────────
-//
-// Spec enum (fetched live 2026-07-23, confirmed 2026-07-29):
-//   =, !=, <, =<, >, =>, in, not_in, (.), (!), [.], geo_distance, geo_exclude
-//   all_of (cross-element nested-array), has_all
-//
-// Operators used by this integration:
-//   "="       — exact match (country field)
-//   "!="      — exact exclusion (single value)
-//   "not_in"  — exclusion set (array of values)
-//   "(.)"     — contains / phrase-match (title, seniority, city, skills, etc.)
-//   "(!)"     — not-contains (exclusion keywords in title/company/headline)
-//   "=<"      — ≤ (years_of_experience, connections upper bound)
-//   "=>"      — ≥ (years_of_experience, connections lower bound)
-//   "in"      — value in list (open_to_cards enum)
-
 export type CrustdataOperator =
   | "="
   | "!="
@@ -120,20 +117,30 @@ export type CrustdataOperator =
   | "not_in"
   | "(.)"
   | "(!)"
-  | "in";
+  | "in"
+  | "[.]"
+  | "geo_distance"
+  | "geo_exclude";
+
+// ─── Operators ────────────────────────────────────────────────────────────────
+//
+// Spec enum (fetched live 2026-07-23, confirmed 2026-07-29):
+//   =, !=, <, =<, >, =>, in, not_in, (.), (!), [.], geo_distance, geo_exclude
+//   all_of (cross-element nested-array), has_all
+//
+// "[.]" — exact phrase (all words in order), supported for title fields.
+// "geo_distance" — radius search; value must be a CrustdataGeoValue object.
+// "geo_exclude"  — inverse radius (exclude within radius); same value shape.
 
 // ─── Phrase decomposition rule ────────────────────────────────────────────────
 //
-// WHY: Crustdata's "(.)" operator does LITERAL, non-word-split phrase matching.
-//   A value like "AI Engineer|.NET AI|Azure OpenAI Engineer" returned 0 results
-//   even though relevant candidates exist, because none of those exact 3-word
-//   phrases appear verbatim in indexed titles. "AI Engineer" alone (2 words)
-//   returned correct matches in the same live test (2026-07-24).
+// WHY: Crustdata "(.) " operator is ALL-WORDS (every word must appear in any
+//   order, per docs 2026-07). Build Search sends each user title as one full
+//   phrase — NOT 2-word shingle ORs. Calibration may still shingle for LLM-
+//   generated queries where word order matters less.
 //
-// RULE: Any phrase longer than SHINGLE_SIZE (2) words is broken into overlapping
-//   2-word shingles. Short phrases (≤2 words) are kept as-is. Multiple
-//   decomposed terms are combined as an explicit OR-group — never pipe-joined
-//   inside a single condition value.
+// "[.]" (exact phrase) — added in 2026 — requires words in sequence. Build
+//   Search exposes this as titleMatchMode = "exact_phrase".
 //
 // WHY NOT pipe-join: live bisection 2026-07-24 confirmed pipe-joining multiple
 //   title alternatives collapsed ANDed searches to zero even when each term
@@ -142,13 +149,13 @@ export type CrustdataOperator =
 export const PHRASE_DECOMPOSITION = {
   shingleSize: 2,
   maxTerms: 6,
-  rule: "Split compound phrases on /|&, and OR/AND keywords; shingle phrases > shingleSize words into overlapping shingleSize-word windows; combine as OR-group of separate (.) conditions — never pipe-join alternatives inside one value.",
+  rule: "Split compound phrases on /|&, and OR/AND keywords; shingle phrases > shingleSize words into overlapping shingleSize-word windows; combine as OR-group of separate (.) conditions — never pipe-join alternatives inside one value. Calibration may shingle; Build Search sends full phrases per user input.",
 } as const;
 
 // ─── What Crustdata CAN enforce as hard filters ───────────────────────────────
 
 export const CAN_FILTER = [
-  "current job title (contains, phrase-match with decomposition)",
+  "current job title (contains (.) or exact phrase [.], phrase-match with decomposition)",
   "past job title (contains, phrase-match with decomposition)",
   "current company name (contains or exact)",
   "past company name (contains or exact)",
@@ -156,25 +163,30 @@ export const CAN_FILTER = [
   "location city (contains, phrase-match)",
   "location state / region (contains, phrase-match)",
   "location country (exact = match for known countries; full country name)",
-  "location continent (contains)",
+  "location continent (contains (.) OR-group per continent)",
+  "geo radius (geo_distance or geo_exclude with location center + distance + unit)",
   "skills (professional_network_skills, contains per skill)",
   "years of experience (numeric range, =< and =>)",
   "recently changed jobs (boolean flag recently_changed_jobs = true)",
   "current company headcount (numeric range)",
   "current company industries (string[], contains per industry label)",
   "current company HQ country (exact = match, ISO 3166-1 alpha-3 code: USA, IND, GBR)",
-  "current company website domain (bare domain e.g. stripe.com)",
-  "current function category (contains)",
+  "current company website domain (bare domain e.g. stripe.com, = or in operator)",
+  "current function category (contains (.) OR-group)",
+  "current employment type (contains (.) OR-group e.g. Full-time, Contract)",
   "profile headline (contains / not-contains)",
   "spoken languages (basic_profile.languages, contains per language name)",
   "LinkedIn connection count (numeric range => / =<)",
+  "LinkedIn follower count (numeric range =>)",
   "open-to signal codes (in enum: CAREER_INTEREST, HIRING_MANAGER, VOLUNTEERING)",
   "education school name (contains, phrase-match)",
   "education degree (contains, phrase-match)",
   "education field of study (contains, phrase-match)",
   "excluded titles via (!) not-contains",
   "excluded companies via (!) not-contains on company_name",
+  "excluded past companies via (!) not-contains on past company_name",
   "excluded keywords via (!) not-contains on title or headline",
+  "sort by field (recently_changed_jobs, connections, followers, years_of_experience_raw, start_date)",
 ] as const;
 
 // Seniority note: the seniority_level field exists and is real, but its exact
@@ -226,13 +238,21 @@ export const CANNOT_FILTER = [
 export const CRUSTDATA_AUTOCOMPLETE_URL =
   "https://api.crustdata.com/person/search/autocomplete";
 
+/**
+ * The correct field path for company name autocomplete.
+ * Crustdata autocomplete uses "experience.employment_details.current.name"
+ * (not "company_name") per the autocomplete API (confirmed 2026-07-29).
+ */
+export const CRUSTDATA_AUTOCOMPLETE_COMPANY =
+  "experience.employment_details.current.name";
+
 /** Fields that support autocomplete (confirmed from Crustdata docs 2026-07-29). */
 export const AUTOCOMPLETE_SUPPORTED_FIELDS = [
   CRUSTDATA_FIELDS.currentTitle,
   CRUSTDATA_FIELDS.locationCountry,
   CRUSTDATA_FIELDS.locationCity,
   CRUSTDATA_FIELDS.locationState,
-  CRUSTDATA_FIELDS.currentCompanyName,
+  CRUSTDATA_AUTOCOMPLETE_COMPANY,
   CRUSTDATA_FIELDS.currentCompanyIndustries,
   CRUSTDATA_FIELDS.skills,
   CRUSTDATA_FIELDS.educationSchool,
@@ -248,11 +268,14 @@ export const CRUSTDATA_CAPABILITY_MANIFEST = {
     exact: "=",
     notEqual: "!=",
     contains: "(.)",
+    exactPhrase: "[.]",
     notContains: "(!)",
     notIn: "not_in",
     lte: "=<",
     gte: "=>",
     in: "in",
+    geoDistance: "geo_distance",
+    geoExclude: "geo_exclude",
   },
   phraseDecomposition: PHRASE_DECOMPOSITION,
   canFilter: CAN_FILTER,

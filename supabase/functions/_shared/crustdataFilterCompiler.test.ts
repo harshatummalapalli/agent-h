@@ -232,6 +232,30 @@ describe("relaxFilterDraft", () => {
     expect(step3?.dropped).toMatch(/extra must-have/);
     expect(step3?.draft.skillsRequired).toEqual(["Python"]);
   });
+
+  it("drops geo along with city/state in step 5", () => {
+    const step = relaxFilterDraft({
+      locationCities: ["San Francisco"],
+      geoNear: "San Francisco, CA",
+      geoDistance: 10,
+      geoUnit: "mi",
+      locationCountries: ["United States"],
+    });
+    expect(step?.dropped).toMatch(/city\/state\/geo/);
+    expect(step?.draft.geoNear).toBeNull();
+    expect(step?.draft.geoDistance).toBeNull();
+    expect(step?.draft.locationCities).toEqual([]);
+    // Country must be kept
+    expect(step?.draft.locationCountries).toEqual(["United States"]);
+  });
+
+  it("never drops titles during relaxation", () => {
+    // Start with a draft that has only titles — relaxation should return null
+    const result = relaxFilterDraft({
+      currentTitlesInclude: ["CTO"],
+    });
+    expect(result).toBeNull();
+  });
 });
 
 // ─── Years of experience ──────────────────────────────────────────────────────
@@ -617,6 +641,185 @@ describe("compileFilterDraft – recentlyChangedJobs", () => {
       compileFilterDraft({ recentlyChangedJobs: false }).filters,
     ).toBeNull();
     expect(compileFilterDraft({}).filters).toBeNull();
+  });
+});
+
+// ─── Title match mode ─────────────────────────────────────────────────────────
+
+describe("compileFilterDraft – titleMatchMode", () => {
+  it("default (all_words) uses (.) for title includes", () => {
+    const { filters } = compileFilterDraft({
+      currentTitlesInclude: ["Chief Technology Officer"],
+    });
+    const conds = findContains(filters!, CRUSTDATA_FIELDS.currentTitle);
+    expect(conds.some((c) => c.value === "Chief Technology Officer")).toBe(
+      true,
+    );
+  });
+
+  it("exact_phrase uses [.] for title includes", () => {
+    const { filters } = compileFilterDraft({
+      currentTitlesInclude: ["Chief Technology Officer"],
+      titleMatchMode: "exact_phrase",
+    });
+    expect(filters).not.toBeNull();
+    // Should find [.] conditions, not (.)
+    const exactPhraseGroup = filters!.conditions.find(
+      (c): c is CrustdataCondition =>
+        "field" in c &&
+        c.field === CRUSTDATA_FIELDS.currentTitle &&
+        c.type === "[.]",
+    );
+    // Or it might be wrapped in an OR group
+    const wrappedExact = filters!.conditions.find(
+      (c): c is CrustdataGroup =>
+        "op" in c &&
+        c.conditions.some(
+          (i): boolean =>
+            "field" in i &&
+            i.field === CRUSTDATA_FIELDS.currentTitle &&
+            (i as CrustdataCondition).type === "[.]",
+        ),
+    );
+    expect(exactPhraseGroup ?? wrappedExact).toBeDefined();
+  });
+});
+
+// ─── Geo distance ─────────────────────────────────────────────────────────────
+
+describe("compileFilterDraft – geo distance", () => {
+  it("geoNear + geoDistance → geo_distance condition", () => {
+    const { filters, appliedGroups } = compileFilterDraft({
+      geoNear: "San Francisco, CA",
+      geoDistance: 10,
+      geoUnit: "mi",
+    });
+    expect(filters).not.toBeNull();
+    expect(appliedGroups).toContain("geo distance");
+    const geoCond = filters!.conditions.find(
+      (c): c is CrustdataCondition => "field" in c && c.type === "geo_distance",
+    );
+    expect(geoCond).toBeDefined();
+    expect(typeof geoCond!.value).toBe("object");
+    const val = geoCond!.value as {
+      location: string;
+      distance: number;
+      unit: string;
+    };
+    expect(val.location).toBe("San Francisco, CA");
+    expect(val.distance).toBe(10);
+    expect(val.unit).toBe("mi");
+  });
+
+  it("geoExcludeNear=true → geo_exclude condition", () => {
+    const { filters } = compileFilterDraft({
+      geoNear: "New York",
+      geoDistance: 50,
+      geoExcludeNear: true,
+    });
+    const geoCond = filters!.conditions.find(
+      (c): c is CrustdataCondition => "field" in c && c.type === "geo_exclude",
+    );
+    expect(geoCond).toBeDefined();
+  });
+
+  it("missing geoDistance → no geo condition emitted", () => {
+    const { filters } = compileFilterDraft({ geoNear: "London" });
+    expect(filters).toBeNull();
+  });
+});
+
+// ─── Open-to cards ────────────────────────────────────────────────────────────
+
+describe("compileFilterDraft – openToCards", () => {
+  it("emits single 'in' condition with array of codes", () => {
+    const { filters, appliedGroups } = compileFilterDraft({
+      openToCards: ["CAREER_INTEREST", "VOLUNTEERING"],
+    });
+    expect(filters).not.toBeNull();
+    expect(appliedGroups).toContain("open-to cards");
+    const cond = filters!.conditions.find(
+      (c): c is CrustdataCondition =>
+        "field" in c &&
+        c.field === CRUSTDATA_FIELDS.openToCards &&
+        c.type === "in",
+    );
+    expect(cond).toBeDefined();
+    expect(cond!.value).toEqual(["CAREER_INTEREST", "VOLUNTEERING"]);
+  });
+});
+
+// ─── Company domains ──────────────────────────────────────────────────────────
+
+describe("compileFilterDraft – currentCompanyDomains", () => {
+  it("single domain → = condition", () => {
+    const { filters, appliedGroups } = compileFilterDraft({
+      currentCompanyDomains: ["stripe.com"],
+    });
+    expect(appliedGroups).toContain("company domain");
+    const cond = findExact(
+      filters!,
+      CRUSTDATA_FIELDS.currentCompanyWebsiteDomain,
+    );
+    expect(cond).toBeDefined();
+    expect(cond!.value).toBe("stripe.com");
+  });
+
+  it("multiple domains → in condition", () => {
+    const { filters, appliedGroups } = compileFilterDraft({
+      currentCompanyDomains: ["stripe.com", "shopify.com"],
+    });
+    expect(appliedGroups).toContain("company domains");
+    const cond = filters!.conditions.find(
+      (c): c is CrustdataCondition =>
+        "field" in c &&
+        c.field === CRUSTDATA_FIELDS.currentCompanyWebsiteDomain &&
+        c.type === "in",
+    );
+    expect(cond).toBeDefined();
+    expect(cond!.value).toEqual(["stripe.com", "shopify.com"]);
+  });
+});
+
+// ─── Followers min ────────────────────────────────────────────────────────────
+
+describe("compileFilterDraft – followersMin", () => {
+  it("followersMin → => condition on professional_network.followers", () => {
+    const { filters, appliedGroups } = compileFilterDraft({
+      followersMin: 1000,
+    });
+    expect(appliedGroups).toContain("followers min");
+    const cond = filters!.conditions.find(
+      (c): c is CrustdataCondition =>
+        "field" in c &&
+        c.field === CRUSTDATA_FIELDS.followers &&
+        c.type === "=>",
+    );
+    expect(cond).toBeDefined();
+    expect(cond!.value).toBe(1000);
+  });
+});
+
+// ─── Sort field ───────────────────────────────────────────────────────────────
+
+describe("compileFilterDraft – sortField", () => {
+  it("allowlisted sortField → sorts in result", () => {
+    const result = compileFilterDraft({
+      currentTitlesInclude: ["CTO"],
+      sortField: "professional_network.followers",
+      sortOrder: "desc",
+    });
+    expect(result.sorts).toBeDefined();
+    expect(result.sorts![0].field).toBe("professional_network.followers");
+    expect(result.sorts![0].order).toBe("desc");
+  });
+
+  it("unknown sortField → no sorts emitted", () => {
+    const result = compileFilterDraft({
+      currentTitlesInclude: ["CTO"],
+      sortField: "not_a_real_field",
+    });
+    expect(result.sorts).toBeUndefined();
   });
 });
 

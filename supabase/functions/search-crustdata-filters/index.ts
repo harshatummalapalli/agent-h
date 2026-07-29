@@ -191,16 +191,34 @@ Deno.serve(async (req: Request) => {
     MAX_LIMIT,
   );
 
+  const cursor = typeof body.cursor === "string" ? body.cursor : undefined;
+
   type CrustOk = {
     profiles?: Array<Record<string, unknown>>;
     total_count?: number;
+    next_cursor?: string;
   };
   type CrustErr = { error: string; detail?: string; httpStatus: number | null };
 
   async function callCrustdata(
     filters: CrustdataFilters,
+    sorts?: Array<{ field: string; order: "asc" | "desc" }>,
   ): Promise<CrustOk | CrustErr> {
     try {
+      const body: Record<string, unknown> = {
+        filters,
+        limit,
+        fields: [
+          "basic_profile",
+          "education",
+          "experience",
+          "social_handles",
+          "professional_network",
+        ],
+      };
+      if (cursor) body.cursor = cursor;
+      if (sorts && sorts.length > 0) body.sorts = sorts;
+
       const res = await fetch(CRUSTDATA_SEARCH_URL, {
         method: "POST",
         headers: {
@@ -208,16 +226,7 @@ Deno.serve(async (req: Request) => {
           "x-api-version": CRUSTDATA_API_VERSION,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          filters,
-          limit,
-          fields: [
-            "basic_profile",
-            "experience",
-            "social_handles",
-            "professional_network",
-          ],
-        }),
+        body: JSON.stringify(body),
       });
 
       if (!res.ok) {
@@ -255,11 +264,12 @@ Deno.serve(async (req: Request) => {
   let lastHttpStatus: number | null = null;
   let profiles: Array<Record<string, unknown>> = [];
   let totalCount = 0;
+  let nextCursor: string | undefined;
   let lastError: CrustErr | null = null;
 
   const MAX_RELAX_STEPS = 8;
   for (let step = 0; step <= MAX_RELAX_STEPS; step++) {
-    const { filters, appliedGroups } = compileFilterDraft(workingDraft);
+    const { filters, appliedGroups, sorts } = compileFilterDraft(workingDraft);
     if (!filters) {
       return jsonResponse({
         candidates: [],
@@ -274,7 +284,7 @@ Deno.serve(async (req: Request) => {
     lastFilters = filters;
     lastApplied = appliedGroups;
 
-    const result = await callCrustdata(filters);
+    const result = await callCrustdata(filters, sorts);
     if ("error" in result) {
       lastError = result;
       lastHttpStatus = result.httpStatus;
@@ -284,6 +294,7 @@ Deno.serve(async (req: Request) => {
 
     profiles = result.profiles ?? [];
     totalCount = result.total_count ?? profiles.length;
+    nextCursor = result.next_cursor;
     lastError = null;
 
     if (profiles.length > 0) break;
@@ -335,5 +346,6 @@ Deno.serve(async (req: Request) => {
     crustdata_http_status: lastHttpStatus,
     relaxed_away: dropped,
     note,
+    ...(nextCursor ? { next_cursor: nextCursor } : {}),
   });
 });

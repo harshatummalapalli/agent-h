@@ -450,4 +450,54 @@ export type FilterDraft = {
   connectionsMin?: number | null;
   /** Crustdata recently_changed_jobs boolean flag */
   recentlyChangedJobs?: boolean;
+
+  // ── Title match mode ──────────────────────────────────────────────────────
+  /** "all_words" (default, (.)) or "exact_phrase" ([.]) for currentTitlesInclude. */
+  titleMatchMode?: "all_words" | "exact_phrase";
+
+  // ── Geo ───────────────────────────────────────────────────────────────────
+  /** Center location string for geo radius filter e.g. "San Francisco, CA". */
+  geoNear?: string | null;
+  /** Radius distance. Requires geoNear. */
+  geoDistance?: number | null;
+  /** Distance unit (default "mi"). */
+  geoUnit?: "km" | "mi";
+  /** When true, use geo_exclude (exclude radius) instead of geo_distance. */
+  geoExcludeNear?: boolean;
+
+  // ── Continents ────────────────────────────────────────────────────────────
+  /** Continents (multi OR). Each → (.) on locationContinent. */
+  locationContinents?: string[];
+
+  // ── Function categories ───────────────────────────────────────────────────
+  /** Current function categories (multi OR). */
+  functionCategories?: string[];
+
+  // ── Employment types ──────────────────────────────────────────────────────
+  /** Current employment types (multi OR) e.g. "Full-time", "Contract". */
+  employmentTypes?: string[];
+
+  // ── Company domains ───────────────────────────────────────────────────────
+  /** Current employer website domains (bare, no scheme) e.g. "stripe.com". */
+  currentCompanyDomains?: string[];
+
+  // ── Past company exclude ──────────────────────────────────────────────────
+  /** Past company names to exclude. Each → (!) AND. */
+  pastCompaniesExclude?: string[];
+
+  // ── Open-to cards ─────────────────────────────────────────────────────────
+  /** Open-to signal codes. Emits single "in" condition. */
+  openToCards?: Array<"CAREER_INTEREST" | "HIRING_MANAGER" | "VOLUNTEERING">;
+
+  // ── Followers / connections ───────────────────────────────────────────────
+  /** Maximum LinkedIn connections count. Emits =< condition. */
+  connectionsMax?: number | null;
+  /** Minimum LinkedIn follower count. Emits => on followers field. */
+  followersMin?: number | null;
+
+  // ── Sort ──────────────────────────────────────────────────────────────────
+  /** Field to sort results by. Allowlisted in compiler. */
+  sortField?: string | null;
+  /** Sort order (default "desc"). */
+  sortOrder?: "asc" | "desc";
 };

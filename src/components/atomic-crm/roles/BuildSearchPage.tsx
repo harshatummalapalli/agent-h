@@ -33,6 +33,13 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { OutreachPreviewPanel } from "../sourcing/OutreachPreviewPanel";
 import type { OutreachPrepared } from "../sourcing/sourcingTypes";
 import type { Deal, FilterDraft } from "../types";
@@ -41,8 +48,23 @@ import type { CrmDataProvider } from "../providers/types";
 // Autocomplete field paths (mirrors crustdataCapabilityManifest CRUSTDATA_FIELDS)
 const AC_FIELD_TITLE = "experience.employment_details.current.title";
 const AC_FIELD_COUNTRY = "basic_profile.location.country";
-const AC_FIELD_COMPANY = "experience.employment_details.current.company_name";
+const AC_FIELD_CITY = "basic_profile.location.city";
+const AC_FIELD_STATE = "basic_profile.location.state";
+// Company autocomplete uses "name" subkey (not company_name) per Crustdata autocomplete API.
+const AC_FIELD_COMPANY = "experience.employment_details.current.name";
 const AC_FIELD_SKILLS = "skills.professional_network_skills";
+const AC_FIELD_INDUSTRIES =
+  "experience.employment_details.current.company_industries";
+const AC_FIELD_SCHOOL = "education.schools.school";
+const AC_FIELD_LANGUAGES = "basic_profile.languages";
+
+const SORTABLE_FIELD_OPTIONS = [
+  { value: "recently_changed_jobs", label: "Recently changed jobs" },
+  { value: "professional_network.connections", label: "Connections" },
+  { value: "professional_network.followers", label: "Followers" },
+  { value: "years_of_experience_raw", label: "Years of experience" },
+  { value: "experience.employment_details.start_date", label: "Start date" },
+];
 
 const LS_KEY = "buildSearch:draft";
 
@@ -114,6 +136,31 @@ function sanitizeDraft(draft: FilterDraft): FilterDraft {
   setArr("languages", draft.languages);
   setNum("connectionsMin", draft.connectionsMin);
   if (draft.recentlyChangedJobs === true) out.recentlyChangedJobs = true;
+  // New fields
+  if (draft.titleMatchMode === "exact_phrase")
+    out.titleMatchMode = "exact_phrase";
+  const geoNear = draft.geoNear?.trim();
+  if (geoNear && draft.geoDistance && draft.geoDistance > 0) {
+    out.geoNear = geoNear;
+    out.geoDistance = draft.geoDistance;
+    if (draft.geoUnit) out.geoUnit = draft.geoUnit;
+    if (draft.geoExcludeNear) out.geoExcludeNear = true;
+  }
+  setArr("locationContinents", draft.locationContinents);
+  setArr("functionCategories", draft.functionCategories);
+  setArr("employmentTypes", draft.employmentTypes);
+  setArr("currentCompanyDomains", draft.currentCompanyDomains);
+  setArr("pastCompaniesExclude", draft.pastCompaniesExclude);
+  const openToCards = (draft.openToCards ?? []).filter(Boolean);
+  if (openToCards.length > 0)
+    out.openToCards = openToCards as FilterDraft["openToCards"];
+  setNum("connectionsMax", draft.connectionsMax);
+  setNum("followersMin", draft.followersMin);
+  const sortField = draft.sortField?.trim();
+  if (sortField) {
+    out.sortField = sortField;
+    out.sortOrder = draft.sortOrder ?? "desc";
+  }
   return out;
 }
 
@@ -157,6 +204,21 @@ function activeFilterChips(draft: FilterDraft): string[] {
   pushMany("Language", d.languages);
   if (d.connectionsMin != null) chips.push(`Connections ≥ ${d.connectionsMin}`);
   if (d.recentlyChangedJobs) chips.push("Recently changed jobs");
+  // New fields
+  if (d.titleMatchMode === "exact_phrase") chips.push("Title: exact phrase");
+  if (d.geoNear && d.geoDistance && d.geoDistance > 0)
+    chips.push(
+      `Geo ${d.geoExcludeNear ? "exclude" : "within"} ${d.geoDistance}${d.geoUnit ?? "mi"} of ${d.geoNear}`,
+    );
+  pushMany("Continent", d.locationContinents);
+  pushMany("Function", d.functionCategories);
+  pushMany("Emp. type", d.employmentTypes);
+  pushMany("Domain", d.currentCompanyDomains);
+  pushMany("Not past co.", d.pastCompaniesExclude);
+  for (const code of d.openToCards ?? []) chips.push(`Open-to: ${code}`);
+  if (d.connectionsMax != null) chips.push(`Connections ≤ ${d.connectionsMax}`);
+  if (d.followersMin != null) chips.push(`Followers ≥ ${d.followersMin}`);
+  if (d.sortField) chips.push(`Sort: ${d.sortField} ${d.sortOrder ?? "desc"}`);
   return chips;
 }
 
@@ -518,7 +580,11 @@ export function BuildSearchPage() {
     error_detail?: string;
     crustdata_http_status?: number | null;
     relaxed_away?: string[];
+    next_cursor?: string;
   };
+
+  const [nextCursor, setNextCursor] = useState<string | undefined>(undefined);
+  const [allCandidates, setAllCandidates] = useState<SearchCandidate[]>([]);
 
   const {
     mutate: runSearch,
@@ -526,20 +592,36 @@ export function BuildSearchPage() {
     isPending,
     error,
     reset,
-  } = useMutation({
-    mutationFn: () => {
-      const cleaned = sanitizeDraft(draft);
-      setDraft(cleaned);
+  } = useMutation<SearchResponse, Error, string | undefined>({
+    mutationFn: (cursor?: string) => {
+      if (!cursor) {
+        const cleaned = sanitizeDraft(draft);
+        setDraft(cleaned);
+        return dataProvider.searchCrustdataFilters(
+          cleaned,
+          limit,
+          dealId,
+          autoWiden,
+          undefined,
+        ) as Promise<SearchResponse>;
+      }
       return dataProvider.searchCrustdataFilters(
-        cleaned,
+        sanitizeDraft(draft),
         limit,
         dealId,
         autoWiden,
-      );
+        cursor,
+      ) as Promise<SearchResponse>;
     },
-    onSuccess: (res) => {
-      const r = res as SearchResponse;
-      if ((r.candidates?.length ?? 0) === 0) {
+    onSuccess: (r, cursor) => {
+      const newCandidates = r.candidates ?? [];
+      if (cursor) {
+        setAllCandidates((prev) => [...prev, ...newCandidates]);
+      } else {
+        setAllCandidates(newCandidates);
+      }
+      setNextCursor(r.next_cursor);
+      if (newCandidates.length === 0 && !cursor) {
         setCompiledVisible(true);
       }
     },
@@ -557,6 +639,8 @@ export function BuildSearchPage() {
     localStorage.removeItem(LS_KEY);
     setCompiledVisible(false);
     setSelectedIds(new Set());
+    setAllCandidates([]);
+    setNextCursor(undefined);
     reset();
   };
 
@@ -719,8 +803,8 @@ export function BuildSearchPage() {
 
   const empty = isDraftEmpty(draft);
   const filterChips = activeFilterChips(draft);
-  const searchData = data as SearchResponse | undefined;
-  const candidates = searchData?.candidates ?? [];
+  const searchData = data;
+  const candidates = allCandidates;
   const totalCount = searchData?.total_count ?? 0;
   const appliedGroups = searchData?.applied_groups ?? [];
   const compiledFilters = searchData?.compiled_filters;
@@ -771,7 +855,7 @@ export function BuildSearchPage() {
                   Current title — include
                   <span className="text-muted-foreground font-normal">
                     {" "}
-                    (OR: any synonym matches)
+                    (OR: any title matches)
                   </span>
                 </Label>
                 <AutocompleteTagInput
@@ -782,6 +866,39 @@ export function BuildSearchPage() {
                   autocompleteField={AC_FIELD_TITLE}
                   dataProvider={dataProvider}
                 />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label className="text-xs font-medium">Title match mode</Label>
+                <div className="flex gap-4">
+                  <label className="flex items-center gap-1.5 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="titleMatchMode"
+                      value="all_words"
+                      checked={
+                        !draft.titleMatchMode ||
+                        draft.titleMatchMode === "all_words"
+                      }
+                      onChange={() => set("titleMatchMode", "all_words")}
+                      className="accent-primary"
+                    />
+                    <span className="text-xs">
+                      All words{" "}
+                      <span className="text-muted-foreground">(default)</span>
+                    </span>
+                  </label>
+                  <label className="flex items-center gap-1.5 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="titleMatchMode"
+                      value="exact_phrase"
+                      checked={draft.titleMatchMode === "exact_phrase"}
+                      onChange={() => set("titleMatchMode", "exact_phrase")}
+                      className="accent-primary"
+                    />
+                    <span className="text-xs">Exact phrase</span>
+                  </label>
+                </div>
               </div>
               <div className="flex flex-col gap-1.5">
                 <Label className="text-xs font-medium">
@@ -828,21 +945,88 @@ export function BuildSearchPage() {
               </div>
               <div className="flex flex-col gap-1.5">
                 <Label className="text-xs font-medium">Cities</Label>
-                <TagInput
+                <AutocompleteTagInput
                   aria-label="Cities"
                   values={draft.locationCities ?? []}
                   onChange={(v) => set("locationCities", v)}
                   placeholder="e.g. Hyderabad"
+                  autocompleteField={AC_FIELD_CITY}
+                  dataProvider={dataProvider}
                 />
               </div>
               <div className="flex flex-col gap-1.5">
                 <Label className="text-xs font-medium">States / regions</Label>
-                <TagInput
+                <AutocompleteTagInput
                   aria-label="States"
                   values={draft.locationStates ?? []}
                   onChange={(v) => set("locationStates", v)}
                   placeholder="e.g. Karnataka"
+                  autocompleteField={AC_FIELD_STATE}
+                  dataProvider={dataProvider}
                 />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label className="text-xs font-medium">
+                  Continents
+                  <span className="text-muted-foreground font-normal">
+                    {" "}
+                    (OR)
+                  </span>
+                </Label>
+                <TagInput
+                  aria-label="Continents"
+                  values={draft.locationContinents ?? []}
+                  onChange={(v) => set("locationContinents", v)}
+                  placeholder="e.g. Asia, Europe"
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label className="text-xs font-medium">Geo radius</Label>
+                <div className="flex flex-col gap-1.5">
+                  <Input
+                    className="h-8 text-sm"
+                    value={draft.geoNear ?? ""}
+                    onChange={(e) => set("geoNear", e.target.value || null)}
+                    placeholder="Center location e.g. San Francisco, CA"
+                  />
+                  <div className="grid grid-cols-[1fr_80px_auto] gap-2 items-center">
+                    <Input
+                      className="h-8 text-sm"
+                      type="number"
+                      min={0}
+                      value={draft.geoDistance ?? ""}
+                      onChange={(e) =>
+                        set(
+                          "geoDistance",
+                          e.target.value ? parseInt(e.target.value, 10) : null,
+                        )
+                      }
+                      placeholder="Distance"
+                    />
+                    <Select
+                      value={draft.geoUnit ?? "mi"}
+                      onValueChange={(v) => set("geoUnit", v as "km" | "mi")}
+                    >
+                      <SelectTrigger className="h-8 text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="mi">mi</SelectItem>
+                        <SelectItem value="km">km</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <label className="flex items-center gap-1.5 cursor-pointer text-xs whitespace-nowrap">
+                      <Checkbox
+                        checked={draft.geoExcludeNear === true}
+                        onCheckedChange={(v) =>
+                          set("geoExcludeNear", v === true)
+                        }
+                        aria-label="Exclude radius"
+                      />
+                      Exclude radius
+                    </label>
+                  </div>
+                </div>
               </div>
             </FilterSection>
 
@@ -870,10 +1054,10 @@ export function BuildSearchPage() {
               </div>
               <div className="flex flex-col gap-1.5">
                 <Label className="text-xs font-medium">
-                  Nice-to-have skills
+                  Any of these skills
                   <span className="text-muted-foreground font-normal">
                     {" "}
-                    (OR — any of these)
+                    (OR — at least one must match)
                   </span>
                 </Label>
                 <TagInput
@@ -996,17 +1180,45 @@ export function BuildSearchPage() {
               </div>
               <div className="flex flex-col gap-1.5">
                 <Label className="text-xs font-medium">
+                  Past company — exclude
+                </Label>
+                <TagInput
+                  aria-label="Past company exclude"
+                  values={draft.pastCompaniesExclude ?? []}
+                  onChange={(v) => set("pastCompaniesExclude", v)}
+                  placeholder="e.g. IBM"
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label className="text-xs font-medium">
+                  Website domains
+                  <span className="text-muted-foreground font-normal">
+                    {" "}
+                    (bare: stripe.com)
+                  </span>
+                </Label>
+                <TagInput
+                  aria-label="Company website domains"
+                  values={draft.currentCompanyDomains ?? []}
+                  onChange={(v) => set("currentCompanyDomains", v)}
+                  placeholder="e.g. stripe.com"
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label className="text-xs font-medium">
                   Industries
                   <span className="text-muted-foreground font-normal">
                     {" "}
                     (OR — e.g. Computer Software)
                   </span>
                 </Label>
-                <TagInput
+                <AutocompleteTagInput
                   aria-label="Company industries"
                   values={draft.companyIndustries ?? []}
                   onChange={(v) => set("companyIndustries", v)}
                   placeholder="e.g. Financial Services"
+                  autocompleteField={AC_FIELD_INDUSTRIES}
+                  dataProvider={dataProvider}
                 />
               </div>
               <div className="flex flex-col gap-1.5">
@@ -1066,11 +1278,13 @@ export function BuildSearchPage() {
             <FilterSection title="Education">
               <div className="flex flex-col gap-1.5">
                 <Label className="text-xs font-medium">Schools (OR)</Label>
-                <TagInput
+                <AutocompleteTagInput
                   aria-label="Schools"
                   values={draft.educationSchools ?? []}
                   onChange={(v) => set("educationSchools", v)}
                   placeholder="e.g. IIT Bombay"
+                  autocompleteField={AC_FIELD_SCHOOL}
+                  dataProvider={dataProvider}
                 />
               </div>
               <div className="flex flex-col gap-1.5">
@@ -1121,31 +1335,182 @@ export function BuildSearchPage() {
               </div>
               <div className="flex flex-col gap-1.5">
                 <Label className="text-xs font-medium">Languages (OR)</Label>
-                <TagInput
+                <AutocompleteTagInput
                   aria-label="Languages"
                   values={draft.languages ?? []}
                   onChange={(v) => set("languages", v)}
                   placeholder="e.g. English"
+                  autocompleteField={AC_FIELD_LANGUAGES}
+                  dataProvider={dataProvider}
                 />
               </div>
               <div className="flex flex-col gap-1.5">
                 <Label className="text-xs font-medium">
-                  Min LinkedIn connections
+                  Function categories (OR)
                 </Label>
+                <TagInput
+                  aria-label="Function categories"
+                  values={draft.functionCategories ?? []}
+                  onChange={(v) => set("functionCategories", v)}
+                  placeholder="e.g. Engineering, Sales"
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label className="text-xs font-medium">
+                  Employment types (OR)
+                </Label>
+                <TagInput
+                  aria-label="Employment types"
+                  values={draft.employmentTypes ?? []}
+                  onChange={(v) => set("employmentTypes", v)}
+                  placeholder="e.g. Full-time, Contract"
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label className="text-xs font-medium">
+                  Open-to cards
+                  <span className="text-muted-foreground font-normal">
+                    {" "}
+                    (select signals to require)
+                  </span>
+                </Label>
+                <div className="flex flex-col gap-1.5">
+                  {(
+                    [
+                      "CAREER_INTEREST",
+                      "HIRING_MANAGER",
+                      "VOLUNTEERING",
+                    ] as const
+                  ).map((code) => (
+                    <label
+                      key={code}
+                      className="flex items-center gap-2 cursor-pointer"
+                    >
+                      <Checkbox
+                        checked={(draft.openToCards ?? []).includes(code)}
+                        onCheckedChange={(v) => {
+                          const current = draft.openToCards ?? [];
+                          set(
+                            "openToCards",
+                            v
+                              ? ([
+                                  ...current,
+                                  code,
+                                ] as FilterDraft["openToCards"])
+                              : (current.filter(
+                                  (c) => c !== code,
+                                ) as FilterDraft["openToCards"]),
+                          );
+                        }}
+                        aria-label={code}
+                      />
+                      <span className="text-xs">{code}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="flex flex-col gap-1.5">
+                  <Label className="text-xs font-medium">Connections min</Label>
+                  <Input
+                    className="h-8 text-sm"
+                    type="number"
+                    min={0}
+                    value={draft.connectionsMin ?? ""}
+                    onChange={(e) =>
+                      set(
+                        "connectionsMin",
+                        e.target.value ? parseInt(e.target.value, 10) : null,
+                      )
+                    }
+                    placeholder="e.g. 500"
+                  />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label className="text-xs font-medium">Connections max</Label>
+                  <Input
+                    className="h-8 text-sm"
+                    type="number"
+                    min={0}
+                    value={draft.connectionsMax ?? ""}
+                    onChange={(e) =>
+                      set(
+                        "connectionsMax",
+                        e.target.value ? parseInt(e.target.value, 10) : null,
+                      )
+                    }
+                    placeholder="e.g. 500"
+                  />
+                </div>
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label className="text-xs font-medium">Followers min</Label>
                 <Input
                   className="h-8 text-sm"
                   type="number"
                   min={0}
-                  value={draft.connectionsMin ?? ""}
+                  value={draft.followersMin ?? ""}
                   onChange={(e) =>
                     set(
-                      "connectionsMin",
+                      "followersMin",
                       e.target.value ? parseInt(e.target.value, 10) : null,
                     )
                   }
-                  placeholder="e.g. 500"
+                  placeholder="e.g. 1000"
                 />
               </div>
+            </FilterSection>
+
+            {/* Section 8: Sort */}
+            <FilterSection title="Sort">
+              <div className="flex flex-col gap-1.5">
+                <Label className="text-xs font-medium">Sort by</Label>
+                <Select
+                  value={draft.sortField ?? ""}
+                  onValueChange={(v) => set("sortField", v || null)}
+                >
+                  <SelectTrigger className="h-8 text-xs">
+                    <SelectValue placeholder="Default (relevance)" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="">Default (relevance)</SelectItem>
+                    {SORTABLE_FIELD_OPTIONS.map((o) => (
+                      <SelectItem key={o.value} value={o.value}>
+                        {o.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              {draft.sortField && (
+                <div className="flex flex-col gap-1.5">
+                  <Label className="text-xs font-medium">Order</Label>
+                  <div className="flex gap-4">
+                    <label className="flex items-center gap-1.5 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="sortOrder"
+                        value="desc"
+                        checked={!draft.sortOrder || draft.sortOrder === "desc"}
+                        onChange={() => set("sortOrder", "desc")}
+                        className="accent-primary"
+                      />
+                      <span className="text-xs">Descending</span>
+                    </label>
+                    <label className="flex items-center gap-1.5 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="sortOrder"
+                        value="asc"
+                        checked={draft.sortOrder === "asc"}
+                        onChange={() => set("sortOrder", "asc")}
+                        className="accent-primary"
+                      />
+                      <span className="text-xs">Ascending</span>
+                    </label>
+                  </div>
+                </div>
+              )}
             </FilterSection>
 
             {/* Active filters — always visible so collapsed sections can't hide constraints */}
@@ -1180,7 +1545,7 @@ export function BuildSearchPage() {
             {/* Run button + limit */}
             <div className="flex items-center gap-3 pt-1">
               <Button
-                onClick={() => runSearch()}
+                onClick={() => runSearch(undefined)}
                 disabled={isPending || empty}
                 className="flex-1"
               >
@@ -1363,17 +1728,31 @@ export function BuildSearchPage() {
 
                 {/* Candidate list */}
                 {candidates.length > 0 && (
-                  <div className="rounded-lg border border-border divide-y divide-border">
-                    {candidates.map((c) => (
-                      <div key={c.id} className="px-4">
-                        <CandidateRow
-                          c={c}
-                          selected={selectedIds.has(c.id)}
-                          onToggle={toggleSelect}
-                        />
+                  <>
+                    <div className="rounded-lg border border-border divide-y divide-border">
+                      {candidates.map((c) => (
+                        <div key={c.id} className="px-4">
+                          <CandidateRow
+                            c={c}
+                            selected={selectedIds.has(c.id)}
+                            onToggle={toggleSelect}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                    {nextCursor && (
+                      <div className="flex justify-center pt-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={isPending}
+                          onClick={() => runSearch(nextCursor)}
+                        >
+                          {isPending ? "Loading…" : "Load more"}
+                        </Button>
                       </div>
-                    ))}
-                  </div>
+                    )}
+                  </>
                 )}
               </>
             )}

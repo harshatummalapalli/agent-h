@@ -40,10 +40,29 @@ import { COUNTRY_ALIASES } from "./crustdataClient.ts";
 
 // ─── Re-exported types (callers use these, avoids duplicate declarations) ─────
 
+/** Value shape for geo_distance / geo_exclude conditions. */
+export type CrustdataGeoValue = {
+  location?: string;
+  lat_lng?: [number, number];
+  distance: number;
+  unit?: "km" | "mi" | "miles" | "m" | "meters" | "ft" | "feet";
+};
+
 export type CrustdataCondition = {
   field: string;
-  type: "=" | "!=" | "(.)" | "(!)" | "not_in" | "=<" | "=>" | "in";
-  value: string | number | boolean | string[] | number[];
+  type:
+    | "="
+    | "!="
+    | "(.)"
+    | "(!)"
+    | "not_in"
+    | "=<"
+    | "=>"
+    | "in"
+    | "[.]"
+    | "geo_distance"
+    | "geo_exclude";
+  value: string | number | boolean | string[] | number[] | CrustdataGeoValue;
 };
 
 export type CrustdataGroup = {
@@ -152,6 +171,72 @@ export type FilterDraft = {
    * (people who recently started a new role).
    */
   recentlyChangedJobs?: boolean;
+
+  // ── Title match mode ──────────────────────────────────────────────────────
+  /**
+   * Controls the operator used for currentTitlesInclude conditions.
+   * "all_words" (default) → (.) — all words must appear, any order.
+   * "exact_phrase" → [.] — words must appear in exact sequence.
+   */
+  titleMatchMode?: "all_words" | "exact_phrase";
+
+  // ── Geo ───────────────────────────────────────────────────────────────────
+  /** Center location string for geo radius filter (e.g. "San Francisco, CA"). */
+  geoNear?: string | null;
+  /** Radius distance for geo filter. Requires geoNear. */
+  geoDistance?: number | null;
+  /** Distance unit (default "mi"). */
+  geoUnit?: "km" | "mi";
+  /**
+   * When true, uses geo_exclude (exclude within radius) instead of geo_distance
+   * (include within radius).
+   */
+  geoExcludeNear?: boolean;
+
+  // ── Location continents ───────────────────────────────────────────────────
+  /** Continents (multi OR). Each → (.) condition on locationContinent. */
+  locationContinents?: string[];
+
+  // ── Function categories ───────────────────────────────────────────────────
+  /** Current function categories (multi OR). Each → (.) on currentFunctionCategory. */
+  functionCategories?: string[];
+
+  // ── Employment types ──────────────────────────────────────────────────────
+  /** Current employment types (multi OR). Each → (.) on currentEmploymentType. */
+  employmentTypes?: string[];
+
+  // ── Company website domains ───────────────────────────────────────────────
+  /**
+   * Current employer website domains (bare, no scheme). e.g. "stripe.com".
+   * Single → = condition; multiple → in condition.
+   */
+  currentCompanyDomains?: string[];
+
+  // ── Past company exclude ──────────────────────────────────────────────────
+  /** Past company names to exclude. Each → (!) condition; all AND'd. */
+  pastCompaniesExclude?: string[];
+
+  // ── Open-to cards ─────────────────────────────────────────────────────────
+  /**
+   * Open-to signal codes (enum multi). Emits a single "in" condition.
+   * Values: "CAREER_INTEREST", "HIRING_MANAGER", "VOLUNTEERING".
+   */
+  openToCards?: Array<"CAREER_INTEREST" | "HIRING_MANAGER" | "VOLUNTEERING">;
+
+  // ── Followers / connections ───────────────────────────────────────────────
+  /** Maximum LinkedIn connections count (inclusive). Emits =< condition. */
+  connectionsMax?: number | null;
+  /** Minimum LinkedIn follower count (inclusive). Emits => on followers field. */
+  followersMin?: number | null;
+
+  // ── Sort ──────────────────────────────────────────────────────────────────
+  /**
+   * Field to sort results by. Must be one of the allowlisted sortable fields
+   * (see SORTABLE_FIELDS). Not compiled into filters; exported via CompileResult.
+   */
+  sortField?: string | null;
+  /** Sort order (default "desc"). */
+  sortOrder?: "asc" | "desc";
 };
 
 // ─── Phrase helpers ───────────────────────────────────────────────────────────
@@ -245,15 +330,22 @@ function orGroup(
 }
 
 /**
- * OR-group of full-phrase (.) conditions — one condition per user term.
+ * OR-group of full-phrase conditions — one condition per user term.
  * Used for titles/cities/education. Does NOT shingle-decompose (see file header).
+ * @param matchType "(.) " (default, all-words) or "[.]" (exact phrase, for titles when titleMatchMode="exact_phrase")
  */
 function phraseOrGroup(
   field: string,
   terms: string[],
+  matchType: "(.)" | "[.]" = "(.)",
 ): CrustdataCondition | CrustdataGroup | null {
   const cleaned = terms.map(normalizePhrase).filter(Boolean);
   if (cleaned.length === 0) return null;
+  if (matchType === "[.]") {
+    return orGroup(
+      cleaned.map((t) => ({ field, type: "[.]" as const, value: t })),
+    );
+  }
   return orGroup(cleaned.map((t) => contains(field, t)));
 }
 
@@ -282,6 +374,17 @@ function exactOrGroup(
   return orGroup(cleaned.map((v) => exact(field, v)));
 }
 
+// ─── Sortable fields allowlist ────────────────────────────────────────────────
+
+/** Fields Crustdata supports as sort keys (confirmed 2026-07-29). */
+const SORTABLE_FIELDS = new Set([
+  "recently_changed_jobs",
+  "professional_network.connections",
+  "professional_network.followers",
+  "years_of_experience_raw",
+  "experience.employment_details.start_date",
+]);
+
 // ─── Main compiler ────────────────────────────────────────────────────────────
 
 export type CompileResult = {
@@ -289,6 +392,8 @@ export type CompileResult = {
   filters: CrustdataGroup | null;
   /** Human-readable summary of which filter groups were applied. */
   appliedGroups: string[];
+  /** Sort spec when sortField is set to an allowlisted field. */
+  sorts?: Array<{ field: string; order: "asc" | "desc" }>;
 };
 
 /**
@@ -304,7 +409,13 @@ export function compileFilterDraft(draft: FilterDraft): CompileResult {
   // ── Current title include ────────────────────────────────────────────────
   const titleIncludes = (draft.currentTitlesInclude ?? []).filter(Boolean);
   if (titleIncludes.length > 0) {
-    const g = phraseOrGroup(CRUSTDATA_FIELDS.currentTitle, titleIncludes);
+    const titleMatchType =
+      draft.titleMatchMode === "exact_phrase" ? "[.]" : ("(.)" as const);
+    const g = phraseOrGroup(
+      CRUSTDATA_FIELDS.currentTitle,
+      titleIncludes,
+      titleMatchType,
+    );
     if (g) {
       topLevel.push(g);
       appliedGroups.push("current title include");
@@ -619,14 +730,142 @@ export function compileFilterDraft(draft: FilterDraft): CompileResult {
     appliedGroups.push("recently changed jobs");
   }
 
+  // ── Location: continents (multi OR) ──────────────────────────────────────
+  const continents = (draft.locationContinents ?? []).filter(Boolean);
+  if (continents.length > 0) {
+    const g = simpleOrGroup(CRUSTDATA_FIELDS.locationContinent, continents);
+    if (g) {
+      topLevel.push(g);
+      appliedGroups.push("continents");
+    }
+  }
+
+  // ── Geo distance / exclude ────────────────────────────────────────────────
+  const geoCenter = draft.geoNear?.trim();
+  const geoDist =
+    draft.geoDistance != null && draft.geoDistance > 0
+      ? draft.geoDistance
+      : null;
+  if (geoCenter && geoDist !== null) {
+    const geoVal: CrustdataGeoValue = {
+      location: geoCenter,
+      distance: geoDist,
+      unit: draft.geoUnit ?? "mi",
+    };
+    const geoType = draft.geoExcludeNear ? "geo_exclude" : "geo_distance";
+    topLevel.push({
+      field: CRUSTDATA_FIELDS.geoLocationRaw,
+      type: geoType,
+      value: geoVal,
+    });
+    appliedGroups.push(draft.geoExcludeNear ? "geo exclude" : "geo distance");
+  }
+
+  // ── Function categories (OR-group) ────────────────────────────────────────
+  const functionCats = (draft.functionCategories ?? [])
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (functionCats.length > 0) {
+    const g = simpleOrGroup(
+      CRUSTDATA_FIELDS.currentFunctionCategory,
+      functionCats,
+    );
+    if (g) {
+      topLevel.push(g);
+      appliedGroups.push("function categories");
+    }
+  }
+
+  // ── Employment types (OR-group) ───────────────────────────────────────────
+  const empTypes = (draft.employmentTypes ?? [])
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (empTypes.length > 0) {
+    const g = simpleOrGroup(CRUSTDATA_FIELDS.currentEmploymentType, empTypes);
+    if (g) {
+      topLevel.push(g);
+      appliedGroups.push("employment types");
+    }
+  }
+
+  // ── Current company domains (= or in) ─────────────────────────────────────
+  const domains = (draft.currentCompanyDomains ?? [])
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (domains.length === 1) {
+    topLevel.push(
+      exact(CRUSTDATA_FIELDS.currentCompanyWebsiteDomain, domains[0]),
+    );
+    appliedGroups.push("company domain");
+  } else if (domains.length > 1) {
+    topLevel.push({
+      field: CRUSTDATA_FIELDS.currentCompanyWebsiteDomain,
+      type: "in",
+      value: domains,
+    });
+    appliedGroups.push("company domains");
+  }
+
+  // ── Past company exclude (AND) ────────────────────────────────────────────
+  const pastCompanyExcludes = (draft.pastCompaniesExclude ?? []).filter(
+    Boolean,
+  );
+  for (const co of pastCompanyExcludes) {
+    const trimmed = co.trim();
+    if (trimmed) {
+      topLevel.push(notContains(CRUSTDATA_FIELDS.pastCompanyName, trimmed));
+    }
+  }
+  if (pastCompanyExcludes.length > 0)
+    appliedGroups.push("past company exclude");
+
+  // ── Open-to cards (single "in" condition) ─────────────────────────────────
+  const openToCards = (draft.openToCards ?? []).filter(Boolean);
+  if (openToCards.length > 0) {
+    topLevel.push({
+      field: CRUSTDATA_FIELDS.openToCards,
+      type: "in",
+      value: openToCards,
+    });
+    appliedGroups.push("open-to cards");
+  }
+
+  // ── Max connections ───────────────────────────────────────────────────────
+  const connectionsMax =
+    draft.connectionsMax != null && draft.connectionsMax > 0
+      ? draft.connectionsMax
+      : null;
+  if (connectionsMax !== null) {
+    topLevel.push(lte(CRUSTDATA_FIELDS.connections, connectionsMax));
+    appliedGroups.push("connections max");
+  }
+
+  // ── Min followers ─────────────────────────────────────────────────────────
+  const followersMin =
+    draft.followersMin != null && draft.followersMin > 0
+      ? draft.followersMin
+      : null;
+  if (followersMin !== null) {
+    topLevel.push(gte(CRUSTDATA_FIELDS.followers, followersMin));
+    appliedGroups.push("followers min");
+  }
+
   // ── Assemble ─────────────────────────────────────────────────────────────
   if (topLevel.length === 0) {
     return { filters: null, appliedGroups: [] };
   }
 
+  // ── Sort ──────────────────────────────────────────────────────────────────
+  const sortField = draft.sortField?.trim() ?? null;
+  const sorts =
+    sortField && SORTABLE_FIELDS.has(sortField)
+      ? [{ field: sortField, order: draft.sortOrder ?? "desc" }]
+      : undefined;
+
   return {
     filters: { op: "and", conditions: topLevel },
     appliedGroups,
+    ...(sorts ? { sorts } : {}),
   };
 }
 
@@ -676,11 +915,16 @@ export function relaxFilterDraft(
     };
   }
 
-  // 5. City/state (keep country)
+  // 5. City/state/geo (keep country/continent)
+  const hasGeo =
+    !!draft.geoNear?.trim() &&
+    draft.geoDistance != null &&
+    draft.geoDistance > 0;
   if (
     (draft.locationCities ?? []).some((s) => s.trim()) ||
     draft.locationCity?.trim() ||
-    (draft.locationStates ?? []).some((s) => s.trim())
+    (draft.locationStates ?? []).some((s) => s.trim()) ||
+    hasGeo
   ) {
     return {
       draft: {
@@ -688,8 +932,10 @@ export function relaxFilterDraft(
         locationCities: [],
         locationCity: undefined,
         locationStates: [],
+        geoNear: null,
+        geoDistance: null,
       },
-      dropped: "city/state (kept country)",
+      dropped: "city/state/geo (kept country)",
     };
   }
 
@@ -710,12 +956,18 @@ export function relaxFilterDraft(
     (draft.educationFieldsOfStudy ?? []).some((s) => s.trim()) ||
     (draft.languages ?? []).some((s) => s.trim()) ||
     (draft.connectionsMin != null && draft.connectionsMin > 0) ||
+    (draft.connectionsMax != null && draft.connectionsMax > 0) ||
+    (draft.followersMin != null && draft.followersMin > 0) ||
     (draft.companyIndustries ?? []).some((s) => s.trim()) ||
     draft.companyHQCountry?.trim() ||
     (draft.headcountMin != null && draft.headcountMin > 0) ||
     (draft.headcountMax != null && draft.headcountMax > 0) ||
     draft.seniority?.trim() ||
-    (draft.currentSeniorities ?? []).some((s) => s.trim())
+    (draft.currentSeniorities ?? []).some((s) => s.trim()) ||
+    (draft.functionCategories ?? []).some((s) => s.trim()) ||
+    (draft.employmentTypes ?? []).some((s) => s.trim()) ||
+    (draft.currentCompanyDomains ?? []).some((s) => s.trim()) ||
+    (draft.locationContinents ?? []).some((s) => s.trim())
   ) {
     return {
       draft: {
@@ -727,14 +979,28 @@ export function relaxFilterDraft(
         educationFieldsOfStudy: [],
         languages: [],
         connectionsMin: null,
+        connectionsMax: null,
+        followersMin: null,
         companyIndustries: [],
         companyHQCountry: undefined,
         headcountMin: null,
         headcountMax: null,
         seniority: undefined,
         currentSeniorities: [],
+        functionCategories: [],
+        employmentTypes: [],
+        currentCompanyDomains: [],
+        locationContinents: [],
       },
       dropped: "extra filters (education/headline/seniority/etc.)",
+    };
+  }
+
+  // 7.5 Open-to cards with other filters remaining — drop if not alone
+  if ((draft.openToCards ?? []).length > 0) {
+    return {
+      draft: { ...draft, openToCards: [] },
+      dropped: "open-to cards",
     };
   }
 

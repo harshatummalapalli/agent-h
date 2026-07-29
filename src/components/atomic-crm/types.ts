@@ -386,22 +386,66 @@ export interface ContactGender {
   icon: ComponentType<{ className?: string }>;
 }
 
-// ─── FilterDraft — typed form fields for the "Build search" tab ──────────────
+// ─── FilterDraft — typed form fields for the "Build search" page ─────────────
 // Mirrors _shared/crustdataFilterCompiler.ts FilterDraft (kept in sync manually;
 // no shared import because frontend and Deno runtimes are separate).
+//
+// Multi-value boolean semantics (shown in UI helper text):
+//   currentTitlesInclude / pastTitlesInclude → OR (any synonym matches)
+//   currentTitlesExclude                     → AND (all exclusions enforced)
+//   locationCountries / locationCities / locationStates → OR
+//   skillsRequired                           → AND (every listed skill required)
+//   skillsNiceToHave                         → OR (any matching skill counts)
+//   currentCompaniesInclude / pastCompaniesInclude / companyIndustries → OR
+//   currentCompaniesExclude / headlineKeywordsExclude → AND
+//   currentSeniorities / languages           → OR
 
 export type FilterDraft = {
+  // ── Titles ────────────────────────────────────────────────────────────────
   currentTitlesInclude?: string[];
   currentTitlesExclude?: string[];
   pastTitlesInclude?: string[];
+
+  // ── Location ──────────────────────────────────────────────────────────────
+  /** Multi-country OR. Supersedes single-value locationCountry. */
+  locationCountries?: string[];
+  /** @deprecated Use locationCountries */
   locationCountry?: string;
+  /** @deprecated Use locationCities */
   locationCity?: string;
+  locationCities?: string[];
+  locationStates?: string[];
+
+  // ── Skills ────────────────────────────────────────────────────────────────
   skillsRequired?: string[];
+  skillsNiceToHave?: string[];
+
+  // ── Experience / seniority ────────────────────────────────────────────────
+  /** @deprecated Use currentSeniorities */
   seniority?: string;
+  currentSeniorities?: string[];
   yoeMin?: number | null;
   yoeMax?: number | null;
+
+  // ── Companies ─────────────────────────────────────────────────────────────
   currentCompaniesInclude?: string[];
   currentCompaniesExclude?: string[];
+  pastCompaniesInclude?: string[];
+  companyIndustries?: string[];
+  /** ISO 3166-1 alpha-3 code e.g. "USA", "IND", "GBR" */
+  companyHQCountry?: string;
   headcountMin?: number | null;
   headcountMax?: number | null;
+
+  // ── Education ─────────────────────────────────────────────────────────────
+  educationSchools?: string[];
+  educationDegrees?: string[];
+  educationFieldsOfStudy?: string[];
+
+  // ── Headline & other ──────────────────────────────────────────────────────
+  headlineKeywordsInclude?: string[];
+  headlineKeywordsExclude?: string[];
+  /** Full language names e.g. "English", "Spanish", "Hindi" */
+  languages?: string[];
+  connectionsMin?: number | null;
 };

@@ -308,6 +308,15 @@ export const JdIntakePage = () => {
         },
       });
       notify("Role brief created", { type: "success" });
+      // Fire-and-forget: populate role_brief_search_intent from the JD text so
+      // Build Search can prefill immediately when opened from this role.
+      if (jdText) {
+        dataProvider
+          .refineSearchIntent(created.data.id, jdText)
+          .catch((err: unknown) =>
+            console.warn("[intake] resolve-search-intent failed:", err),
+          );
+      }
       // Role Workspace (2026-07-19): go straight into the new role's
       // workspace (sourcing/calibration + pipeline, all on one screen)
       // instead of the plain deals list -- matches Noon.ai's flow of

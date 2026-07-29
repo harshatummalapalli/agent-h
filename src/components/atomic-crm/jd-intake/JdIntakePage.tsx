@@ -24,7 +24,13 @@ import { Label } from "@/components/ui/label";
 import type { CrmDataProvider } from "../providers/types";
 import { AgentHShell } from "../shell/AgentHShell";
 import { useJdIntakeShellContext } from "../shell/useShellContext";
-import type { Deal } from "../types";
+import type {
+  Deal,
+  SearchIntentCondition,
+  UnenforcedConstraint,
+} from "../types";
+import { SearchIntentEditor } from "../roles/SearchIntentEditor";
+import { parsedBriefToConditions } from "./parsedBriefToConditions";
 import "../inbox/agent-h-theme.css";
 
 const SENIORITY_OPTIONS = [
@@ -125,11 +131,13 @@ export const JdIntakePage = () => {
   const [parsing, setParsing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [parsed, setParsed] = useState<ParsedRoleBrief | null>(null);
-  const [skillsText, setSkillsText] = useState("");
-  const [mustHaveText, setMustHaveText] = useState("");
-  const [niceToHaveText, setNiceToHaveText] = useState("");
-  const [excludedCompaniesText, setExcludedCompaniesText] = useState("");
-  const [exclusionKeywordsText, setExclusionKeywordsText] = useState("");
+  // SearchIntent chip state — seeded from parsed brief, editable before save.
+  const [intentConditions, setIntentConditions] = useState<
+    SearchIntentCondition[]
+  >([]);
+  const [intentUnenforceable, setIntentUnenforceable] = useState<
+    UnenforcedConstraint[]
+  >([]);
   const [pastTitlesText, setPastTitlesText] = useState("");
   const [pastCompaniesText, setPastCompaniesText] = useState("");
   // Local-only until save -- the recruiter can dismiss the clarifying-
@@ -214,10 +222,7 @@ export const JdIntakePage = () => {
     setParsing(true);
     try {
       const result = await dataProvider.parseJobDescription(jdText);
-      // Sourcing-preference/exclusion fields are never part of the LLM
-      // parse result (see the ParsedRoleBrief comment) -- default them
-      // here so the review form always has a well-formed object to edit.
-      setParsed({
+      const brief: ParsedRoleBrief = {
         ...result,
         preference_tiers: result.preference_tiers ?? [],
         clarifying_questions: result.clarifying_questions ?? [],
@@ -228,19 +233,17 @@ export const JdIntakePage = () => {
         exclusion_keywords: [],
         past_titles: [],
         past_companies: [],
-      });
-      setSkillsText(arrayToText(result.required_skills));
-      setMustHaveText(arrayToText(result.must_have_keywords));
-      setNiceToHaveText(arrayToText(result.nice_to_have_keywords));
-      setExcludedCompaniesText("");
-      setExclusionKeywordsText("");
+      };
+      setParsed(brief);
+      // Seed chip editor from parsed brief.
+      setIntentConditions(parsedBriefToConditions(brief));
+      setIntentUnenforceable([]);
       setPastTitlesText("");
       setPastCompaniesText("");
       setQuestionsDismissed(false);
-      notify(
-        "Job description parsed -- review the fields below before saving",
-        { type: "success" },
-      );
+      notify("Job description parsed — review your sourcing criteria below", {
+        type: "success",
+      });
     } catch (error: any) {
       notify(error?.message || "Failed to parse job description", {
         type: "error",
@@ -266,18 +269,17 @@ export const JdIntakePage = () => {
     });
   };
 
-  const handleCreate = async () => {
-    if (!parsed) return;
+  // Create the deal and save the SearchIntent chips.
+  const createDealAndSaveIntent = async (
+    conditions: SearchIntentCondition[],
+    unenforced: UnenforcedConstraint[],
+  ) => {
+    if (!parsed) return null;
     setSaving(true);
     try {
       const created = await dataProvider.create("deals", {
         data: {
           name: parsed.title,
-          // Agent H: "opportunity" was Atomic's stock sales-deal stage,
-          // kept only so the record showed up in the Kanban view before a
-          // recruiting-specific stage vocabulary existed. That vocabulary
-          // now exists (see root/defaultConfiguration.ts) -- every role
-          // starts life at the first pipeline stage, "sourcing".
           stage: "sourcing",
           jd_text: jdText,
           seniority: parsed.seniority,
@@ -286,14 +288,9 @@ export const JdIntakePage = () => {
           employment_type: parsed.employment_type,
           years_experience_min: parsed.years_experience_min,
           years_experience_max: parsed.years_experience_max,
-          required_skills: textToArray(skillsText),
-          must_have_keywords: textToArray(mustHaveText),
-          nice_to_have_keywords: textToArray(niceToHaveText),
           company_type: parsed.company_type,
           company_size_min: parsed.company_size_min,
           company_size_max: parsed.company_size_max,
-          excluded_companies: textToArray(excludedCompaniesText),
-          exclusion_keywords: textToArray(exclusionKeywordsText),
           past_titles: textToArray(pastTitlesText),
           past_companies: textToArray(pastCompaniesText),
           preference_tiers:
@@ -305,33 +302,64 @@ export const JdIntakePage = () => {
           clarifying_questions_dismissed: questionsDismissed,
           role_status: "new",
           contact_ids: [],
+          // Flat keyword fields as fallback — overwritten by saveSearchIntent below.
+          required_skills: conditions
+            .filter(
+              (c) => c.category === "skill" && c.disposition === "require",
+            )
+            .map((c) => c.value),
+          must_have_keywords: conditions
+            .filter(
+              (c) => c.category === "skill" && c.disposition === "require",
+            )
+            .map((c) => c.value),
+          nice_to_have_keywords: conditions
+            .filter((c) => c.category === "skill" && c.disposition === "prefer")
+            .map((c) => c.value),
+          excluded_companies: conditions
+            .filter(
+              (c) => c.category === "company" && c.disposition === "exclude",
+            )
+            .map((c) => c.value),
+          exclusion_keywords: conditions
+            .filter(
+              (c) => c.category === "title" && c.disposition === "exclude",
+            )
+            .map((c) => c.value),
         },
       });
+
+      const newDealId = created.data.id;
+
+      // Persist the chips as the canonical SearchIntent (versioned, no LLM).
+      await dataProvider.saveSearchIntent(newDealId, conditions, unenforced);
+
       notify("Role brief created", { type: "success" });
-      // Fire-and-forget: populate role_brief_search_intent from the JD text so
-      // Build Search can prefill immediately when opened from this role.
-      if (jdText) {
-        dataProvider
-          .refineSearchIntent(created.data.id, jdText)
-          .catch((err: unknown) =>
-            console.warn("[intake] resolve-search-intent failed:", err),
-          );
-      }
-      // Role Workspace (2026-07-19): go straight into the new role's
-      // workspace (sourcing/calibration + pipeline, all on one screen)
-      // instead of the plain deals list -- matches Noon.ai's flow of
-      // JD intake leading directly into Sourcing under the same role
-      // context, rather than dropping the recruiter back at a list they'd
-      // have to click through again to resume work on what they just
-      // created.
-      redirect(`/roles/${created.data.id}`);
+      return newDealId;
     } catch (error: any) {
       notify(error?.message || "Failed to create the role brief", {
         type: "error",
       });
+      return null;
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleSave = async (
+    conditions: SearchIntentCondition[],
+    unenforced: UnenforcedConstraint[],
+  ) => {
+    const dealId = await createDealAndSaveIntent(conditions, unenforced);
+    if (dealId != null) redirect(`/roles/${dealId}`);
+  };
+
+  const handleContinue = async (
+    conditions: SearchIntentCondition[],
+    unenforced: UnenforcedConstraint[],
+  ) => {
+    const dealId = await createDealAndSaveIntent(conditions, unenforced);
+    if (dealId != null) navigate(`/build-search?deal_id=${dealId}`);
   };
 
   return (
@@ -348,11 +376,12 @@ export const JdIntakePage = () => {
         <div>
           <h1 className="text-2xl font-semibold">JD Intake</h1>
           <p className="text-muted-foreground text-sm">
-            Paste a job description in plain language. It'll be parsed into a
-            structured role brief you can review and edit before saving.
+            Paste a job description. It'll be parsed into chips you review
+            before saving.
           </p>
         </div>
 
+        {/* JD paste */}
         <div className="flex flex-col gap-2">
           <Label htmlFor="jd-text">Job description</Label>
           <Textarea
@@ -370,8 +399,9 @@ export const JdIntakePage = () => {
         </div>
 
         {parsed && (
-          <div className="ah-panel flex flex-col gap-4 p-6">
-            <h2 className="text-lg font-medium">Review extracted fields</h2>
+          <div className="ah-panel flex flex-col gap-5 p-6">
+            {/* ── Role metadata ── */}
+            <h2 className="text-lg font-medium">Role details</h2>
 
             <div className="flex flex-col gap-2">
               <Label htmlFor="title">Role title</Label>
@@ -470,37 +500,7 @@ export const JdIntakePage = () => {
               </div>
             </div>
 
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="skills">Required skills (comma-separated)</Label>
-              <Input
-                id="skills"
-                value={skillsText}
-                onChange={(e) => setSkillsText(e.target.value)}
-              />
-            </div>
-
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="must-have">
-                Must-have keywords (comma-separated)
-              </Label>
-              <Input
-                id="must-have"
-                value={mustHaveText}
-                onChange={(e) => setMustHaveText(e.target.value)}
-              />
-            </div>
-
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="nice-to-have">
-                Nice-to-have keywords (comma-separated)
-              </Label>
-              <Input
-                id="nice-to-have"
-                value={niceToHaveText}
-                onChange={(e) => setNiceToHaveText(e.target.value)}
-              />
-            </div>
-
+            {/* Clarifying questions advisory */}
             {parsed.clarifying_questions.length > 0 && !questionsDismissed && (
               <div className="flex flex-col gap-2 rounded-md border border-amber-200 bg-amber-50 p-3">
                 <h3 className="text-sm font-medium text-amber-900">
@@ -524,6 +524,7 @@ export const JdIntakePage = () => {
               </div>
             )}
 
+            {/* Ranked preference tiers */}
             {parsed.preference_tiers.length > 0 && (
               <div className="flex flex-col gap-3 rounded-md border p-3">
                 <div>
@@ -531,7 +532,7 @@ export const JdIntakePage = () => {
                     Ranked candidate preferences
                   </h3>
                   <p className="text-muted-foreground text-xs">
-                    This JD described a primary-vs-fallback profile -- edit each
+                    This JD described a primary-vs-fallback profile — edit each
                     tier below, or clear a tier's keywords to drop it.
                   </p>
                 </div>
@@ -582,14 +583,42 @@ export const JdIntakePage = () => {
               </div>
             )}
 
+            {/* ── SearchIntent chip editor ── */}
+            <div className="border-t pt-4 flex flex-col gap-3">
+              <div>
+                <h3 className="text-sm font-medium">Sourcing criteria</h3>
+                <p className="text-muted-foreground text-xs">
+                  Review and edit the chips — these drive Build Search and
+                  sourcing. Require = must-have, Prefer = nice-to-have, Exclude
+                  = never surface.
+                </p>
+              </div>
+              <SearchIntentEditor
+                initialConditions={intentConditions}
+                initialUnenforceable={intentUnenforceable}
+                onSave={(conditions, unenforced) => {
+                  setIntentConditions(conditions);
+                  setIntentUnenforceable(unenforced);
+                  handleSave(conditions, unenforced);
+                }}
+                onContinue={(conditions, unenforced) => {
+                  setIntentConditions(conditions);
+                  setIntentUnenforceable(unenforced);
+                  handleContinue(conditions, unenforced);
+                }}
+                saving={saving}
+              />
+            </div>
+
+            {/* ── Sourcing preferences (optional extra) ── */}
             <div className="border-t pt-4 flex flex-col gap-4">
               <div>
                 <h3 className="text-sm font-medium">
                   Sourcing preferences (optional)
                 </h3>
                 <p className="text-muted-foreground text-xs">
-                  Which companies to pull candidates from -- not facts about
-                  this role, just where to look.
+                  Which companies to pull candidates from — not facts about this
+                  role, just where to look.
                 </p>
               </div>
 
@@ -640,36 +669,12 @@ export const JdIntakePage = () => {
               </div>
 
               <div className="flex flex-col gap-2">
-                <Label htmlFor="excluded-companies">
-                  Excluded companies (comma-separated)
-                </Label>
-                <Input
-                  id="excluded-companies"
-                  placeholder="Companies to never surface -- competitors, already contacted, etc."
-                  value={excludedCompaniesText}
-                  onChange={(e) => setExcludedCompaniesText(e.target.value)}
-                />
-              </div>
-
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="exclusion-keywords">
-                  Exclusion keywords (comma-separated)
-                </Label>
-                <Input
-                  id="exclusion-keywords"
-                  placeholder="Terms that should rule a candidate out"
-                  value={exclusionKeywordsText}
-                  onChange={(e) => setExclusionKeywordsText(e.target.value)}
-                />
-              </div>
-
-              <div className="flex flex-col gap-2">
                 <Label htmlFor="past-titles">
                   Past titles (comma-separated, optional)
                 </Label>
                 <Input
                   id="past-titles"
-                  placeholder="Boosts, doesn't require -- e.g. 'Founding Engineer' for someone who held that title earlier in their career"
+                  placeholder="Boosts, doesn't require — e.g. 'Founding Engineer'"
                   value={pastTitlesText}
                   onChange={(e) => setPastTitlesText(e.target.value)}
                 />
@@ -681,17 +686,11 @@ export const JdIntakePage = () => {
                 </Label>
                 <Input
                   id="past-companies"
-                  placeholder="Boosts, doesn't require -- e.g. 'Microsoft' for candidates who worked there at any point, not just currently"
+                  placeholder="Boosts — e.g. 'Microsoft' for candidates who worked there at any point"
                   value={pastCompaniesText}
                   onChange={(e) => setPastCompaniesText(e.target.value)}
                 />
               </div>
-            </div>
-
-            <div>
-              <Button onClick={handleCreate} disabled={saving}>
-                {saving ? "Saving..." : "Create Role Brief"}
-              </Button>
             </div>
           </div>
         )}

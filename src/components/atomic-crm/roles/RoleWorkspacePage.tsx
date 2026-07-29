@@ -69,6 +69,7 @@ import type { ConversationTurnMetadata } from "../shell/agentActionTiers";
 import type { Deal, RoleConversationTurn } from "../types";
 import { CandidateCard } from "./CandidateCard";
 import { SearchIntentDisplay } from "./SearchIntentDisplay";
+import { SearchIntentEditor } from "./SearchIntentEditor";
 import { BuildSearchTab } from "./BuildSearchTab";
 import "../inbox/agent-h-theme.css";
 
@@ -1509,6 +1510,9 @@ const RoleMemoryPanel = ({
 }) => {
   const dataProvider = useDataProvider<CrmDataProvider>();
   const queryClient = useQueryClient();
+  // Toggle SearchIntentEditor in the T6 Sourcing criteria block.
+  const [editingIntent, setEditingIntent] = useState(false);
+  const [intentSaving, setIntentSaving] = useState(false);
 
   const { data: learnedCriteria = [], refetch: refetchCriteria } = useQuery({
     queryKey: ["role_brief_learned_criteria", dealId],
@@ -1605,25 +1609,67 @@ const RoleMemoryPanel = ({
           )}
         </div>
 
-        {/* T6: Search Intent block — rendered from deal.role_brief_search_intent
-            (inline here inside the RoleMemoryPanel section, not a separate file).
-            SearchIntentDisplay lives at src/components/atomic-crm/roles/SearchIntentDisplay.tsx. */}
+        {/* T6: Search Intent block — rendered from deal.role_brief_search_intent.
+            Switches between read-only SearchIntentDisplay and editable SearchIntentEditor. */}
         {deal !== undefined && (
           <>
             <Separator />
             <div>
-              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
-                Sourcing understanding
-              </p>
-              {deal?.role_brief_search_intent?.current ? (
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Sourcing criteria
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setEditingIntent((v) => !v)}
+                  className="text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+                  aria-label={
+                    editingIntent ? "Close editor" : "Edit sourcing criteria"
+                  }
+                >
+                  {editingIntent ? "Close" : "Edit"}
+                </button>
+              </div>
+              {editingIntent ? (
+                <SearchIntentEditor
+                  initialConditions={
+                    deal.role_brief_search_intent?.current?.conditions ?? []
+                  }
+                  initialUnenforceable={
+                    deal.role_brief_search_intent?.current
+                      ?.unenforceable_constraints ?? []
+                  }
+                  saveLabel="Save"
+                  saving={intentSaving}
+                  onSave={async (conditions, unenforced) => {
+                    if (!deal?.id) return;
+                    setIntentSaving(true);
+                    try {
+                      await dataProvider.saveSearchIntent(
+                        deal.id,
+                        conditions,
+                        unenforced,
+                      );
+                      await queryClient.invalidateQueries({
+                        queryKey: ["deals", String(deal.id)],
+                      });
+                      setEditingIntent(false);
+                    } catch {
+                      // error shown by dataProvider
+                    } finally {
+                      setIntentSaving(false);
+                    }
+                  }}
+                />
+              ) : deal?.role_brief_search_intent?.current ? (
                 <SearchIntentDisplay
                   current={deal.role_brief_search_intent.current}
                   history={deal.role_brief_search_intent.history ?? []}
                 />
               ) : (
                 <p className="text-xs text-muted-foreground">
-                  Sourcing understanding will appear here after the first
-                  search.
+                  No sourcing criteria yet. Click Edit to add chips, or start
+                  sourcing to auto-generate them.
                 </p>
               )}
             </div>

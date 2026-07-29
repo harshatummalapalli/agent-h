@@ -19,6 +19,7 @@ import type { Deal } from "../types";
 import type { CrmDataProvider } from "../providers/types";
 import type { UnipileLinkedInAccount } from "../settings/UnipileLinkedInConnectionCard";
 import type { CalibrationCandidate } from "../providers/supabase/dataProvider";
+import { parsedBriefToConditions } from "../jd-intake/parsedBriefToConditions";
 import "../inbox/agent-h-theme.css";
 
 type ConvTurn = { role: "user" | "agent"; text: string };
@@ -285,6 +286,17 @@ export const HomePage = () => {
       } catch {
         // Transcript seeding failed — navigate anyway; sourcing can be
         // triggered from the role page.
+      }
+
+      // Fire-and-forget: seed SearchIntent chips from the parsed brief so
+      // the role's Search tab prefills immediately without an LLM round-trip.
+      const seedConditions = parsedBriefToConditions(parsed);
+      if (seedConditions.length > 0) {
+        dataProvider
+          .saveSearchIntent(dealId, seedConditions, [])
+          .catch((err: unknown) =>
+            console.warn("[home] saveSearchIntent failed:", err),
+          );
       }
 
       navigate(`/roles/${dealId}`);

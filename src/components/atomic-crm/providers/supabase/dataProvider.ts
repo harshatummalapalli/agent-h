@@ -16,7 +16,10 @@ import type {
   RAFile,
   Sale,
   SalesFormData,
+  SearchIntentCondition,
   SignUpData,
+  UnenforcedConstraint,
+  VersionedSearchIntent,
 } from "../../types";
 import type { ConfigurationContextValue } from "../../root/ConfigurationContext";
 import { ATTACHMENTS_BUCKET } from "../commons/attachments";
@@ -2001,6 +2004,92 @@ const getDataProviderWithCustomMethods = () => {
       });
       if (error) throw error;
       return data!;
+    },
+    // Save a recruiter-edited SearchIntent directly to deals.role_brief_search_intent
+    // without any LLM round-trip. Bumps the version and pushes the previous
+    // current intent to history. Also back-fills the flat brief columns
+    // (required_skills, must_have_keywords, nice_to_have_keywords,
+    // excluded_companies, exclusion_keywords) derived from the chips so code
+    // that still reads those columns keeps working.
+    async saveSearchIntent(
+      dealId: Identifier,
+      conditions: SearchIntentCondition[],
+      unenforceableConstraints: UnenforcedConstraint[] = [],
+    ) {
+      const supabase = getSupabaseClient();
+
+      // Fetch the current record to calculate the next version + build history.
+      const { data: existing, error: fetchError } = await supabase
+        .from("deals")
+        .select("role_brief_search_intent")
+        .eq("id", Number(dealId))
+        .single();
+      if (fetchError) throw fetchError;
+
+      type ExistingRecord = {
+        role_brief_search_intent?: {
+          current?: VersionedSearchIntent;
+          history?: VersionedSearchIntent[];
+        } | null;
+      };
+      const prev = (existing as ExistingRecord)?.role_brief_search_intent;
+      const prevCurrent = prev?.current ?? null;
+      const prevHistory: VersionedSearchIntent[] = prev?.history ?? [];
+
+      const nextVersion = (prevCurrent?.version ?? 0) + 1;
+      const newCurrent: VersionedSearchIntent = {
+        version: nextVersion,
+        updated_at: new Date().toISOString(),
+        conditions,
+        unenforceable_constraints: unenforceableConstraints,
+      };
+
+      const newHistory = prevCurrent
+        ? [...prevHistory, prevCurrent]
+        : prevHistory;
+
+      // Derive flat brief columns from chips for backward compatibility.
+      const skillsRequired = conditions
+        .filter((c) => c.category === "skill" && c.disposition === "require")
+        .map((c) => c.value);
+      const skillsPrefer = conditions
+        .filter((c) => c.category === "skill" && c.disposition === "prefer")
+        .map((c) => c.value);
+      const companiesExclude = conditions
+        .filter((c) => c.category === "company" && c.disposition === "exclude")
+        .map((c) => c.value);
+      const titleExclude = conditions
+        .filter((c) => c.category === "title" && c.disposition === "exclude")
+        .map((c) => c.value);
+
+      const { error: updateError } = await supabase
+        .from("deals")
+        .update({
+          role_brief_search_intent: {
+            current: newCurrent,
+            history: newHistory,
+          },
+          // Back-fill flat fields for older code paths.
+          ...(skillsRequired.length > 0
+            ? {
+                required_skills: skillsRequired,
+                must_have_keywords: skillsRequired,
+              }
+            : {}),
+          ...(skillsPrefer.length > 0
+            ? { nice_to_have_keywords: skillsPrefer }
+            : {}),
+          ...(companiesExclude.length > 0
+            ? { excluded_companies: companiesExclude }
+            : {}),
+          ...(titleExclude.length > 0
+            ? { exclusion_keywords: titleExclude }
+            : {}),
+        })
+        .eq("id", Number(dealId));
+
+      if (updateError) throw updateError;
+      return newCurrent;
     },
     // Agent H: parse a free-text command (Claude Haiku tool-use). Has no side effects itself -- the
     // caller dispatches the returned action to the actual dataProvider

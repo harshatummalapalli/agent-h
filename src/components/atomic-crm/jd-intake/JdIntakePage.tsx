@@ -185,7 +185,7 @@ export const JdIntakePage = () => {
       ) {
         navigate(`/roles/${command.deal_id}`);
       } else if (command.action === "show_roles") {
-        navigate("/deals");
+        navigate("/");
       } else if (command.action === "refine_search_intent") {
         if (command.deal_id == null) {
           toast(

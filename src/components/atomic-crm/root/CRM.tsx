@@ -18,7 +18,6 @@ import { OAuthConsentPage } from "@/components/supabase/oauth-consent-page";
 import candidates from "../candidates";
 import companies from "../companies";
 import contacts from "../contacts";
-import { CanvasPage } from "../canvas/CanvasPage";
 import { HomePage } from "../home/HomePage";
 import { PreferencesPage } from "../preferences/PreferencesPage";
 import deals from "../deals";
@@ -279,7 +278,6 @@ const DesktopAdmin = (
         <Route path={JdIntakePage.path} element={<JdIntakePage />} />
         <Route path={RoleWorkspacePage.path} element={<RoleWorkspacePage />} />
         <Route path="/build-search" element={<BuildSearchPage />} />
-        <Route path={CanvasPage.path} element={<CanvasPage />} />
         <Route path={AnalyticsPage.path} element={<AnalyticsPage />} />
         <Route path={TemplatesPage.path} element={<TemplatesPage />} />
         <Route path="/deals" element={<RedirectToHome />} />
@@ -380,7 +378,6 @@ const MobileAdmin = (
             element={<RoleWorkspacePage />}
           />
           <Route path="/build-search" element={<BuildSearchPage />} />
-          <Route path={CanvasPage.path} element={<CanvasPage />} />
           <Route path={AnalyticsPage.path} element={<AnalyticsPage />} />
           <Route path={TemplatesPage.path} element={<TemplatesPage />} />
           <Route path="/deals" element={<RedirectToHome />} />

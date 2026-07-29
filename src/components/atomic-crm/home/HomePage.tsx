@@ -200,10 +200,15 @@ export const HomePage = () => {
     if (!parsed || creating) return;
     setCreating(true);
     try {
+      const jdText = turns
+        .filter((t) => t.role === "user")
+        .map((t) => t.text)
+        .join("\n\n");
       const created = await dataProvider.create("deals", {
         data: {
           name: parsed.title || "New Role",
           stage: "sourcing",
+          jd_text: jdText || null,
           seniority: parsed.seniority,
           location: parsed.location,
           industry: parsed.industry,

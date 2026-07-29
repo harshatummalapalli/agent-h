@@ -4,8 +4,9 @@
 // directly. Isolated from calibration: results are local to this tab and do NOT
 // write to role_discovery_cache or the calibration pool.
 //
-// Pre-fills from deal.role_brief_search_intent so the first use already matches
-// the deal's parsed requirements (title terms, location, skills, YoE, seniority).
+// Prefills from SearchIntent when present, else from the deal row brief
+// fields (name / location / skills / seniority / YoE) so new roles still
+// get a usable starting draft.
 
 import { useState, useCallback } from "react";
 import { useDataProvider } from "ra-core";
@@ -30,7 +31,49 @@ import type {
 } from "../types";
 import type { CrmDataProvider } from "../providers/types";
 
-// ─── Pre-fill from SearchIntent ───────────────────────────────────────────────
+// Deal rows carry structured brief columns that aren't all on the Deal type
+// yet (location, skills, YoE) — read them defensively for prefill.
+type DealBriefFields = Deal & {
+  location?: string | null;
+  seniority?: string | null;
+  required_skills?: string[] | null;
+  years_experience_min?: number | null;
+  years_experience_max?: number | null;
+};
+
+function parseLocationString(raw: string): {
+  locationCountry?: string;
+  locationCity?: string;
+} {
+  const parenMatch = raw.match(/^(.+?)\s*\(([^)]+)\)$/);
+  const commaMatch = raw.match(/^(.+?),\s*(.+)$/);
+  if (parenMatch) {
+    return {
+      locationCity: parenMatch[1].trim(),
+      locationCountry: parenMatch[2].trim(),
+    };
+  }
+  if (commaMatch) {
+    return {
+      locationCity: commaMatch[1].trim(),
+      locationCountry: commaMatch[2].trim(),
+    };
+  }
+  // Bare value: treat as country if it looks like one word/known country;
+  // otherwise as city (recruiter can move it).
+  const trimmed = raw.trim();
+  if (!trimmed) return {};
+  if (/^[A-Za-z][A-Za-z\s]+$/.test(trimmed) && !trimmed.includes(",")) {
+    // Heuristic: multi-word cities stay as city; single token often country.
+    // Prefer leaving single tokens as country (India, US, UK) — recruiter edits.
+    const words = trimmed.split(/\s+/);
+    if (words.length === 1) return { locationCountry: trimmed };
+    return { locationCity: trimmed };
+  }
+  return { locationCity: trimmed };
+}
+
+// ─── Prefill helpers ─────────────────────────────────────────────────────────
 
 function intentToDraft(intent: VersionedSearchIntent | undefined): FilterDraft {
   if (!intent) return {};
@@ -57,32 +100,12 @@ function intentToDraft(intent: VersionedSearchIntent | undefined): FilterDraft {
     (c) => c.category === "seniority" && c.disposition === "require",
   );
 
-  // Parse location: prefer country extraction. "India", "Hyderabad, India",
-  // "Hyderabad (India)" etc. Simple heuristic — recruiter can adjust.
   const locationVals = pickValues(
     (c) => c.category === "location" && c.disposition === "require",
   );
-  let locationCountry = "";
-  let locationCity = "";
-  if (locationVals.length > 0) {
-    const raw = locationVals[0];
-    // Paren form: "City (Country)"
-    const parenMatch = raw.match(/^(.+?)\s*\(([^)]+)\)$/);
-    // Comma form: "City, Country"
-    const commaMatch = raw.match(/^(.+?),\s*(.+)$/);
-    if (parenMatch) {
-      locationCity = parenMatch[1].trim();
-      locationCountry = parenMatch[2].trim();
-    } else if (commaMatch) {
-      locationCity = commaMatch[1].trim();
-      locationCountry = commaMatch[2].trim();
-    } else {
-      // Assume bare country name (single word / known country)
-      locationCountry = raw.trim();
-    }
-  }
+  const loc =
+    locationVals.length > 0 ? parseLocationString(locationVals[0]) : {};
 
-  // Parse YoE range: value like "5-10", "min:5", "max:10"
   const yoeVals = pickValues(
     (c) => c.category === "experience_range" && c.disposition === "require",
   );
@@ -108,11 +131,49 @@ function intentToDraft(intent: VersionedSearchIntent | undefined): FilterDraft {
     currentTitlesExclude: titleExcludes.length > 0 ? titleExcludes : undefined,
     skillsRequired: skills.length > 0 ? skills : undefined,
     seniority: seniorityVals.length > 0 ? seniorityVals[0] : undefined,
-    locationCountry: locationCountry || undefined,
-    locationCity: locationCity || undefined,
+    locationCountry: loc.locationCountry,
+    locationCity: loc.locationCity,
     yoeMin,
     yoeMax,
   };
+}
+
+function dealBriefToDraft(deal: DealBriefFields): FilterDraft {
+  const loc =
+    typeof deal.location === "string" && deal.location.trim()
+      ? parseLocationString(deal.location.trim())
+      : {};
+  const skills = Array.isArray(deal.required_skills)
+    ? deal.required_skills.filter(
+        (s): s is string => typeof s === "string" && s.trim().length > 0,
+      )
+    : [];
+  return {
+    currentTitlesInclude: deal.name?.trim() ? [deal.name.trim()] : undefined,
+    skillsRequired: skills.length > 0 ? skills : undefined,
+    seniority: deal.seniority?.trim() || undefined,
+    locationCountry: loc.locationCountry,
+    locationCity: loc.locationCity,
+    yoeMin:
+      typeof deal.years_experience_min === "number"
+        ? deal.years_experience_min
+        : null,
+    yoeMax:
+      typeof deal.years_experience_max === "number"
+        ? deal.years_experience_max
+        : null,
+  };
+}
+
+function draftFromDeal(deal: DealBriefFields): FilterDraft {
+  const fromIntent = intentToDraft(deal.role_brief_search_intent?.current);
+  const hasIntent =
+    (fromIntent.currentTitlesInclude?.length ?? 0) > 0 ||
+    !!fromIntent.locationCountry ||
+    !!fromIntent.locationCity ||
+    (fromIntent.skillsRequired?.length ?? 0) > 0;
+  if (hasIntent) return fromIntent;
+  return dealBriefToDraft(deal);
 }
 
 // ─── TagInput — multi-value text input for include/exclude lists ──────────────
@@ -257,9 +318,8 @@ function CandidateRow({ c }: { c: SearchCandidate }) {
 export function BuildSearchTab({ deal }: { deal: Deal }) {
   const dataProvider = useDataProvider<CrmDataProvider>();
 
-  // Initialize draft from deal's current SearchIntent (if any).
   const [draft, setDraft] = useState<FilterDraft>(() =>
-    intentToDraft(deal?.role_brief_search_intent?.current),
+    draftFromDeal(deal as DealBriefFields),
   );
 
   const [compiledVisible, setCompiledVisible] = useState(false);
@@ -284,7 +344,7 @@ export function BuildSearchTab({ deal }: { deal: Deal }) {
   );
 
   const resetAll = () => {
-    setDraft(intentToDraft(deal?.role_brief_search_intent?.current));
+    setDraft(draftFromDeal(deal as DealBriefFields));
     reset();
   };
 

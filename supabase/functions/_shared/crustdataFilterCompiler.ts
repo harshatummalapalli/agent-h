@@ -14,6 +14,7 @@ import {
   CRUSTDATA_FIELDS,
   PHRASE_DECOMPOSITION,
 } from "./crustdataCapabilityManifest.ts";
+import { COUNTRY_ALIASES } from "./crustdataClient.ts";
 
 // ─── Re-exported types (callers use these, avoids duplicate declarations) ─────
 
@@ -43,7 +44,7 @@ export type FilterDraft = {
   locationCountry?: string;
   /** City/metro contains-match. Long phrases are shingle-decomposed. */
   locationCity?: string;
-  /** Must-have skills. Each skill → a (.) condition; all OR'd (union, not intersection). */
+  /** Must-have skills. Each skill → a (.) condition; all AND'd (every skill required). */
   skillsRequired?: string[];
   /** Seniority level. Fuzzy (.) match — exact value vocabulary unconfirmed. */
   seniority?: string;
@@ -186,9 +187,10 @@ export function compileFilterDraft(draft: FilterDraft): CompileResult {
     }
   }
 
-  // ── Location: country (exact) ────────────────────────────────────────────
-  const country = draft.locationCountry?.trim();
-  if (country) {
+  // ── Location: country (exact, alias-normalised) ──────────────────────────
+  const countryRaw = draft.locationCountry?.trim();
+  if (countryRaw) {
+    const country = COUNTRY_ALIASES[countryRaw.toLowerCase()] ?? countryRaw;
     topLevel.push(exact(CRUSTDATA_FIELDS.locationCountry, country));
     appliedGroups.push("country");
   }
@@ -207,18 +209,15 @@ export function compileFilterDraft(draft: FilterDraft): CompileResult {
     }
   }
 
-  // ── Skills (OR-group — recruiters want ANY of these, not ALL) ────────────
-  const skills = (draft.skillsRequired ?? []).filter(Boolean);
+  // ── Skills (AND — each listed skill is must-have) ────────────────────────
+  const skills = (draft.skillsRequired ?? [])
+    .map((s) => s.trim())
+    .filter(Boolean);
   if (skills.length > 0) {
-    const conds = skills
-      .map((s) => s.trim())
-      .filter(Boolean)
-      .map((s) => contains(CRUSTDATA_FIELDS.skills, s));
-    const g = orGroup(conds);
-    if (g) {
-      topLevel.push(g);
-      appliedGroups.push("skills");
+    for (const skill of skills) {
+      topLevel.push(contains(CRUSTDATA_FIELDS.skills, skill));
     }
+    appliedGroups.push("skills");
   }
 
   // ── Seniority (fuzzy contains) ───────────────────────────────────────────

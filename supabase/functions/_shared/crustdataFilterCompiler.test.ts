@@ -159,32 +159,24 @@ describe("compileFilterDraft – title exclusions", () => {
   });
 });
 
-// ─── Skills OR-group ──────────────────────────────────────────────────────────
+// ─── Skills (must-have AND) ───────────────────────────────────────────────────
 
 describe("compileFilterDraft – skills", () => {
-  it("multiple skills → OR group (any-of, not all-of)", () => {
+  it("multiple skills → AND (each must-have)", () => {
     const { filters } = compileFilterDraft({
       skillsRequired: ["Python", "Kubernetes", "Security"],
     });
     expect(filters).not.toBeNull();
-    const orG = filters!.conditions.find(
-      (c): c is CrustdataGroup =>
-        "op" in c &&
-        c.op === "or" &&
-        c.conditions.some(
-          (i): boolean => "field" in i && i.field === CRUSTDATA_FIELDS.skills,
-        ),
-    );
-    expect(orG).toBeDefined();
-    const vals = orG!.conditions
-      .filter((c): c is CrustdataCondition => "field" in c)
-      .map((c) => c.value);
+    expect(filters!.op).toBe("and");
+    const skillConds = findContains(filters!, CRUSTDATA_FIELDS.skills);
+    expect(skillConds).toHaveLength(3);
+    const vals = skillConds.map((c) => c.value);
     expect(vals).toContain("Python");
     expect(vals).toContain("Kubernetes");
     expect(vals).toContain("Security");
   });
 
-  it("single skill → direct (.) condition, no OR wrapper", () => {
+  it("single skill → direct (.) condition", () => {
     const { filters } = compileFilterDraft({ skillsRequired: ["Python"] });
     const conds = findContains(filters!, CRUSTDATA_FIELDS.skills);
     expect(conds.some((c) => c.value === "Python")).toBe(true);

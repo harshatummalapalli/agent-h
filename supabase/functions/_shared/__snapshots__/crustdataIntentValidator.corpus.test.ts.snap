@@ -359,3 +359,50 @@ exports[`crustdataIntentValidator corpus — snapshot > 14-title-exclude-survive
   "unenforceable": [],
 }
 `;
+
+exports[`crustdataIntentValidator corpus — snapshot > 15-multi-location-sf-austin 1`] = `
+{
+  "filters": {
+    "conditions": [
+      {
+        "field": "experience.employment_details.current.title",
+        "type": "(.)",
+        "value": "Software Engineer",
+      },
+      {
+        "field": "basic_profile.location.city",
+        "type": "(.)",
+        "value": "San Francisco",
+      },
+      {
+        "field": "basic_profile.location.city",
+        "type": "(.)",
+        "value": "Austin",
+      },
+    ],
+    "op": "and",
+  },
+  "unenforceable": [],
+}
+`;
+
+exports[`crustdataIntentValidator corpus — snapshot > 16-remote-only-no-city-filter 1`] = `
+{
+  "filters": {
+    "conditions": [
+      {
+        "field": "experience.employment_details.current.title",
+        "type": "(.)",
+        "value": "Backend Engineer",
+      },
+    ],
+    "op": "and",
+  },
+  "unenforceable": [
+    {
+      "description": "Require (other): "remote"",
+      "reason": "Condition category 'other' cannot be mapped to a Crustdata field.",
+    },
+  ],
+}
+`;

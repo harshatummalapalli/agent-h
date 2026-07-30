@@ -177,6 +177,26 @@ function isUnknownLocation(loc: string): boolean {
   return UNKNOWN_LOCATION_RE.test(loc.trim());
 }
 
+// ─── Location splitter ─────────────────────────────────────────────────────────
+//
+// Splits a location string on /, comma, or " or " separators to extract
+// individual city/country tokens. Also strips qualifying phrases like
+// "within the United States" that follow a remote token, so "fully remote
+// within the United States" → ["remote"].
+
+function splitLocationString(location: string): string[] {
+  // Remove qualifiers that follow "remote": "remote within the United States",
+  // "fully remote within X", etc. Extract just the "remote" word.
+  const remoteQualifierRe = /\bfully\s+remote\b|\bremote\s+(?:within|in|across|throughout)\b[^,/]*/gi;
+  const normalized = location.replace(remoteQualifierRe, "remote");
+
+  // Split on " / ", ", or ", ", ", or " or " (in order of specificity).
+  return normalized
+    .split(/\s*\/\s*|,\s+or\s+|\s+or\s+|,\s*/i)
+    .map((p) => p.trim())
+    .filter(Boolean);
+}
+
 // ─── Main converter ───────────────────────────────────────────────────────────
 
 export type ParsedBriefInput = {
@@ -221,30 +241,34 @@ export function parsedBriefToConditions(
     });
   }
 
-  // Location — skip unknown/placeholder values; split on " / " if multiple cities.
-  // resolveLocation() classifies country vs. city at parse time so the compiler
-  // never re-guesses the kind at filter-assembly time.
+  // Location — skip unknown/placeholder values; split on multi-city separators.
+  // Handles:
+  //   "San Francisco / Austin"              (legacy slash form)
+  //   "San Francisco, Austin"               (comma-separated)
+  //   "San Francisco, Austin, or Remote"    (comma + or)
+  //   "San Francisco or Austin"             (or-separated)
+  // "remote" (any casing) is treated as a non-geographic flag, not a city —
+  // emitted as other/require so it doesn't pollute the location compiler path.
   if (brief.location?.trim() && !isUnknownLocation(brief.location)) {
-    const parts = brief.location.split(/\s*\/\s*/);
-    for (const part of parts) {
-      if (!part.trim() || isUnknownLocation(part)) continue;
-      const resolved = resolveLocation(part.trim());
-      if (resolved.kind === "unknown") {
-        // Unknown location — skip chip; caller logs to unresolved_taxonomy_terms.
-        // We emit it anyway so the chip exists for the recruiter to edit.
-        add({
-          category: "location",
-          disposition: "require",
-          value: part.trim(),
-        });
-      } else {
-        // Use the canonical name so the compiler always sees the resolved form.
-        add({
-          category: "location",
-          disposition: "require",
-          value: resolved.canonical,
-        });
+    const rawParts = splitLocationString(brief.location);
+    for (const raw of rawParts) {
+      const part = raw.trim();
+      if (!part || isUnknownLocation(part)) continue;
+
+      // Remote flag: any part that is (or contains) the word "remote".
+      if (/\bremote\b/i.test(part)) {
+        add({ category: "other", disposition: "require", value: "remote", note: "remote-ok flag" });
+        continue;
       }
+
+      const resolved = resolveLocation(part);
+      // Use the canonical name so the compiler always sees the resolved form;
+      // emit unknown locations anyway so the recruiter can edit the chip.
+      add({
+        category: "location",
+        disposition: "require",
+        value: resolved.kind === "unknown" ? part : resolved.canonical,
+      });
     }
   }
 

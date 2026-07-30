@@ -317,4 +317,38 @@ export const JD_CORPUS: CorpusFixture[] = [
       unenforceableCount: 0,
     },
   },
+
+  // ── 15: Multi-location: SF + Austin → two city chips (P0 Bug 2 regression) ─
+  // "San Francisco, Austin" must produce two separate location/require conditions
+  // and thus two city filters, not zero-results from a single mangled string.
+  {
+    name: "15-multi-location-sf-austin",
+    conditions: [
+      { category: "title", disposition: "require", value: "Software Engineer" },
+      { category: "location", disposition: "require", value: "San Francisco" },
+      { category: "location", disposition: "require", value: "Austin" },
+    ],
+    invariants: {
+      hasFilters: true,
+      unenforceableCount: 0,
+      filterFieldsInclude: ["basic_profile.location.city"],
+    },
+  },
+
+  // ── 16: remote other/require does not produce a broken city filter ─────────
+  // When the only location signal is other/require:remote, no city filter must
+  // be generated (it would zero out results by filtering on a garbage city value).
+  // The 'other' category routes to unenforceable_constraints (count: 1).
+  {
+    name: "16-remote-only-no-city-filter",
+    conditions: [
+      { category: "title", disposition: "require", value: "Backend Engineer" },
+      { category: "other", disposition: "require", value: "remote", note: "remote-ok flag" },
+    ],
+    invariants: {
+      hasFilters: true,
+      unenforceableCount: 1,
+      filterFieldsExclude: ["basic_profile.location.city"],
+    },
+  },
 ];

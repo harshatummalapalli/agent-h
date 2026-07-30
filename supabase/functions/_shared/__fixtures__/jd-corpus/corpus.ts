@@ -278,4 +278,43 @@ export const JD_CORPUS: CorpusFixture[] = [
       filterHas: [{ field: "basic_profile.location.country", type: "=" }],
     },
   },
+
+  // ── 13: Company exclude survives pipeline (P0 bug fix regression) ──────────
+  // Verified live bug: Cognizant appeared after explicit hard-exclude.
+  // Excludes routed through company/exclude must produce a must_not filter
+  // on current_employer_company_name in compiled output.
+  {
+    name: "13-company-exclude-survives-pipeline",
+    conditions: [
+      { category: "title", disposition: "require", value: "Software Engineer" },
+      { category: "company", disposition: "exclude", value: "Cognizant" },
+      { category: "company", disposition: "exclude", value: "TCS" },
+    ],
+    invariants: {
+      hasFilters: true,
+      unenforceableCount: 0,
+      // Both company excludes must appear as not-contains on the employer field.
+      filterHas: [
+        {
+          field: "experience.employment_details.current.company_name",
+          type: "(!)",
+        },
+      ],
+    },
+  },
+
+  // ── 14: Title exclude survives pipeline ────────────────────────────────────
+  // title/exclude conditions must produce a must_not filter preventing
+  // candidates whose title matches the excluded keyword from being returned.
+  {
+    name: "14-title-exclude-survives-pipeline",
+    conditions: [
+      { category: "title", disposition: "require", value: "Data Scientist" },
+      { category: "title", disposition: "exclude", value: "Manager" },
+    ],
+    invariants: {
+      hasFilters: true,
+      unenforceableCount: 0,
+    },
+  },
 ];

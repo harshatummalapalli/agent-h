@@ -210,42 +210,94 @@ Deno.serve(async (req: Request) => {
     MAX_LIMIT,
   );
 
-  // Call Crustdata person search.
-  let crustdataResponse:
+  // ── Relaxation allowlist (spec §4.3) ──────────────────────────────────────
+  //
+  // If the first search returns < RELAX_FLOOR candidates, automatically relax
+  // ONE allowlisted condition and retry, disclosing what was relaxed. Never
+  // relax skill/require (hard requirements), company excludes, or location.
+  // Allowlist: experience_range, headcount_range, connections_min.
+  const RELAX_FLOOR = 5;
+  const RELAXABLE_CATEGORIES = new Set([
+    "experience_range",
+    "headcount_range",
+    "connections_min",
+  ]);
+
+  type SearchResult =
     | { profiles?: Array<Record<string, unknown>>; total_count?: number }
     | { error: string };
-  try {
-    const res = await fetch(CRUSTDATA_SEARCH_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${CRUSTDATA_API_KEY}`,
-        "x-api-version": CRUSTDATA_API_VERSION,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ filters, limit }),
-    });
 
-    if (!res.ok) {
-      let bodySnippet = "";
-      try {
-        bodySnippet = (await res.text()).slice(0, 300);
-      } catch {
-        /* ignore */
+  async function callCrustdata(
+    filterTree: typeof filters,
+  ): Promise<SearchResult> {
+    try {
+      const res = await fetch(CRUSTDATA_SEARCH_URL, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${CRUSTDATA_API_KEY}`,
+          "x-api-version": CRUSTDATA_API_VERSION,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ filters: filterTree, limit }),
+      });
+      if (!res.ok) {
+        let bodySnippet = "";
+        try {
+          bodySnippet = (await res.text()).slice(0, 300);
+        } catch {
+          /* ignore */
+        }
+        console.error(
+          `[search-crustdata-filters] HTTP ${res.status}:`,
+          bodySnippet,
+        );
+        return { error: `Crustdata returned HTTP ${res.status}` };
       }
-      console.error(
-        `[search-crustdata-filters] HTTP ${res.status}:`,
-        bodySnippet,
-      );
-      crustdataResponse = { error: `Crustdata returned HTTP ${res.status}` };
-    } else {
-      crustdataResponse = (await res.json()) as {
+      return (await res.json()) as {
         profiles?: Array<Record<string, unknown>>;
         total_count?: number;
       };
+    } catch (err) {
+      console.error("[search-crustdata-filters] fetch error:", err);
+      return { error: String(err) };
     }
-  } catch (err) {
-    console.error("[search-crustdata-filters] fetch error:", err);
-    crustdataResponse = { error: String(err) };
+  }
+
+  let crustdataResponse = await callCrustdata(filters);
+  let relaxedNote: string | undefined;
+
+  // Relaxation pass: if thin result, remove one relaxable condition and retry.
+  if (
+    !("error" in crustdataResponse) &&
+    (crustdataResponse.profiles?.length ?? 0) < RELAX_FLOOR
+  ) {
+    const relaxableCondition = conditions.find(
+      (c) =>
+        c.disposition === "require" && RELAXABLE_CATEGORIES.has(c.category),
+    );
+    if (relaxableCondition) {
+      const relaxedConditions = conditions.filter(
+        (c) => c !== relaxableCondition,
+      );
+      const relaxedIntent = makeInitialIntent(relaxedConditions, []);
+      const { filters: relaxedFilters } =
+        validateAndAssembleIntent(relaxedIntent);
+      if (relaxedFilters) {
+        const relaxedResponse = await callCrustdata(relaxedFilters);
+        if (
+          !("error" in relaxedResponse) &&
+          (relaxedResponse.profiles?.length ?? 0) > 0
+        ) {
+          crustdataResponse = relaxedResponse;
+          const categoryLabel: Record<string, string> = {
+            experience_range: "years of experience",
+            headcount_range: "company headcount",
+            connections_min: "LinkedIn connections minimum",
+          };
+          relaxedNote = `Relaxed ${categoryLabel[relaxableCondition.category] ?? relaxableCondition.category} filter (was: "${relaxableCondition.value}") — search returned fewer than ${RELAX_FLOOR} candidates without it.`;
+        }
+      }
+    }
   }
 
   if ("error" in crustdataResponse) {
@@ -274,5 +326,6 @@ Deno.serve(async (req: Request) => {
     applied_groups: appliedGroups,
     unenforceable,
     total_count: crustdataResponse.total_count ?? candidates.length,
+    ...(relaxedNote ? { relaxed_note: relaxedNote } : {}),
   });
 });

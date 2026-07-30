@@ -210,11 +210,27 @@ export const JdIntakePage = () => {
     }
   };
 
+  // Unified intake: route by length. Short text (≤ JD_WORD_THRESHOLD words)
+  // goes through parseAgentCommand; long text (a pasted JD) goes through
+  // parseJobDescription. Both paths terminate in the same chips model.
+  // Spec §6: "single textarea that accepts a pasted JD, a one-line ask, or voice."
+  const JD_WORD_THRESHOLD = 100;
+
   const handleParse = async () => {
-    if (!jdText.trim()) {
+    const text = jdText.trim();
+    if (!text) {
       notify("Paste a job description first", { type: "warning" });
       return;
     }
+
+    const wordCount = text.split(/\s+/).filter(Boolean).length;
+    if (wordCount <= JD_WORD_THRESHOLD) {
+      // Short input → treat as a free-text command
+      await runFreeTextCommand(text);
+      return;
+    }
+
+    // Long input → full JD parse
     setParsing(true);
     try {
       const result = await dataProvider.parseJobDescription(jdText);
@@ -408,7 +424,7 @@ export const JdIntakePage = () => {
             />
             <div>
               <Button onClick={handleParse} disabled={parsing}>
-                {parsing ? "Parsing..." : "Parse with AI"}
+                {parsing ? "Parsing..." : "Parse / Send"}
               </Button>
             </div>
           </div>

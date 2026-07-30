@@ -517,7 +517,22 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
     !!deal?.role_brief_last_scroll_query || lastBatch !== null;
 
   return (
-    <AgentHShell context={shellContext}>
+    <AgentHShell
+      context={shellContext}
+      commandBar={{
+        placeholder: "Exclude Cognizant, require Python, or paste a JD…",
+        hint: "Press ⌘K to focus · /refine, /exclude, /start",
+        slashActions: [
+          { cmd: "/refine", label: "Refine search criteria" },
+          { cmd: "/exclude", label: "Exclude a company or profile type" },
+          { cmd: "/start", label: "Start or restart sourcing" },
+        ],
+        onSubmit: (v) => {
+          if (commandBusy || sourcingInFlight) return;
+          void runFreeTextCommand(v);
+        },
+      }}
+    >
       {/* 3-pane: memory panel (desktop) + main content */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
         {/* Role Memory Panel — desktop left sidebar */}

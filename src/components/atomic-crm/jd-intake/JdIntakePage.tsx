@@ -17,10 +17,12 @@ import { useDataProvider, useGetList, useNotify, useRedirect } from "ra-core";
 import { useNavigate } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { cn } from "@/lib/utils";
 import type { CrmDataProvider } from "../providers/types";
 import { AgentHShell } from "../shell/AgentHShell";
 import { useJdIntakeShellContext } from "../shell/useShellContext";
@@ -128,6 +130,7 @@ export const JdIntakePage = () => {
   });
 
   const [jdText, setJdText] = useState("");
+  const [jdExpanded, setJdExpanded] = useState(true);
   const [parsing, setParsing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [parsed, setParsed] = useState<ParsedRoleBrief | null>(null);
@@ -235,6 +238,7 @@ export const JdIntakePage = () => {
         past_companies: [],
       };
       setParsed(brief);
+      setJdExpanded(false); // collapse JD textarea after parse
       // Seed chip editor from parsed brief.
       setIntentConditions(parsedBriefToConditions(brief));
       setIntentUnenforceable([]);
@@ -372,52 +376,71 @@ export const JdIntakePage = () => {
         onSubmit: runFreeTextCommand,
       }}
     >
-      <div className="flex flex-col gap-6 max-w-3xl mx-auto p-6 pb-8 overflow-y-auto flex-1 min-h-0">
+      <div className="flex flex-col gap-4 max-w-3xl mx-auto p-6 pb-8 overflow-y-auto flex-1 min-h-0">
         <div>
-          <h1 className="text-2xl font-semibold">JD Intake</h1>
+          <h1 className="text-xl font-semibold">JD Intake</h1>
           <p className="text-muted-foreground text-sm">
-            Paste a job description. It'll be parsed into chips you review
-            before saving.
+            Paste a job description — it'll be parsed into sourcing chips you
+            review before saving.
           </p>
         </div>
 
-        {/* JD paste */}
+        {/* JD paste — collapses to a summary after parsing */}
         <div className="flex flex-col gap-2">
-          <Label htmlFor="jd-text">Job description</Label>
-          <Textarea
-            id="jd-text"
-            value={jdText}
-            onChange={(e) => setJdText(e.target.value)}
-            rows={10}
-            placeholder="Paste the full job description here..."
-          />
-          <div>
-            <Button onClick={handleParse} disabled={parsing}>
-              {parsing ? "Parsing..." : "Parse with AI"}
-            </Button>
+          {parsed ? (
+            <button
+              type="button"
+              className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors w-fit"
+              onClick={() => setJdExpanded((v) => !v)}
+            >
+              {jdExpanded ? (
+                <ChevronDown className="h-3.5 w-3.5" />
+              ) : (
+                <ChevronRight className="h-3.5 w-3.5" />
+              )}
+              {jdExpanded
+                ? "Collapse job description"
+                : `Job description — ${jdText.slice(0, 60).trim()}…`}
+            </button>
+          ) : (
+            <Label htmlFor="jd-text">Job description</Label>
+          )}
+          <div className={cn(parsed && !jdExpanded ? "hidden" : "contents")}>
+            <Textarea
+              id="jd-text"
+              value={jdText}
+              onChange={(e) => setJdText(e.target.value)}
+              rows={parsed ? 6 : 10}
+              placeholder="Paste the full job description here..."
+            />
+            <div>
+              <Button onClick={handleParse} disabled={parsing}>
+                {parsing ? "Parsing..." : "Parse with AI"}
+              </Button>
+            </div>
           </div>
         </div>
 
         {parsed && (
-          <div className="ah-panel flex flex-col gap-5 p-6">
-            {/* ── Role metadata ── */}
-            <h2 className="text-lg font-medium">Role details</h2>
-
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="title">Role title</Label>
+          <div className="ah-panel flex flex-col gap-4 p-4">
+            {/* ── Compact role metadata header ── */}
+            <div className="flex flex-col gap-3">
+              {/* Title — full width */}
               <Input
                 id="title"
+                aria-label="Role title"
                 value={parsed.title}
                 onChange={(e) => updateParsed({ title: e.target.value })}
+                className="text-base font-medium h-10"
+                placeholder="Role title"
               />
-            </div>
 
-            <div className="grid grid-cols-2 gap-4">
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="seniority">Seniority</Label>
+              {/* Seniority / Type / Location / Industry — one row */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                 <select
                   id="seniority"
-                  className="border border-input bg-background text-foreground rounded-md h-9 px-2"
+                  aria-label="Seniority"
+                  className="border border-input bg-background text-foreground rounded-md h-8 px-2 text-xs"
                   value={parsed.seniority}
                   onChange={(e) => updateParsed({ seniority: e.target.value })}
                 >
@@ -427,13 +450,10 @@ export const JdIntakePage = () => {
                     </option>
                   ))}
                 </select>
-              </div>
-
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="employment_type">Employment type</Label>
                 <select
                   id="employment_type"
-                  className="border border-input bg-background text-foreground rounded-md h-9 px-2"
+                  aria-label="Employment type"
+                  className="border border-input bg-background text-foreground rounded-md h-8 px-2 text-xs"
                   value={parsed.employment_type}
                   onChange={(e) =>
                     updateParsed({ employment_type: e.target.value })
@@ -445,34 +465,34 @@ export const JdIntakePage = () => {
                     </option>
                   ))}
                 </select>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="location">Location</Label>
                 <Input
                   id="location"
+                  aria-label="Location"
+                  placeholder="Location"
                   value={parsed.location}
                   onChange={(e) => updateParsed({ location: e.target.value })}
+                  className="h-8 text-xs"
                 />
-              </div>
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="industry">Industry</Label>
                 <Input
                   id="industry"
+                  aria-label="Industry"
+                  placeholder="Industry"
                   value={parsed.industry ?? ""}
                   onChange={(e) => updateParsed({ industry: e.target.value })}
+                  className="h-8 text-xs"
                 />
               </div>
-            </div>
 
-            <div className="grid grid-cols-2 gap-4">
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="years_min">Years experience (min)</Label>
+              {/* YoE — compact row */}
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground shrink-0">
+                  YoE
+                </span>
                 <Input
                   id="years_min"
                   type="number"
+                  aria-label="Min years of experience"
+                  placeholder="Min"
                   value={parsed.years_experience_min ?? ""}
                   onChange={(e) =>
                     updateParsed({
@@ -481,13 +501,14 @@ export const JdIntakePage = () => {
                         : null,
                     })
                   }
+                  className="h-8 text-xs w-20"
                 />
-              </div>
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="years_max">Years experience (max)</Label>
+                <span className="text-xs text-muted-foreground">to</span>
                 <Input
                   id="years_max"
                   type="number"
+                  aria-label="Max years of experience"
+                  placeholder="Max"
                   value={parsed.years_experience_max ?? ""}
                   onChange={(e) =>
                     updateParsed({
@@ -496,6 +517,7 @@ export const JdIntakePage = () => {
                         : null,
                     })
                   }
+                  className="h-8 text-xs w-20"
                 />
               </div>
             </div>
@@ -584,13 +606,12 @@ export const JdIntakePage = () => {
             )}
 
             {/* ── SearchIntent chip editor ── */}
-            <div className="border-t pt-4 flex flex-col gap-3">
+            <div className="border-t pt-3 flex flex-col gap-2">
               <div>
                 <h3 className="text-sm font-medium">Sourcing criteria</h3>
                 <p className="text-muted-foreground text-xs">
-                  Review and edit the chips — these drive Build Search and
-                  sourcing. Require = must-have, Prefer = nice-to-have, Exclude
-                  = never surface.
+                  Require = must-have · Prefer = nice-to-have · Exclude = never
+                  surface
                 </p>
               </div>
               <SearchIntentEditor
@@ -611,86 +632,68 @@ export const JdIntakePage = () => {
             </div>
 
             {/* ── Sourcing preferences (optional extra) ── */}
-            <div className="border-t pt-4 flex flex-col gap-4">
-              <div>
-                <h3 className="text-sm font-medium">
-                  Sourcing preferences (optional)
-                </h3>
-                <p className="text-muted-foreground text-xs">
-                  Which companies to pull candidates from — not facts about this
-                  role, just where to look.
-                </p>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div className="flex flex-col gap-2">
-                  <Label htmlFor="company_type">Company type</Label>
+            <div className="border-t pt-3 flex flex-col gap-3">
+              <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                Sourcing preferences (optional)
+              </h3>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <Input
+                  id="company_type"
+                  aria-label="Company type"
+                  placeholder="Company type"
+                  value={parsed.company_type ?? ""}
+                  onChange={(e) =>
+                    updateParsed({ company_type: e.target.value || null })
+                  }
+                  className="h-8 text-xs"
+                />
+                <div className="flex items-center gap-1 col-span-1">
                   <Input
-                    id="company_type"
-                    placeholder="Startup, Product, Services..."
-                    value={parsed.company_type ?? ""}
+                    type="number"
+                    aria-label="Min company size"
+                    placeholder="Size min"
+                    value={parsed.company_size_min ?? ""}
                     onChange={(e) =>
-                      updateParsed({ company_type: e.target.value || null })
+                      updateParsed({
+                        company_size_min: e.target.value
+                          ? Number(e.target.value)
+                          : null,
+                      })
                     }
+                    className="h-8 text-xs"
                   />
                 </div>
-                <div className="flex flex-col gap-2">
-                  <Label>Company size (employees)</Label>
-                  <div className="flex items-center gap-2">
-                    <Input
-                      type="number"
-                      aria-label="Minimum company size"
-                      placeholder="Min"
-                      value={parsed.company_size_min ?? ""}
-                      onChange={(e) =>
-                        updateParsed({
-                          company_size_min: e.target.value
-                            ? Number(e.target.value)
-                            : null,
-                        })
-                      }
-                    />
-                    <span className="text-muted-foreground text-sm">to</span>
-                    <Input
-                      type="number"
-                      aria-label="Maximum company size"
-                      placeholder="Max"
-                      value={parsed.company_size_max ?? ""}
-                      onChange={(e) =>
-                        updateParsed({
-                          company_size_max: e.target.value
-                            ? Number(e.target.value)
-                            : null,
-                        })
-                      }
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="past-titles">
-                  Past titles (comma-separated, optional)
-                </Label>
+                <Input
+                  type="number"
+                  aria-label="Max company size"
+                  placeholder="Size max"
+                  value={parsed.company_size_max ?? ""}
+                  onChange={(e) =>
+                    updateParsed({
+                      company_size_max: e.target.value
+                        ? Number(e.target.value)
+                        : null,
+                    })
+                  }
+                  className="h-8 text-xs"
+                />
                 <Input
                   id="past-titles"
-                  placeholder="Boosts, doesn't require — e.g. 'Founding Engineer'"
+                  aria-label="Past titles (boosts)"
+                  placeholder="Past titles (boosts)"
                   value={pastTitlesText}
                   onChange={(e) => setPastTitlesText(e.target.value)}
+                  className="h-8 text-xs"
                 />
               </div>
-
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="past-companies">
-                  Past companies (comma-separated, optional)
-                </Label>
-                <Input
-                  id="past-companies"
-                  placeholder="Boosts — e.g. 'Microsoft' for candidates who worked there at any point"
-                  value={pastCompaniesText}
-                  onChange={(e) => setPastCompaniesText(e.target.value)}
-                />
-              </div>
+              <Input
+                id="past-companies"
+                aria-label="Past companies (boosts)"
+                placeholder="Past companies (boosts) — e.g. Microsoft, Stripe"
+                value={pastCompaniesText}
+                onChange={(e) => setPastCompaniesText(e.target.value)}
+                className="h-8 text-xs"
+              />
             </div>
           </div>
         )}

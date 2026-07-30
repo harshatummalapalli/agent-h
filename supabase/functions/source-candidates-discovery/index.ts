@@ -90,6 +90,10 @@ import {
   isDiscoverySearchContinuation,
   stripVendorFieldsForClient,
 } from "../_shared/discoverySourceAttribution.ts";
+import {
+  applyExcludeFilter,
+  excludeConditionsFromFlat,
+} from "../_shared/excludePostFilter.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
 // SUPABASE_URL and SUPABASE_ANON_KEY are auto-injected into every Supabase
@@ -3606,7 +3610,16 @@ const discoverCandidates = async (body: any, authHeader: string) => {
   }
 
   try {
-    const candidates = result.candidates;
+    // Defense-in-depth: hard-filter against role excludes BEFORE any further
+    // processing. Crustdata query-layer excludes can silently fail (confirmed
+    // live: Cognizant appeared after explicit exclude). This secondary filter
+    // uses the flat brief columns which are now backfilled by resolve-search-intent
+    // on every conversational refine turn (P0 Bug 1 fix).
+    const excludeConditions = excludeConditionsFromFlat(
+      roleBrief.excluded_companies,
+      roleBrief.exclusion_keywords,
+    );
+    const candidates = applyExcludeFilter(result.candidates, excludeConditions);
     await annotateAlreadySaved(candidates, authHeader);
 
     // Checkpoint 3c: best-effort, non-fatal semantic scoring. If it fails

@@ -1,60 +1,32 @@
-// Agent H Stage 3, checkpoint 3d-adjacent: Hunter.io -> Apollo.io contact-
-// enrichment waterfall (task #27, per the PRD's build order and the
-// sourcing-engine architecture doc's "Enrichment waterfall" section).
+// Agent H contact enrichment — PDL primary, Hunter/Apollo fallback.
+//
+// Vendor role (locked 2026-07-30): PDL (People Data Labs) is the primary
+// contact enrichment vendor — personal email and phone numbers. Hunter.io
+// and Apollo are retained as fallbacks for users without a PDL key.
+// Harvest API is NOT used here; Harvest handles rich profile enrichment
+// (experience, education, skills, photo) via calibration-session.
 //
 // Directory note (2026-07-25): this folder was recreated as a real directory
 // (replacing a OneDrive junction that broke Supabase bundler/deploy on
 // Windows — same fix as save-sourced-candidate). See ADR-unipile Phase 0.
 //
-// Scope, deliberately narrow, same discipline as save-sourced-candidate:
-// this function runs ONLY when a recruiter explicitly clicks "Enrich
-// contact" on one specific ALREADY-SAVED candidate (a public.candidates
-// row) -- never automatically on every discovery hit or even on every
-// save. Harsha's explicit call (2026-07-11 session): a candidate someone
-// decided to track isn't necessarily one worth spending a Hunter/Apollo
-// credit on yet -- that's a second, separate decision a recruiter makes
-// deliberately, same "an unreviewed hit isn't the same as a candidate
-// someone decided to track" principle already applied to "Add to
-// pipeline" itself.
+// Scope: runs ONLY when a recruiter clicks "Get contact" on an already-saved
+// candidate — never on every discovery hit or save.
 //
-// Why this matters more now than when the architecture doc was written:
-// the doc's cost audit assumed "PDL's own results already include email at
-// current volume" and treated Hunter/Apollo as not-yet-needed. That's no
-// longer true -- Coresignal (the sole active discovery provider as of this
-// session, see source-candidates-discovery/index.ts's DISCOVERY_PROVIDERS)
-// has NO contact data in its Search Preview response at all (confirmed:
-// normalizeCoresignalCandidate never sets an "emails" field), so every
-// Coresignal-sourced candidate saved so far has a null email_jsonb. This
-// waterfall is what actually makes those candidates contactable.
+// Waterfall, in order:
+//   1. PDL Person Enrichment (primary — 2026-07-30 vendor split decision):
+//      GET https://api.peopledatalabs.com/v5/person/enrich
+//        ?api_key=<PDL_API_KEY>&profile=<linkedin_url>
+//      Returns personal_emails[] and mobile_phone / phone_numbers[].
+//      Same PDL_API_KEY already used by enrich-candidate-workhistory and
+//      source-candidates-discovery.
+//   2. Hunter.io Email Finder — tried only if PDL_API_KEY is missing or PDL
+//      returns no result. Needs a company domain (from companies.website).
+//   3. Apollo people/match — tried only if Hunter also fails/isn't configured.
+//      reveal_personal_emails: true. Phone reveal not attempted (async webhook).
 //
-// The waterfall, in order:
-//   1. Hunter.io Email Finder (docs.hunter.io/api-reference/email-finder,
-//      confirmed directly): GET /v2/email-finder?domain=<domain>&
-//      first_name=<first>&last_name=<last>&api_key=<key>. Needs a company
-//      DOMAIN, not just a name -- resolved from the candidate's linked
-//      companies.website. Returns a confidence score (0-100); Hunter's own
-//      docs describe this as a real deliverability confidence signal, not
-//      a binary found/not-found, so a low-confidence hit is disclosed via
-//      contact_enrichment_raw rather than silently trusted the same as a
-//      high-confidence one.
-//   2. Apollo people/match (docs.apollo.io, same endpoint family as the
-//      bulk_match call already proven working in source-candidates-
-//      discovery's apolloProvider), tried only if Hunter found nothing or
-//      isn't configured. Matched by linkedin_url when available (Apollo's
-//      most precise identifier) or by name + organization_name otherwise.
-//      reveal_personal_emails: true is a real, synchronous email reveal.
-//      Phone reveal is deliberately NOT attempted here -- Apollo's phone
-//      reveal is asynchronous via webhook (confirmed in their docs), a
-//      genuinely different integration shape than this on-demand,
-//      request/response function supports; a phone number found this way
-//      would need a follow-up webhook receiver, which is out of scope for
-//      this checkpoint. Disclosed via a note, not silently absent.
-//
-// Both vendor calls are genuinely optional/best-effort in the sense that a
-// vendor being unconfigured (no API key) or returning nothing is not an
-// error -- contact_enrichment_status distinguishes "enriched" / "not_found"
-// / "failed" so the recruiter (and any future automation) can tell a clean
-// "nobody has this" apart from a real problem worth retrying.
+// All vendors are best-effort: unconfigured or no-match is not an error.
+// contact_enrichment_status: "enriched" / "not_found" / "failed".
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import * as jose from "jsr:@panva/jose@6";
@@ -67,20 +39,17 @@ const SUPABASE_JWT_KEYS = jose.createRemoteJWKSet(
   new URL(`${SUPABASE_URL}/auth/v1/.well-known/jwks.json`),
 );
 
-// Reuses the same APOLLO_API_KEY secret source-candidates-discovery already
-// uses for People Search -- Apollo's docs confirm the same API key works
-// across their endpoint families (search, bulk_match, match all sit under
-// one account/key), so no separate secret is needed for enrichment.
+// PDL — primary contact enrichment vendor (2026-07-30 vendor split decision).
+// Same key already used by enrich-candidate-workhistory and source-candidates-discovery.
+const PDL_API_KEY = Deno.env.get("PDL_API_KEY");
+const PDL_ENRICH_URL = "https://api.peopledatalabs.com/v5/person/enrich";
+
+// Hunter/Apollo — fallback only when PDL_API_KEY is missing or PDL returns nothing.
 const HUNTER_API_KEY = Deno.env.get("HUNTER_API_KEY");
 const HUNTER_EMAIL_FINDER_URL = "https://api.hunter.io/v2/email-finder";
 
 const APOLLO_API_KEY = Deno.env.get("APOLLO_API_KEY");
 const APOLLO_MATCH_URL = "https://api.apollo.io/api/v1/people/match";
-
-// Phase 1 vendor consolidation (docs/adr/ADR-unipile-linkedin-outreach.md):
-// Hunter/Apollo calls disabled — code kept for re-enable. Unipile LinkedIn
-// outreach replaces email-finder enrichment for Phase 4.
-const CONTACT_ENRICHMENT_VENDORS_ENABLED = false;
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -187,12 +156,57 @@ async function fetchCompanyDomain(
 }
 
 type EnrichmentResult = {
-  source: "hunter" | "apollo";
+  source: "pdl" | "hunter" | "apollo";
   email: string | null;
   phone: string | null;
   raw: unknown;
   notes: string[];
 };
+
+// PDL Person Enrichment — primary contact vendor (2026-07-30 vendor split).
+// Returns personal_emails and mobile_phone / phone_numbers from PDL's record.
+async function tryPdl(
+  candidate: CandidateRow,
+): Promise<EnrichmentResult | null> {
+  if (!PDL_API_KEY || !candidate.linkedin_url) return null;
+
+  const url = new URL(PDL_ENRICH_URL);
+  url.searchParams.set("api_key", PDL_API_KEY);
+  url.searchParams.set("profile", candidate.linkedin_url);
+
+  const response = await fetch(url.toString());
+  if (response.status === 404) return null; // clean not-found
+  if (!response.ok) {
+    throw new Error(
+      `PDL API error (${response.status}): ${await response.text()}`,
+    );
+  }
+
+  const result = await response.json();
+  const person = result?.data ?? result; // PDL wraps in .data for enrichment endpoint
+
+  const personalEmails: string[] = Array.isArray(person?.personal_emails)
+    ? person.personal_emails
+    : [];
+  const email: string | null = personalEmails[0] ?? null;
+
+  const phone: string | null =
+    person?.mobile_phone ??
+    (Array.isArray(person?.phone_numbers)
+      ? (person.phone_numbers[0] ?? null)
+      : null) ??
+    null;
+
+  if (!email && !phone) return null;
+
+  return {
+    source: "pdl",
+    email,
+    phone,
+    raw: { ...result, pdl_primary: true },
+    notes: [],
+  };
+}
 
 // Hunter.io Email Finder -- confirmed API shape directly against Hunter's
 // docs before writing this: response is { data: { email, score, ... },
@@ -315,20 +329,6 @@ const enrichCandidateContact = async (req: Request) => {
     return jsonResponse({ error: "candidate_id is required" }, 400);
   }
 
-  if (!CONTACT_ENRICHMENT_VENDORS_ENABLED) {
-    return jsonResponse(
-      {
-        status: "not_found",
-        source: null,
-        email: null,
-        notes: [
-          "Contact enrichment (Hunter/Apollo) is disabled during Phase 1 vendor consolidation — LinkedIn outreach via Unipile replaces this path in Phase 4.",
-        ],
-      },
-      200,
-    );
-  }
-
   const authHeader = req.headers.get("authorization")!;
   const candidate = await fetchCandidate(candidateId, authHeader);
   if (!candidate) {
@@ -338,11 +338,11 @@ const enrichCandidateContact = async (req: Request) => {
     );
   }
 
-  if (!HUNTER_API_KEY && !APOLLO_API_KEY) {
+  if (!PDL_API_KEY && !HUNTER_API_KEY && !APOLLO_API_KEY) {
     return jsonResponse(
       {
         error:
-          "No contact-enrichment vendor is configured for this project. Add HUNTER_API_KEY and/or APOLLO_API_KEY under Project Settings > Edge Functions > Secrets.",
+          "No contact-enrichment vendor is configured. Add PDL_API_KEY (primary) or HUNTER_API_KEY / APOLLO_API_KEY (fallback) under Project Settings > Edge Functions > Secrets.",
       },
       400,
     );
@@ -352,37 +352,54 @@ const enrichCandidateContact = async (req: Request) => {
   let result: EnrichmentResult | null = null;
   let hadFailure = false;
 
-  try {
-    const domain = await fetchCompanyDomain(
-      candidate.current_company_id,
-      authHeader,
-    );
-    if (domain) {
-      result = await tryHunter(candidate, domain);
-    } else {
+  // ── Step 1: PDL (primary — 2026-07-30 vendor split decision) ─────────────
+  if (PDL_API_KEY) {
+    try {
+      result = await tryPdl(candidate);
+      if (!result) {
+        notes.push("PDL found no contact data for this candidate.");
+      }
+    } catch (error) {
+      hadFailure = true;
+      console.error(
+        "PDL enrichment failed (non-fatal, trying Hunter next)",
+        error,
+      );
       notes.push(
-        "Skipped Hunter.io -- this candidate's linked company has no known website/domain on file yet.",
+        `PDL lookup failed: ${error instanceof Error ? error.message : String(error)}. Falling through to Hunter.`,
       );
     }
-  } catch (error) {
-    hadFailure = true;
-    console.error(
-      "Hunter enrichment failed (non-fatal, trying Apollo next)",
-      error,
-    );
-    // Surfaced directly rather than "see server logs" -- a recruiter using
-    // this button has no access to Supabase's logs, so a generic pointer
-    // there is functionally useless. Same "never hide" disclosure
-    // principle already applied everywhere else in this codebase.
-    notes.push(
-      `Hunter.io lookup failed: ${error instanceof Error ? error.message : String(error)}. Falling through to Apollo.`,
-    );
   }
 
+  // ── Step 2: Hunter.io (fallback — only if PDL unavailable or no result) ──
   if (!result) {
     try {
-      // Best-effort company name lookup for Apollo's organization_name
-      // fallback path -- only needed if linkedin_url isn't available.
+      const domain = await fetchCompanyDomain(
+        candidate.current_company_id,
+        authHeader,
+      );
+      if (domain) {
+        result = await tryHunter(candidate, domain);
+      } else {
+        notes.push(
+          "Skipped Hunter.io -- this candidate's linked company has no known website/domain on file yet.",
+        );
+      }
+    } catch (error) {
+      hadFailure = true;
+      console.error(
+        "Hunter enrichment failed (non-fatal, trying Apollo next)",
+        error,
+      );
+      notes.push(
+        `Hunter.io lookup failed: ${error instanceof Error ? error.message : String(error)}. Falling through to Apollo.`,
+      );
+    }
+  }
+
+  // ── Step 3: Apollo (fallback — only if PDL and Hunter both failed) ────────
+  if (!result) {
+    try {
       let companyName: string | null = null;
       if (!candidate.linkedin_url && candidate.current_company_id) {
         const companyResponse = await restFetch(
@@ -398,14 +415,6 @@ const enrichCandidateContact = async (req: Request) => {
     } catch (error) {
       hadFailure = true;
       console.error("Apollo enrichment failed (non-fatal)", error);
-      // Surfaced directly, same reasoning as the Hunter catch above. This
-      // is how the real 403 API_INACCESSIBLE plan-restriction error (Apollo's
-      // people/match/email-reveal endpoint isn't included on a free plan --
-      // confirmed directly against a real response during 2026-07-11
-      // testing) got diagnosed in the first place; a recruiter seeing this
-      // note again later would immediately know it's an account/billing
-      // issue to raise with whoever owns the Apollo subscription, not a bug
-      // to report.
       notes.push(
         `Apollo lookup failed: ${error instanceof Error ? error.message : String(error)}`,
       );

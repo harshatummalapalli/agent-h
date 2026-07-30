@@ -50,9 +50,19 @@ Recruiters use `startCalibrationSourcing` / `calibrationNextBatch` → `calibrat
 ### After §1 only if clean and small
 If §1 is solid and you have bandwidth, you may stub types/notes for §3 (radius, past excludes) in the shared builder **without** shipping Harvest/schema — otherwise stop after §1.
 
-### Open items (document, don't decide against Harsha)
-- PDL vs Harvest for Enrich button — flag in summary, don't build §4 yet
-- Phone gap stays open
+### Vendor split — LOCKED 2026-07-30 (Harsha)
+
+| Vendor | Job | When |
+|---|---|---|
+| **Crustdata** | Person Search — pull candidate pool | Start / Continue sourcing |
+| **Harvest API** | Profile enrichment — rich records Crustdata Search does not return (experience, education, skills, photo, etc.) | Whole batch **before ranking**; also the card **Enrich** / refresh action |
+| **PDL** | **Contact** enrichment only — personal emails and phone numbers | Card **Contact** path when details missing / refresh contacts |
+
+Do **not** use Harvest for phones/emails, or PDL as the primary profile enricher. Keep any existing PDL/Coresignal work-history waterfall only as fallback for profile enrich if Harvest errors — contact data stays PDL.
+
+### Still open
+- Phone coverage if PDL misses (separate conversation) — not Harvest’s job
+- §1 live verify before starting §3/§4
 
 ### Return
 - Confirm root cause (calibration path had no excludes)

@@ -67,21 +67,37 @@ function checkUnrealisticConstraints(text: string): boolean {
   );
 }
 
+function formatExperienceRange(
+  min: number | null | undefined,
+  max: number | null | undefined,
+): string {
+  if (min == null && max == null) return "not specified";
+  if (max == null) return `${min ?? 0}+ years`;
+  if (min == null) return `up to ${max} years`;
+  return `${min}–${max} years`;
+}
+
 function buildSummary(result: ParsedBrief): string {
   const skillsSummary =
     ((result.required_skills ?? result.must_have_keywords ?? []) as string[])
       .slice(0, 5)
       .join(", ") || "not specified";
-  const expSummary =
-    result.years_experience_min != null || result.years_experience_max != null
-      ? `${result.years_experience_min ?? 0}–${result.years_experience_max ?? "∞"} years`
-      : "not specified";
+  const expSummary = formatExperienceRange(
+    result.years_experience_min,
+    result.years_experience_max,
+  );
+  const excludeCompanies = result.excluded_companies ?? [];
+  const excludeKeywords = result.exclusion_keywords ?? [];
+  const excludeCount = excludeCompanies.length + excludeKeywords.length;
+  const requireCount = (result.required_skills ?? result.must_have_keywords ?? []).length;
+  const preferCount = (result.nice_to_have_keywords ?? []).length;
   return [
     `Role: ${result.title || "untitled"}`,
     `Seniority: ${result.seniority || "not specified"}`,
     `Location: ${result.location || "not specified"}`,
     `Experience: ${expSummary}`,
     `Key skills: ${skillsSummary}`,
+    `Require ${requireCount} · Prefer ${preferCount} · Exclude ${excludeCount}`,
   ].join("\n");
 }
 

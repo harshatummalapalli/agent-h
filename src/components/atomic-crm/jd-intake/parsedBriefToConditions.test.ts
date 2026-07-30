@@ -325,6 +325,54 @@ describe("parsedBriefToConditions", () => {
     expect(result).toHaveLength(0);
   });
 
+  // ── Multi-location + remote flag (P0 Bug 2 regression) ──────────────────────
+
+  it("splits comma-separated cities into separate location chips", () => {
+    const result = parsedBriefToConditions({
+      location: "San Francisco, Austin",
+    });
+    const locs = result.filter((c) => c.category === "location");
+    expect(locs).toHaveLength(2);
+    const locValues = locs.map((c) => c.value);
+    expect(locValues.some((v) => v.includes("San Francisco"))).toBe(true);
+    expect(locValues.some((v) => v.includes("Austin"))).toBe(true);
+  });
+
+  it("treats 'remote' as other/require flag, not a location chip", () => {
+    const result = parsedBriefToConditions({
+      location: "Remote",
+    });
+    const locChips = result.filter((c) => c.category === "location");
+    const remoteChip = result.find(
+      (c) => c.category === "other" && c.value === "remote",
+    );
+    expect(locChips).toHaveLength(0);
+    expect(remoteChip).toBeDefined();
+  });
+
+  it("splits multi-city + remote location string into separate chips (P0 Bug 2)", () => {
+    const result = parsedBriefToConditions({
+      location: "San Francisco, Austin, or fully remote within the United States",
+    });
+    const locChips = result.filter((c) => c.category === "location");
+    const remoteChip = result.find(
+      (c) => c.category === "other" && c.value === "remote",
+    );
+    expect(locChips).toHaveLength(2);
+    expect(remoteChip).toBeDefined();
+    const locValues = locChips.map((c) => c.value);
+    expect(locValues.some((v) => v.includes("San Francisco"))).toBe(true);
+    expect(locValues.some((v) => v.includes("Austin"))).toBe(true);
+  });
+
+  it("handles slash-separated multi-location (legacy format)", () => {
+    const result = parsedBriefToConditions({
+      location: "Mumbai / Bangalore",
+    });
+    const locs = result.filter((c) => c.category === "location");
+    expect(locs).toHaveLength(2);
+  });
+
   it("full round-trip produces correct conditions", () => {
     const result = parsedBriefToConditions({
       title: "Backend Engineer",

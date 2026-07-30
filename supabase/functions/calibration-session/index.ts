@@ -32,6 +32,11 @@ import {
   parseLocationForFilter,
   extractCanonicalCountry,
 } from "../_shared/crustdataClient.ts";
+import {
+  applyExcludeFilter,
+  excludeConditionsFromFlat,
+} from "../_shared/excludePostFilter.ts";
+import type { SearchIntentCondition } from "../_shared/searchIntent.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY");
@@ -47,11 +52,6 @@ const BATCH_SIZE = 3;
 // BATCH_SIZE * 3 = 9 — enough for ~3 calibration rounds before the pool
 // runs thin. Raise to 15 explicitly if sourcing quality proves too variable.
 const CRUSTDATA_POOL_FLOOR = BATCH_SIZE * 3;
-
-// Talent Bench is permanently disabled — Crustdata is the sole discovery
-// source when CRUSTDATA_API_KEY is set. Never seed the pool from other deals'
-// caches (cross-deal contamination was the root cause of off-role results).
-const FORCE_CRUSTDATA_ONLY = true;
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -221,29 +221,6 @@ async function fetchCacheRow(
   if (!res.ok) return null;
   const rows = (await res.json()) as CacheRow[];
   return rows?.[0] ?? null;
-}
-
-// Pull non-expired bench candidates from OTHER deals in the same tenant.
-// RLS scopes to the caller's tenant automatically.
-async function fetchBenchCandidates(
-  dealId: number,
-  authHeader: string,
-): Promise<RawCandidate[]> {
-  const nowIso = encodeURIComponent(`"${new Date().toISOString()}"`);
-  const res = await restFetch(
-    `role_discovery_cache?deal_id=neq.${dealId}&expires_at=gt.${nowIso}&select=payload&limit=5`,
-    authHeader,
-    { method: "GET", headers: {} },
-  );
-  if (!res.ok) return [];
-  const rows = (await res.json()) as { payload: RawCandidate[] }[];
-  const bench: RawCandidate[] = [];
-  for (const row of rows) {
-    for (const c of row.payload ?? []) {
-      bench.push({ ...c, _from_bench: true });
-    }
-  }
-  return bench;
 }
 
 // Call rank-discovery-batch (sibling edge function) with the user's JWT.
@@ -422,16 +399,112 @@ Deno.serve(async (req: Request) => {
       merged.push(c);
     }
 
+    // Fetch stored SearchIntent + flat exclude columns BEFORE calling Crustdata
+    // so excludes are applied at query time (not just as a post-filter).
+    // Non-blocking — a failure here is non-fatal; search proceeds without excludes.
+    let storedSearchIntent: Record<string, unknown> | null = null;
+    let dealExcludeConditions: SearchIntentCondition[] = [];
+    try {
+      const dealRes = await fetch(
+        `${SUPABASE_URL}/rest/v1/deals?id=eq.${deal_id}&select=role_brief_search_intent,excluded_companies,exclusion_keywords`,
+        {
+          headers: {
+            apikey: SUPABASE_ANON_KEY ?? "",
+            Authorization: authHeader,
+          },
+        },
+      );
+      if (dealRes.ok) {
+        const rows = await dealRes.json();
+        const record = rows[0]?.role_brief_search_intent;
+        if (record?.current?.conditions) storedSearchIntent = record.current;
+
+        // Union: SearchIntent exclude conditions (most authoritative) plus any
+        // flat-column values not already represented in the intent.  Handles
+        // the case where refine-only jsonb updates set conditions but the flat
+        // cols haven't been synced yet by persistIntent.
+        const flatCompanies = Array.isArray(rows[0]?.excluded_companies)
+          ? (rows[0].excluded_companies as string[])
+          : [];
+        const flatKeywords = Array.isArray(rows[0]?.exclusion_keywords)
+          ? (rows[0].exclusion_keywords as string[])
+          : [];
+        const intentExcludes: SearchIntentCondition[] = Array.isArray(
+          record?.current?.conditions,
+        )
+          ? (record.current.conditions as SearchIntentCondition[]).filter(
+              (c) => c.disposition === "exclude",
+            )
+          : [];
+        const intentCompanyValues = new Set(
+          intentExcludes
+            .filter((c) => c.category === "company")
+            .map((c) => c.value.toLowerCase().trim()),
+        );
+        const intentKeywordValues = new Set(
+          intentExcludes
+            .filter((c) => c.category === "title")
+            .map((c) => c.value.toLowerCase().trim()),
+        );
+        dealExcludeConditions = [
+          ...intentExcludes,
+          ...excludeConditionsFromFlat(
+            flatCompanies.filter(
+              (v) => !intentCompanyValues.has(v.toLowerCase().trim()),
+            ),
+            flatKeywords.filter(
+              (v) => !intentKeywordValues.has(v.toLowerCase().trim()),
+            ),
+          ),
+        ];
+      }
+    } catch {
+      // non-fatal
+    }
+
+    // Build exclude arrays for Crustdata query-layer filtering.
+    const queryExcludedCompanies = dealExcludeConditions
+      .filter((c) => c.category === "company")
+      .map((c) => c.value);
+    const queryExclusionKeywords = dealExcludeConditions
+      .filter((c) => c.category === "title")
+      .map((c) => c.value);
+
     // Always call Crustdata when the API key is present — no pool-floor gate.
+    // Merge exclude conditions into the role brief so buildCalibrationFilters
+    // emits "(!)" conditions for each excluded company / exclusion keyword.
     let crustdataNote: string | undefined;
     if (CRUSTDATA_API_KEY) {
+      const briefWithExcludes = {
+        ...roleBrief,
+        ...(queryExcludedCompanies.length > 0
+          ? { excluded_companies: queryExcludedCompanies }
+          : {}),
+        ...(queryExclusionKeywords.length > 0
+          ? { exclusion_keywords: queryExclusionKeywords }
+          : {}),
+      };
       const crustdataResult = await searchCrustdataForRoleBrief(
-        roleBrief,
+        briefWithExcludes,
         Math.min(CRUSTDATA_POOL_FLOOR + 10, 30),
         CRUSTDATA_API_KEY,
       );
       crustdataNote = crustdataResult.note;
-      for (const c of crustdataResult.candidates) {
+
+      // Post-filter: defense-in-depth exclude enforcement after the API call.
+      // Crustdata's "(!)" query-layer may miss edge cases; this catches them.
+      // Adapt job_company_name / job_title to the MinimalCandidate field names.
+      const candidatesAdapted = crustdataResult.candidates.map((c) => ({
+        ...c,
+        current_employer_company_name: c.job_company_name,
+        title: c.job_title,
+      }));
+      const postFiltered =
+        dealExcludeConditions.length > 0
+          ? applyExcludeFilter(candidatesAdapted, dealExcludeConditions)
+          : candidatesAdapted;
+
+      for (const c of postFiltered) {
         const key = c.linkedin_url || c.id;
         if (seen.has(key)) continue;
         seen.add(key);
@@ -465,7 +538,8 @@ Deno.serve(async (req: Request) => {
       ) {
         bench_note = canonicalCountry
           ? `Found profiles in web search but none were based in ${canonicalCountry} — check the location in the brief.`
-          : crustdataNote ?? "No profiles matched the location in this brief.";
+          : (crustdataNote ??
+            "No profiles matched the location in this brief.");
       } else if (
         crustdataNote?.includes("No profiles matched") ||
         crustdataNote?.includes("too little detail")
@@ -487,28 +561,6 @@ Deno.serve(async (req: Request) => {
         pool_exhausted: true,
         bench_note,
       });
-    }
-
-    // Fetch stored SearchIntent for conflict-aware why-fit ranking (T4).
-    // Non-blocking read — missing or failed intent does not block ranking.
-    let storedSearchIntent: Record<string, unknown> | null = null;
-    try {
-      const dealRes = await fetch(
-        `${SUPABASE_URL}/rest/v1/deals?id=eq.${deal_id}&select=role_brief_search_intent`,
-        {
-          headers: {
-            apikey: SUPABASE_ANON_KEY ?? "",
-            Authorization: authHeader,
-          },
-        },
-      );
-      if (dealRes.ok) {
-        const rows = await dealRes.json();
-        const record = rows[0]?.role_brief_search_intent;
-        if (record?.current?.conditions) storedSearchIntent = record.current;
-      }
-    } catch {
-      // non-fatal
     }
 
     const ranked = await rankCandidates(

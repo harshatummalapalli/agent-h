@@ -41,6 +41,8 @@ export type CalibrationCandidate = {
     label: string;
     status: "found" | "inferred" | "missing";
   }>;
+  /** Profile photo URL from Harvest batch enrichment */
+  photo_url?: string | null;
 };
 
 export type CalibrationBatch = {
@@ -1045,16 +1047,15 @@ const getDataProviderWithCustomMethods = () => {
             row !== null,
         );
     },
-    // Agent H Stage 3, task #27: manual, on-demand contact-enrichment
-    // waterfall (Hunter.io -> Apollo.io) for one already-saved candidate.
-    // Calls enrich-candidate-contact -- never runs automatically on save or
-    // on a discovery hit, only when a recruiter clicks "Enrich contact" on a
-    // specific candidate (Harsha's explicit call, 2026-07-11 session).
+    // Agent H contact enrichment — PDL primary, Hunter/Apollo fallback
+    // (2026-07-30 vendor split). Calls enrich-candidate-contact edge function.
+    // Manual, on-demand only — never automatic.
     async enrichCandidateContact(candidateId: Identifier) {
       const { data, error } = await getSupabaseClient().functions.invoke<{
         status: "enriched" | "not_found" | "failed";
-        source: "hunter" | "apollo" | null;
+        source: "pdl" | "hunter" | "apollo" | null;
         email: string | null;
+        phone?: string | null;
         notes: string[];
       }>("enrich-candidate-contact", {
         method: "POST",

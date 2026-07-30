@@ -6,6 +6,11 @@
 //
 // Fit score pill colors use CSS-variable-based classes (hsl vars) so they
 // respect dark mode; no hardcoded hex colors.
+//
+// Vendor button semantics (2026-07-30 vendor split):
+//   Contact  → PDL enrichment (personal email + phone) via enrich-candidate-contact
+//   Enrich   → Harvest profile refresh (experience, skills, photo)
+//   Outreach → Unipile LinkedIn flow (existing)
 
 import {
   MapPin,
@@ -13,6 +18,8 @@ import {
   XCircle,
   Circle,
   ExternalLink,
+  Phone,
+  Mail,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -21,6 +28,11 @@ import { normalizeLinkedinUrl } from "../misc/normalizeLinkedinUrl";
 export type MustHaveItem = {
   label: string;
   status: "found" | "inferred" | "missing";
+};
+
+export type CandidateContactData = {
+  email?: string | null;
+  phone?: string | null;
 };
 
 export type CandidateCardProps = {
@@ -36,9 +48,21 @@ export type CandidateCardProps = {
   linkedinUrl?: string | null;
   /** For row density: skill tags */
   skills?: string[];
+  /** Photo URL from Harvest enrichment */
+  photoUrl?: string | null;
   // ── Queue-density pipeline action ──────────────────────────────────────────
   onAddToPipeline?: () => void;
   pipelineSaveState?: "idle" | "saving" | "saved";
+  // ── Vendor action buttons (queue density) ──────────────────────────────────
+  /** PDL contact enrichment — shows email/phone when contactData present */
+  onContact?: () => void;
+  contactState?: "idle" | "loading" | "done" | "error";
+  contactData?: CandidateContactData | null;
+  /** Harvest profile re-enrich / refresh */
+  onEnrich?: () => void;
+  enrichState?: "idle" | "loading" | "done";
+  /** Unipile outreach (existing flow) */
+  onOutreach?: () => void;
 };
 
 // Fit score → color class (CSS var-based, dark-mode safe)
@@ -83,6 +107,46 @@ function MustHaveList({ items }: { items: MustHaveItem[] }) {
   );
 }
 
+function Avatar({
+  name,
+  photoUrl,
+}: {
+  name: string;
+  photoUrl?: string | null;
+}) {
+  const initials = name
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((w) => w[0]?.toUpperCase() ?? "")
+    .join("");
+
+  if (photoUrl) {
+    return (
+      <img
+        src={photoUrl}
+        alt={name}
+        className="h-9 w-9 rounded-full object-cover shrink-0"
+        onError={(e) => {
+          // Fall back to initials if image fails to load
+          const target = e.currentTarget;
+          target.style.display = "none";
+          const sibling = target.nextElementSibling as HTMLElement | null;
+          if (sibling) sibling.style.display = "flex";
+        }}
+      />
+    );
+  }
+
+  return (
+    <div
+      aria-hidden
+      className="h-9 w-9 rounded-full bg-muted flex items-center justify-center text-sm font-semibold text-muted-foreground shrink-0 select-none"
+    >
+      {initials || "?"}
+    </div>
+  );
+}
+
 // ── Queue density ─────────────────────────────────────────────────────────────
 
 function QueueCard({
@@ -93,26 +157,24 @@ function QueueCard({
   whyFit,
   mustHaves,
   linkedinUrl,
+  photoUrl,
   onAddToPipeline,
   pipelineSaveState = "idle",
+  onContact,
+  contactState = "idle",
+  contactData,
+  onEnrich,
+  enrichState = "idle",
+  onOutreach,
 }: Omit<CandidateCardProps, "density">) {
   const normalizedLinkedin = normalizeLinkedinUrl(linkedinUrl);
-  const initials = name
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((w) => w[0]?.toUpperCase() ?? "")
-    .join("");
+  const hasContactData = contactData?.email || contactData?.phone;
 
   return (
     <div className="rounded-lg border border-border bg-card p-4 flex flex-col gap-3">
       {/* Header: avatar + name + headline + fit pill */}
       <div className="flex items-start gap-3">
-        <div
-          aria-hidden
-          className="h-9 w-9 rounded-full bg-muted flex items-center justify-center text-sm font-semibold text-muted-foreground shrink-0 select-none"
-        >
-          {initials || "?"}
-        </div>
+        <Avatar name={name} photoUrl={photoUrl} />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-sm font-semibold text-foreground">
@@ -133,6 +195,24 @@ function QueueCard({
         <div className="flex items-center gap-1 text-xs text-muted-foreground">
           <MapPin className="h-3 w-3 shrink-0" />
           {location}
+        </div>
+      )}
+
+      {/* Contact data (shown when PDL enrichment returned results) */}
+      {hasContactData && (
+        <div className="flex flex-col gap-0.5 text-xs text-foreground">
+          {contactData?.email && (
+            <div className="flex items-center gap-1.5">
+              <Mail className="h-3 w-3 text-muted-foreground shrink-0" />
+              <span>{contactData.email}</span>
+            </div>
+          )}
+          {contactData?.phone && (
+            <div className="flex items-center gap-1.5">
+              <Phone className="h-3 w-3 text-muted-foreground shrink-0" />
+              <span>{contactData.phone}</span>
+            </div>
+          )}
         </div>
       )}
 
@@ -168,6 +248,49 @@ function QueueCard({
                 : "Add to pipeline"}
           </Button>
         )}
+
+        {/* Contact button — PDL (2026-07-30 vendor split) */}
+        {onContact && !hasContactData && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 text-xs"
+            onClick={onContact}
+            disabled={contactState === "loading"}
+          >
+            {contactState === "loading" ? "Looking up…" : "Get contact"}
+          </Button>
+        )}
+
+        {/* Enrich button — Harvest profile refresh (2026-07-30 vendor split) */}
+        {onEnrich && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 text-xs"
+            onClick={onEnrich}
+            disabled={enrichState === "loading"}
+          >
+            {enrichState === "loading"
+              ? "Enriching…"
+              : enrichState === "done"
+                ? "Enriched"
+                : "Enrich"}
+          </Button>
+        )}
+
+        {/* Outreach — Unipile flow */}
+        {onOutreach && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 text-xs"
+            onClick={onOutreach}
+          >
+            Outreach
+          </Button>
+        )}
+
         {normalizedLinkedin && (
           <Button
             asChild

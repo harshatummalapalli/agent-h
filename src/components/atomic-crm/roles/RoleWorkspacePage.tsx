@@ -112,6 +112,13 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
   const [cardSaveStates, setCardSaveStates] = useState<
     Map<string, "idle" | "saving" | "saved">
   >(new Map());
+  // Contact enrichment state per candidate external_id (PDL via enrich-candidate-contact)
+  const [contactStates, setContactStates] = useState<
+    Map<string, "idle" | "loading" | "done" | "error">
+  >(new Map());
+  const [contactDataMap, setContactDataMap] = useState<
+    Map<string, { email?: string | null; phone?: string | null }>
+  >(new Map());
   const autostartFiredRef = useRef(false);
 
   const { data: openDeals } = useGetList<Deal>("deals", {
@@ -157,6 +164,35 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
       ) as string[];
     }),
   );
+
+  // Map linkedin_url → DB candidate id for Contact button wiring (saved candidates only)
+  const dbIdByLinkedinUrl = new Map(
+    (pipelineRows ?? []).map(({ candidate }) => {
+      const fields = candidate as unknown as Record<string, unknown>;
+      return [fields.linkedin_url as string | undefined, candidate.id];
+    }),
+  );
+
+  // Contact enrichment handler — PDL via enrich-candidate-contact edge fn
+  const handleContactEnrich = async (c: CalibrationCandidate) => {
+    const dbId = c.linkedin_url
+      ? dbIdByLinkedinUrl.get(c.linkedin_url)
+      : undefined;
+    if (!dbId) return; // candidate not saved yet
+    setContactStates((prev) => new Map(prev).set(c.external_id, "loading"));
+    try {
+      const result = await dataProvider.enrichCandidateContact(dbId);
+      setContactDataMap((prev) =>
+        new Map(prev).set(c.external_id, {
+          email: result?.email ?? null,
+          phone: result?.phone ?? null,
+        }),
+      );
+      setContactStates((prev) => new Map(prev).set(c.external_id, "done"));
+    } catch {
+      setContactStates((prev) => new Map(prev).set(c.external_id, "error"));
+    }
+  };
 
   const shellContext = useRoleShellContext({
     deal,
@@ -674,6 +710,7 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
                             whyFit={c.why_fit}
                             mustHaves={c.must_haves}
                             linkedinUrl={c.linkedin_url}
+                            photoUrl={c.photo_url}
                             onAddToPipeline={
                               pipelineExternalIds.has(c.external_id)
                                 ? undefined
@@ -683,6 +720,19 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
                               pipelineExternalIds.has(c.external_id)
                                 ? "saved"
                                 : (cardSaveStates.get(c.external_id) ?? "idle")
+                            }
+                            onContact={
+                              pipelineExternalIds.has(c.external_id) &&
+                              c.linkedin_url &&
+                              dbIdByLinkedinUrl.has(c.linkedin_url)
+                                ? () => handleContactEnrich(c)
+                                : undefined
+                            }
+                            contactState={
+                              contactStates.get(c.external_id) ?? "idle"
+                            }
+                            contactData={
+                              contactDataMap.get(c.external_id) ?? null
                             }
                           />
                         </li>

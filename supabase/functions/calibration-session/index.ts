@@ -37,6 +37,11 @@ import {
   excludeConditionsFromFlat,
 } from "../_shared/excludePostFilter.ts";
 import type { SearchIntentCondition } from "../_shared/searchIntent.ts";
+import {
+  batchEnrichFromHarvest,
+  buildWorkHistorySummary,
+  HARVEST_PER_ROLE_CEILING_USD,
+} from "../_shared/harvestClient.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY");
@@ -108,6 +113,10 @@ type RawCandidate = {
   years_experience?: number | null;
   linkedin_url?: string | null;
   _from_bench?: boolean;
+  // Harvest-enriched fields (populated after batchEnrichFromHarvest step)
+  photo_url?: string | null;
+  work_history?: unknown;
+  work_history_summary?: string | null;
 };
 
 type RankedEntry = { id: string; rank: number; why_fit: string };
@@ -138,6 +147,7 @@ type CalibrationCandidate = {
   location_name: string | null;
   from_bench: boolean;
   must_haves: MustHaveCheck[];
+  photo_url?: string | null;
 };
 
 // Common keyword aliases for must-have matching (expand as needed).
@@ -251,6 +261,8 @@ async function rankCandidates(
             job_company_name: c.job_company_name,
             location_name: c.location_name,
             skills: c.skills,
+            years_experience: c.years_experience,
+            work_history_summary: c.work_history_summary ?? null,
           })),
           role: roleBrief,
           ...(searchIntent ? { search_intent: searchIntent } : {}),
@@ -335,6 +347,7 @@ function buildBatch(
         location_name: raw.location_name ?? null,
         from_bench: raw._from_bench ?? false,
         must_haves,
+        photo_url: raw.photo_url ?? null,
       };
     })
     .filter((c): c is CalibrationCandidate => c !== null);
@@ -562,6 +575,75 @@ Deno.serve(async (req: Request) => {
         bench_note,
       });
     }
+
+    // ── Harvest batch enrichment (profile: skills, experience, photo) ──────
+    // Runs after exclude post-filter, before ranking so the LLM sees richer data.
+    // Vendor role (2026-07-30): Harvest = profile. PDL = contact (email/phone).
+    // Non-blocking: if Harvest fails for any profile, the Crustdata stub is kept.
+    // HARVEST_PER_ROLE_CEILING_USD = $1.50 — hard-stop TODO: for now, log + skip
+    // when the estimated credit spend would exceed the ceiling.
+    const harvestUrls = merged
+      .map((c) => c.linkedin_url)
+      .filter((url): url is string => Boolean(url));
+
+    if (harvestUrls.length > 0) {
+      const HARVEST_COST_PER_PROFILE = 0.01; // ~$0.01/profile estimate
+      const estimatedCost = harvestUrls.length * HARVEST_COST_PER_PROFILE;
+      if (estimatedCost > HARVEST_PER_ROLE_CEILING_USD) {
+        // TODO: surface a toast to the recruiter and skip further auto-enrich
+        console.warn(
+          `[calibration-session] Harvest cost estimate $${estimatedCost.toFixed(2)} exceeds ceiling $${HARVEST_PER_ROLE_CEILING_USD} — skipping batch enrichment for this pull.`,
+        );
+      } else {
+        try {
+          const harvestMap = await batchEnrichFromHarvest(harvestUrls, 5);
+          let enrichedCount = 0;
+          for (const c of merged) {
+            if (!c.linkedin_url) continue;
+            const profile = harvestMap.get(c.linkedin_url);
+            if (!profile) continue;
+            enrichedCount++;
+            // Merge photo
+            if (profile.profilePictureUrl)
+              c.photo_url = profile.profilePictureUrl;
+            // Merge skills (union, Harvest first for quality)
+            if (profile.skills.length > 0) {
+              const existing = new Set(
+                (c.skills ?? []).map((s) => s.toLowerCase()),
+              );
+              const merged_skills = [...profile.skills];
+              for (const s of c.skills ?? []) {
+                if (
+                  !profile.skills.some(
+                    (p) => p.toLowerCase() === s.toLowerCase(),
+                  )
+                ) {
+                  merged_skills.push(s);
+                }
+              }
+              c.skills = merged_skills;
+              void existing; // suppress unused var
+            }
+            // Store work history for ranking context
+            if (profile.experiences.length > 0) {
+              c.work_history = profile.experiences;
+              c.work_history_summary = buildWorkHistorySummary(
+                profile.experiences,
+              );
+            }
+          }
+          console.warn(
+            `[calibration-session] Harvest enriched ${enrichedCount}/${harvestUrls.length} profiles (est. cost $${(enrichedCount * HARVEST_COST_PER_PROFILE).toFixed(2)})`,
+          );
+        } catch (err) {
+          console.warn(
+            "[calibration-session] Harvest batch enrichment failed (non-fatal):",
+            err,
+          );
+        }
+      }
+    }
+    // ── End Harvest enrichment ───────────────────────────────────────────────
 
     const ranked = await rankCandidates(
       merged,

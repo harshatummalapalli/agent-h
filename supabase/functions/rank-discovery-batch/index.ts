@@ -28,6 +28,8 @@ type CandidateSummary = {
   location_name?: string | null;
   skills?: string[] | null;
   years_experience?: number | null;
+  /** Compact work history from Harvest enrichment, e.g. "Staff Eng @ Acme (2021–2024)". */
+  work_history_summary?: string | null;
 };
 
 type RoleBriefSummary = {
@@ -76,15 +78,34 @@ export function buildPrompt(
   // Build SearchIntent context section when available.
   let intentSection = "";
   if (searchIntent?.conditions?.length) {
-    const required = searchIntent.conditions.filter((c) => c.disposition === "require");
-    const excluded = searchIntent.conditions.filter((c) => c.disposition === "exclude");
-    const preferred = searchIntent.conditions.filter((c) => c.disposition === "prefer");
-    const lines: string[] = ["SOURCING INTENT (use for conflict detection in why_fit):"];
-    if (required.length) lines.push(`  Required: ${required.map((c) => `${c.category}:${c.value}`).join(", ")}`);
-    if (excluded.length) lines.push(`  EXCLUDED (hard): ${excluded.map((c) => `${c.category}:${c.value}`).join(", ")}`);
-    if (preferred.length) lines.push(`  Preferred: ${preferred.map((c) => `${c.category}:${c.value}`).join(", ")}`);
+    const required = searchIntent.conditions.filter(
+      (c) => c.disposition === "require",
+    );
+    const excluded = searchIntent.conditions.filter(
+      (c) => c.disposition === "exclude",
+    );
+    const preferred = searchIntent.conditions.filter(
+      (c) => c.disposition === "prefer",
+    );
+    const lines: string[] = [
+      "SOURCING INTENT (use for conflict detection in why_fit):",
+    ];
+    if (required.length)
+      lines.push(
+        `  Required: ${required.map((c) => `${c.category}:${c.value}`).join(", ")}`,
+      );
+    if (excluded.length)
+      lines.push(
+        `  EXCLUDED (hard): ${excluded.map((c) => `${c.category}:${c.value}`).join(", ")}`,
+      );
+    if (preferred.length)
+      lines.push(
+        `  Preferred: ${preferred.map((c) => `${c.category}:${c.value}`).join(", ")}`,
+      );
     if (searchIntent.unenforceable_constraints?.length) {
-      lines.push(`  Context-only (not filtered): ${searchIntent.unenforceable_constraints.map((u) => u.description).join("; ")}`);
+      lines.push(
+        `  Context-only (not filtered): ${searchIntent.unenforceable_constraints.map((u) => u.description).join("; ")}`,
+      );
     }
     intentSection = `\n${lines.join("\n")}\n`;
   }
@@ -99,12 +120,15 @@ export function buildPrompt(
         c.location_name ? `location=${c.location_name}` : null,
         c.years_experience != null ? `exp=${c.years_experience}yr` : null,
         c.skills?.length ? `skills=${c.skills.slice(0, 8).join(",")}` : null,
+        c.work_history_summary ? `history=${c.work_history_summary}` : null,
       ].filter(Boolean);
       return parts.join(" | ");
     })
     .join("\n");
 
-  const conflictInstruction = searchIntent?.conditions?.some((c) => c.disposition === "exclude")
+  const conflictInstruction = searchIntent?.conditions?.some(
+    (c) => c.disposition === "exclude",
+  )
     ? `\n  IMPORTANT: For each candidate, if their profile matches any EXCLUDED condition above, call it out plainly in why_fit — e.g. "currently Staff-level, which was excluded" or "currently at Coupang, which was excluded". Do NOT be generically positive when there is a clear conflict.`
     : "";
 

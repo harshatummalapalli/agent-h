@@ -11,7 +11,13 @@ import {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-type AnyFilter = { field?: string; type?: string; value?: unknown; op?: string; conditions?: AnyFilter[] };
+type AnyFilter = {
+  field?: string;
+  type?: string;
+  value?: unknown;
+  op?: string;
+  conditions?: AnyFilter[];
+};
 
 /** Recursively flatten a nested filter tree into a flat array of leaf conditions. */
 function flattenConditions(f: AnyFilter): AnyFilter[] {
@@ -438,7 +444,11 @@ describe("parseLocationForFilter — paren-country form (regression: Hyderabad (
 // ── NEW: buildCalibrationFilters — all Hyderabad/India variants → India country filter ──
 
 const INDIA_COUNTRY_FIELD = "basic_profile.location.country";
-const INDIA_COUNTRY_FILTER = { field: INDIA_COUNTRY_FIELD, type: "=", value: "India" };
+const INDIA_COUNTRY_FILTER = {
+  field: INDIA_COUNTRY_FIELD,
+  type: "=",
+  value: "India",
+};
 
 const INDIA_LOCATION_VARIANTS: Array<[string, string]> = [
   ["India", "bare country"],
@@ -451,7 +461,10 @@ const INDIA_LOCATION_VARIANTS: Array<[string, string]> = [
 describe("buildCalibrationFilters — India location variants all produce India country filter", () => {
   for (const [loc, label] of INDIA_LOCATION_VARIANTS) {
     it(`'${loc}' (${label}) → country='India' exact filter`, () => {
-      const filters = buildCalibrationFilters({ name: "Software Engineer", location: loc });
+      const filters = buildCalibrationFilters({
+        name: "Software Engineer",
+        location: loc,
+      });
       expect(filters).not.toBeNull();
       const flat = flattenConditions(filters as AnyFilter);
       expect(flat).toContainEqual(INDIA_COUNTRY_FILTER);
@@ -495,6 +508,90 @@ describe("extractCanonicalCountry", () => {
   });
 });
 
+// ── NEW: buildCalibrationFilters — exclude conditions ────────────────────────
+
+describe("buildCalibrationFilters — excluded_companies", () => {
+  it("emits a (!) condition on currentCompanyName for each excluded company", () => {
+    const filters = buildCalibrationFilters({
+      name: "Software Engineer",
+      excluded_companies: ["Cognizant", "TCS"],
+    });
+    expect(filters).not.toBeNull();
+    const flat = flattenConditions(filters as AnyFilter);
+    const excludeConditions = flat.filter(
+      (c) =>
+        c.type === "(!)" &&
+        c.field === "experience.employment_details.current.company_name",
+    );
+    expect(excludeConditions).toHaveLength(2);
+    expect(excludeConditions.map((c) => c.value)).toContain("Cognizant");
+    expect(excludeConditions.map((c) => c.value)).toContain("TCS");
+  });
+
+  it("does not emit exclude conditions when excluded_companies is empty", () => {
+    const filters = buildCalibrationFilters({
+      name: "Software Engineer",
+      excluded_companies: [],
+    });
+    expect(filters).not.toBeNull();
+    const flat = flattenConditions(filters as AnyFilter);
+    const excludeConditions = flat.filter((c) => c.type === "(!)");
+    expect(excludeConditions).toHaveLength(0);
+  });
+
+  it("skips blank/empty company strings", () => {
+    const filters = buildCalibrationFilters({
+      name: "Engineer",
+      excluded_companies: ["", "  ", "Infosys"],
+    });
+    expect(filters).not.toBeNull();
+    const flat = flattenConditions(filters as AnyFilter);
+    const excludeConditions = flat.filter(
+      (c) =>
+        c.type === "(!)" &&
+        c.field === "experience.employment_details.current.company_name",
+    );
+    expect(excludeConditions).toHaveLength(1);
+    expect(excludeConditions[0].value).toBe("Infosys");
+  });
+});
+
+describe("buildCalibrationFilters — exclusion_keywords", () => {
+  it("emits (!) conditions on both title and skills fields for each keyword", () => {
+    const filters = buildCalibrationFilters({
+      name: "Software Engineer",
+      exclusion_keywords: ["Manager", "Director"],
+    });
+    expect(filters).not.toBeNull();
+    const flat = flattenConditions(filters as AnyFilter);
+    const titleExcludes = flat.filter(
+      (c) =>
+        c.type === "(!)" &&
+        c.field === "experience.employment_details.current.title",
+    );
+    const skillExcludes = flat.filter(
+      (c) =>
+        c.type === "(!)" && c.field === "skills.professional_network_skills",
+    );
+    expect(titleExcludes).toHaveLength(2);
+    expect(skillExcludes).toHaveLength(2);
+  });
+
+  it("combines excluded_companies and exclusion_keywords in one AND filter", () => {
+    const filters = buildCalibrationFilters({
+      name: "Engineer",
+      location: "India",
+      excluded_companies: ["Wipro"],
+      exclusion_keywords: ["Manager"],
+    });
+    expect(filters).not.toBeNull();
+    const flat = flattenConditions(filters as AnyFilter);
+    const notConditions = flat.filter((c) => c.type === "(!)");
+    // Wipro on company + Manager on title + Manager on skills = 3
+    expect(notConditions).toHaveLength(3);
+  });
+});
+
 // ── NEW: title shingle decomposition in buildCalibrationFilters ───────────────
 
 describe("buildCalibrationFilters — title shingle decomposition (regression: Cyber Incident)", () => {
@@ -519,14 +616,15 @@ describe("buildCalibrationFilters — title shingle decomposition (regression: C
     }
 
     // Shingles must not include the raw 5-word full phrase (too long for literal match)
-    const hasFiveWordPhrase = titleTerms.some(
-      (t) => t.split(/\s+/).length > 2,
-    );
+    const hasFiveWordPhrase = titleTerms.some((t) => t.split(/\s+/).length > 2);
     expect(hasFiveWordPhrase).toBe(false);
   });
 
   it("'Software Engineer' (2 words) stays as a single condition", () => {
-    const filters = buildCalibrationFilters({ name: "Software Engineer", location: "India" });
+    const filters = buildCalibrationFilters({
+      name: "Software Engineer",
+      location: "India",
+    });
     expect(filters).not.toBeNull();
     const flat = flattenConditions(filters as AnyFilter);
     const titleConds = flat.filter(
@@ -537,7 +635,10 @@ describe("buildCalibrationFilters — title shingle decomposition (regression: C
   });
 
   it("'Senior Software Engineer' (3 words) produces 2 shingles: 'Senior Software' + 'Software Engineer'", () => {
-    const filters = buildCalibrationFilters({ name: "Senior Software Engineer", location: "India" });
+    const filters = buildCalibrationFilters({
+      name: "Senior Software Engineer",
+      location: "India",
+    });
     expect(filters).not.toBeNull();
     const flat = flattenConditions(filters as AnyFilter);
     const titleTerms = flat

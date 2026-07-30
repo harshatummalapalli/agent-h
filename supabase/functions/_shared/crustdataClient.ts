@@ -20,6 +20,7 @@ export const CRUSTDATA_API_VERSION = "2025-11-01";
 
 const F = {
   currentTitle: "experience.employment_details.current.title",
+  currentCompanyName: "experience.employment_details.current.company_name",
   currentSeniority: "experience.employment_details.current.seniority_level",
   locationCity: "basic_profile.location.city",
   locationCountry: "basic_profile.location.country",
@@ -111,7 +112,7 @@ export function classifyPlace(place: string): {
 
 type Condition = {
   field: string;
-  type: "(.)" | "=>" | "=<" | "in" | "=";
+  type: "(.)" | "(!)" | "=>" | "=<" | "in" | "=";
   value: string | number | string[];
 };
 type Group = { op: "and" | "or"; conditions: Array<Condition | Group> };
@@ -202,6 +203,8 @@ export type CalibrationRoleBrief = {
   must_have_keywords?: unknown;
   years_experience_min?: unknown;
   years_experience_max?: unknown;
+  excluded_companies?: unknown;
+  exclusion_keywords?: unknown;
 };
 
 /**
@@ -334,6 +337,40 @@ export function buildCalibrationFilters(
       field: F.currentSkills,
       type: "(.)",
       value: skills[0].trim(),
+    });
+  }
+
+  // Excludes: hard "(!)" per excluded company / exclusion keyword.
+  // "(!)" is a literal not-contains match (confirmed live against Crustdata),
+  // so no shingle decomposition — keep precise to avoid over-exclusion.
+  const excludedCompanies = Array.isArray(brief.excluded_companies)
+    ? (brief.excluded_companies as unknown[]).filter(
+        (c): c is string => typeof c === "string" && c.trim().length > 0,
+      )
+    : [];
+  for (const company of excludedCompanies) {
+    conditions.push({
+      field: F.currentCompanyName,
+      type: "(!)",
+      value: company.trim(),
+    });
+  }
+
+  const exclusionKeywords = Array.isArray(brief.exclusion_keywords)
+    ? (brief.exclusion_keywords as unknown[]).filter(
+        (k): k is string => typeof k === "string" && k.trim().length > 0,
+      )
+    : [];
+  for (const keyword of exclusionKeywords) {
+    conditions.push({
+      field: F.currentTitle,
+      type: "(!)",
+      value: keyword.trim(),
+    });
+    conditions.push({
+      field: F.currentSkills,
+      type: "(!)",
+      value: keyword.trim(),
     });
   }
 

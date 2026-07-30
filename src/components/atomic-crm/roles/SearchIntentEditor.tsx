@@ -1,14 +1,14 @@
 // SearchIntentEditor — editable chip editor for recruiter sourcing intent.
 //
-// Shows three disposition columns (Require / Prefer / Exclude) as chips grouped
-// by category. A "Your judgment" panel surfaces one-click packs:
+// Shows a segmented control (Require / Prefer / Exclude) with chip counts,
+// and renders the active group's chips as a horizontal wrapping row —
+// keeping the first viewport short even with many conditions.
+//
+// A "Your judgment" panel (collapsed by default) surfaces one-click packs:
 //   • Leadership title excludes
 //   • Company exclude input
 //   • Career interest (prefer open-to-new-opportunities)
 //   • Unenforceable / soft-constraint notes
-//
-// Designed to be used at JD intake (seeded from parsedBriefToConditions) and
-// inline on the Role workspace (editing the persisted SearchIntent).
 //
 // Props:
 //   initialConditions     — seed chips (not controlled after mount)
@@ -17,14 +17,13 @@
 //   onContinue            — optional; if present shows "Continue to search"
 //   saveLabel             — override Save button label
 //   saving                — disable buttons while parent is async
-//
-// Internally state is fully controlled; callers receive the final arrays on save.
 
 import { useState } from "react";
 import { X, Plus, ChevronDown, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { cn } from "@/lib/utils";
 import type {
   SearchIntentCategory,
   SearchIntentCondition,
@@ -56,30 +55,50 @@ const CATEGORY_OPTIONS: SearchIntentCategory[] = [
 
 const DISPOSITION_CONFIG: Record<
   SearchIntentDisposition,
-  { label: string; emptyHint: string; chipCls: string; headerCls: string }
+  {
+    label: string;
+    emptyHint: string;
+    chipCls: string;
+    activeCls: string;
+    badgeCls: string;
+  }
 > = {
   require: {
     label: "Require",
     emptyHint: "Add a must-have",
     chipCls:
       "bg-green-50 text-green-800 border-green-200 dark:bg-green-900/30 dark:text-green-200 dark:border-green-800",
-    headerCls: "text-green-700 dark:text-green-400",
+    activeCls:
+      "bg-green-50/60 border-green-200 dark:bg-green-900/20 dark:border-green-800",
+    badgeCls:
+      "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300",
   },
   prefer: {
     label: "Prefer",
     emptyHint: "Add a nice-to-have",
     chipCls:
       "bg-blue-50 text-blue-800 border-blue-200 dark:bg-blue-900/30 dark:text-blue-200 dark:border-blue-800",
-    headerCls: "text-blue-700 dark:text-blue-400",
+    activeCls:
+      "bg-blue-50/60 border-blue-200 dark:bg-blue-900/20 dark:border-blue-800",
+    badgeCls:
+      "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
   },
   exclude: {
     label: "Exclude",
     emptyHint: "Add a hard exclude",
     chipCls:
       "bg-red-50 text-red-800 border-red-200 dark:bg-red-900/30 dark:text-red-200 dark:border-red-800",
-    headerCls: "text-red-700 dark:text-red-400",
+    activeCls:
+      "bg-red-50/60 border-red-200 dark:bg-red-900/20 dark:border-red-800",
+    badgeCls: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300",
   },
 };
+
+const DISPOSITIONS: SearchIntentDisposition[] = [
+  "require",
+  "prefer",
+  "exclude",
+];
 
 const LEADERSHIP_EXCLUDE_VALUES = [
   "Architect",
@@ -101,7 +120,7 @@ function conditionKey(c: SearchIntentCondition): string {
   return `${c.category}:${c.disposition}:${c.value.toLowerCase()}`;
 }
 
-// ─── Chip component ───────────────────────────────────────────────────────────
+// ─── Chip ─────────────────────────────────────────────────────────────────────
 
 function Chip({
   condition,
@@ -113,9 +132,12 @@ function Chip({
   const chipCls = DISPOSITION_CONFIG[condition.disposition].chipCls;
   return (
     <span
-      className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium ${chipCls}`}
+      className={cn(
+        "inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium select-none",
+        chipCls,
+      )}
     >
-      <span className="opacity-60 text-[10px]">
+      <span className="opacity-50 text-[10px]">
         {CATEGORY_LABELS[condition.category]}
       </span>
       <span>{condition.value}</span>
@@ -123,7 +145,7 @@ function Chip({
         type="button"
         aria-label={`Remove ${condition.value}`}
         onClick={onRemove}
-        className="ml-0.5 rounded-full hover:bg-black/10 dark:hover:bg-white/10 p-0.5"
+        className="ml-0.5 rounded-full hover:bg-black/10 dark:hover:bg-white/10 p-0.5 transition-colors"
       >
         <X className="h-2.5 w-2.5" />
       </button>
@@ -131,7 +153,7 @@ function Chip({
   );
 }
 
-// ─── AddChipInput — category select + value input per disposition column ──────
+// ─── AddChipInput ─────────────────────────────────────────────────────────────
 
 function AddChipInput({
   disposition,
@@ -152,10 +174,10 @@ function AddChipInput({
   };
 
   return (
-    <div className="flex items-center gap-1.5 mt-2">
+    <div className="flex items-center gap-1.5 mt-2.5">
       <select
         aria-label="Category"
-        className="h-7 rounded-md border border-input bg-background text-xs px-1.5 text-foreground"
+        className="h-7 rounded-md border border-input bg-background text-xs px-1.5 text-foreground shrink-0"
         value={category}
         onChange={(e) => setCategory(e.target.value as SearchIntentCategory)}
       >
@@ -182,51 +204,10 @@ function AddChipInput({
         aria-label="Add chip"
         onClick={commit}
         disabled={!value.trim()}
-        className="shrink-0 h-7 w-7 flex items-center justify-center rounded-md border border-input bg-background text-muted-foreground hover:text-foreground disabled:opacity-40"
+        className="shrink-0 h-7 w-7 flex items-center justify-center rounded-md border border-input bg-background text-muted-foreground hover:text-foreground disabled:opacity-40 transition-colors"
       >
         <Plus className="h-3.5 w-3.5" />
       </button>
-    </div>
-  );
-}
-
-// ─── DispositionPanel ─────────────────────────────────────────────────────────
-
-function DispositionPanel({
-  disposition,
-  conditions,
-  onAdd,
-  onRemove,
-}: {
-  disposition: SearchIntentDisposition;
-  conditions: SearchIntentCondition[];
-  onAdd: (c: SearchIntentCondition) => void;
-  onRemove: (key: string) => void;
-}) {
-  const { label, headerCls } = DISPOSITION_CONFIG[disposition];
-
-  return (
-    <div className="flex flex-col gap-2 rounded-lg border border-border bg-card p-4 flex-1 min-w-0">
-      <p
-        className={`text-xs font-semibold uppercase tracking-wide ${headerCls}`}
-      >
-        {label}
-      </p>
-      <div className="flex flex-wrap gap-1.5 min-h-[2rem]">
-        {conditions.length === 0 && (
-          <span className="text-xs text-muted-foreground/60 italic">
-            None yet
-          </span>
-        )}
-        {conditions.map((c) => (
-          <Chip
-            key={conditionKey(c)}
-            condition={c}
-            onRemove={() => onRemove(conditionKey(c))}
-          />
-        ))}
-      </div>
-      <AddChipInput disposition={disposition} onAdd={onAdd} />
     </div>
   );
 }
@@ -248,7 +229,7 @@ function JudgmentPacks({
   onAddUnenforceable: (u: UnenforcedConstraint) => void;
   onRemoveUnenforceable: (i: number) => void;
 }) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
   const [companyInput, setCompanyInput] = useState("");
   const [noteInput, setNoteInput] = useState("");
 
@@ -331,7 +312,7 @@ function JudgmentPacks({
     <div className="rounded-lg border border-border bg-card overflow-hidden">
       <button
         type="button"
-        className="flex items-center gap-2 w-full px-4 py-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground transition-colors"
+        className="flex items-center gap-2 w-full px-4 py-2.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
       >
@@ -344,7 +325,7 @@ function JudgmentPacks({
       </button>
 
       {open && (
-        <div className="px-4 pb-4 flex flex-col gap-4">
+        <div className="px-4 pb-4 flex flex-col gap-4 border-t border-border pt-3">
           {/* Leadership exclude pack */}
           <div className="flex items-start justify-between gap-3">
             <div>
@@ -360,14 +341,16 @@ function JudgmentPacks({
               role="switch"
               aria-checked={leadershipActive}
               onClick={toggleLeadership}
-              className={`shrink-0 mt-0.5 h-5 w-9 rounded-full transition-colors ${
-                leadershipActive ? "bg-primary" : "bg-muted-foreground/30"
-              }`}
+              className={cn(
+                "shrink-0 mt-0.5 h-5 w-9 rounded-full transition-colors",
+                leadershipActive ? "bg-primary" : "bg-muted-foreground/30",
+              )}
             >
               <span
-                className={`block h-4 w-4 rounded-full bg-white shadow transition-transform ${
-                  leadershipActive ? "translate-x-4" : "translate-x-0.5"
-                }`}
+                className={cn(
+                  "block h-4 w-4 rounded-full bg-white shadow transition-transform",
+                  leadershipActive ? "translate-x-4" : "translate-x-0.5",
+                )}
               />
             </button>
           </div>
@@ -426,14 +409,16 @@ function JudgmentPacks({
               role="switch"
               aria-checked={careerInterestActive}
               onClick={toggleCareerInterest}
-              className={`shrink-0 mt-0.5 h-5 w-9 rounded-full transition-colors ${
-                careerInterestActive ? "bg-primary" : "bg-muted-foreground/30"
-              }`}
+              className={cn(
+                "shrink-0 mt-0.5 h-5 w-9 rounded-full transition-colors",
+                careerInterestActive ? "bg-primary" : "bg-muted-foreground/30",
+              )}
             >
               <span
-                className={`block h-4 w-4 rounded-full bg-white shadow transition-transform ${
-                  careerInterestActive ? "translate-x-4" : "translate-x-0.5"
-                }`}
+                className={cn(
+                  "block h-4 w-4 rounded-full bg-white shadow transition-transform",
+                  careerInterestActive ? "translate-x-4" : "translate-x-0.5",
+                )}
               />
             </button>
           </div>
@@ -531,6 +516,8 @@ export function SearchIntentEditor({
     useState<SearchIntentCondition[]>(initialConditions);
   const [unenforceable, setUnenforceable] =
     useState<UnenforcedConstraint[]>(initialUnenforceable);
+  const [activeDisp, setActiveDisp] =
+    useState<SearchIntentDisposition>("require");
 
   const addCondition = (c: SearchIntentCondition) => {
     const key = conditionKey(c);
@@ -543,34 +530,73 @@ export function SearchIntentEditor({
     setConditions((prev) => prev.filter((c) => conditionKey(c) !== key));
   };
 
-  const require = conditions.filter((c) => c.disposition === "require");
-  const prefer = conditions.filter((c) => c.disposition === "prefer");
-  const exclude = conditions.filter((c) => c.disposition === "exclude");
+  const byDisp = (d: SearchIntentDisposition) =>
+    conditions.filter((c) => c.disposition === d);
+
+  const activeConditions = byDisp(activeDisp);
+  const cfg = DISPOSITION_CONFIG[activeDisp];
 
   return (
-    <div className="flex flex-col gap-4">
-      {/* Disposition panels */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-        {(["require", "prefer", "exclude"] as SearchIntentDisposition[]).map(
-          (disp) => (
-            <DispositionPanel
+    <div className="flex flex-col gap-3">
+      {/* Segmented control */}
+      <div className="flex rounded-lg border border-border overflow-hidden bg-card">
+        {DISPOSITIONS.map((disp) => {
+          const dcfg = DISPOSITION_CONFIG[disp];
+          const count = byDisp(disp).length;
+          const isActive = activeDisp === disp;
+          return (
+            <button
               key={disp}
-              disposition={disp}
-              conditions={
-                disp === "require"
-                  ? require
-                  : disp === "prefer"
-                    ? prefer
-                    : exclude
-              }
-              onAdd={addCondition}
-              onRemove={removeCondition}
-            />
-          ),
-        )}
+              type="button"
+              onClick={() => setActiveDisp(disp)}
+              className={cn(
+                "flex-1 flex items-center justify-center gap-1.5 py-2 px-3 text-xs font-medium transition-colors border-r last:border-r-0 border-border",
+                isActive
+                  ? "bg-muted text-foreground"
+                  : "text-muted-foreground hover:text-foreground hover:bg-muted/50",
+              )}
+              aria-pressed={isActive}
+            >
+              {dcfg.label}
+              {count > 0 && (
+                <span
+                  className={cn(
+                    "rounded-full px-1.5 py-0 text-[10px] font-semibold leading-4 min-w-[1.25rem] text-center",
+                    isActive ? dcfg.badgeCls : "bg-muted text-muted-foreground",
+                  )}
+                >
+                  {count}
+                </span>
+              )}
+            </button>
+          );
+        })}
       </div>
 
-      {/* Judgment packs */}
+      {/* Active disposition chip area */}
+      <div
+        className={cn("rounded-lg border p-3 transition-colors", cfg.activeCls)}
+      >
+        {/* Wrapping chip row */}
+        <div className="flex flex-wrap gap-1.5 min-h-[2rem]">
+          {activeConditions.length === 0 && (
+            <span className="text-xs text-muted-foreground/60 italic">
+              No {cfg.label.toLowerCase()} conditions yet
+            </span>
+          )}
+          {activeConditions.map((c) => (
+            <Chip
+              key={conditionKey(c)}
+              condition={c}
+              onRemove={() => removeCondition(conditionKey(c))}
+            />
+          ))}
+        </div>
+        {/* Add chip input tied to active disposition */}
+        <AddChipInput disposition={activeDisp} onAdd={addCondition} />
+      </div>
+
+      {/* Judgment packs — collapsed by default */}
       <JudgmentPacks
         conditions={conditions}
         unenforceable={unenforceable}
@@ -582,8 +608,8 @@ export function SearchIntentEditor({
         }
       />
 
-      {/* Actions */}
-      <div className="flex items-center gap-2 pt-1">
+      {/* Actions — sticky bottom */}
+      <div className="sticky bottom-0 z-10 flex items-center gap-2 pt-2 pb-1 bg-background/95 backdrop-blur-sm">
         <Button
           onClick={() => onSave(conditions, unenforceable)}
           disabled={saving}

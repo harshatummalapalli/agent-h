@@ -6,9 +6,9 @@
 //   seniority                          → seniority/require
 //   location                           → location/require (one chip; recruiter can split)
 //   years_experience_{min,max}         → experience_range/require
-//   required_skills + must_have_keywords → skill/require  (deduplicated)
-//   nice_to_have_keywords              → skill/prefer
-//   preference_tiers[*].keywords       → skill/prefer
+//   required_skills + must_have_keywords → skill/require  (deduplicated, normalized)
+//   nice_to_have_keywords              → skill/prefer     (normalized)
+//   preference_tiers[*].keywords       → skill/prefer     (normalized)
 //   excluded_companies                 → company/exclude
 //   exclusion_keywords                 → title/exclude
 //
@@ -16,6 +16,167 @@
 // packs" only a recruiter can toggle intentionally.
 
 import type { SearchIntentCondition } from "../types";
+
+// ─── Skill normalizer ─────────────────────────────────────────────────────────
+//
+// Defense-in-depth layer that runs AFTER the LLM parse. Ensures skill tokens
+// are atomic even when the model returns prose fragments like
+// "Enterprise applications with C#/.NET" or "Python programming".
+//
+// Primary defense is the system prompt in parse-job-description/index.ts;
+// this function is the second layer so even cached / old parse results stay clean.
+
+// Common filler prefixes that wrap a skill token.
+const FILLER_PREFIX_RE =
+  /^(?:knowledge of|familiarity with|experience (?:with|in)|proficiency in|working knowledge of|understanding of|expertise in|background in|exposure to|skilled in|experience and knowledge of)\s+/i;
+
+// Common filler suffixes that follow a skill token.
+const FILLER_SUFFIX_RE =
+  /\s+(?:programming|development|experience|knowledge|skills?|expertise|proficiency|background|applications?|technologies?|tools?|frameworks?|engineering|concepts?|principles?)\b.*$/i;
+
+// YoE phrases and soft skills — any token matching these is dropped entirely.
+const YOE_OR_PROSE_RE =
+  /\b\d+\+?\s*(?:years?|yrs?)\b|^(?:bachelor'?s|master'?s|phd|mba|degree\b)|excellent\s+communication|team\s+player|problem[\s-]solv|strong\s+(?:written|verbal|oral|interpersonal)/i;
+
+// Placeholder values the LLM should not emit but sometimes does.
+const PLACEHOLDER_RE =
+  /^(?:<unknown>|unknown|n\/a|n\.a\.|tbd|tba|none|not\s+(?:specified|stated|mentioned|applicable)|\?+|-)$/i;
+
+/** Heuristic: is this short string likely a technology / tool name? */
+function looksLikeTechToken(s: string): boolean {
+  if (!s || s.length > 40) return false;
+  const words = s.trim().split(/\s+/);
+  if (words.length > 3) return false;
+  // Positive signals: camelCase, special chars common in tech names, version digits, all-caps acronym
+  if (/[A-Z][a-z]|[a-z][A-Z]|[.#+@]|\d|^[A-Z]{2,}$/.test(s)) return true;
+  // Short single word (≤ 12 chars) is likely a tool/language name
+  if (words.length === 1 && s.length <= 12) return true;
+  // Two short words like "SQL Server", "Spring Boot", "Node js"
+  if (words.length === 2 && words.every((w) => w.length <= 10)) return true;
+  return false;
+}
+
+/**
+ * Strip prose filler context around a technology name.
+ *
+ * Examples:
+ *   "Enterprise applications with C#/.NET" → "C#/.NET"
+ *   "familiarity with Kubernetes"          → "Kubernetes"
+ *   "Python programming"                   → "Python"  (suffix stripped later)
+ */
+function stripFillerContext(token: string): string {
+  // Pattern: "[one or more prose words] with <tech>" — extract the tech part.
+  // Covers: "Enterprise applications with C#/.NET", "built with React", "familiarity with X"
+  const withMatch = token.match(/^(?:\w[\w-]*\s+)+\bwith\s+(.+)$/i);
+  if (withMatch) {
+    return withMatch[1].trim();
+  }
+  return token
+    .replace(FILLER_PREFIX_RE, "")
+    .replace(FILLER_SUFFIX_RE, "")
+    .trim();
+}
+
+/**
+ * Split a (possibly compound) token into atomic skill tokens.
+ *
+ * Splits on:
+ *   /   → always (e.g. "C#/.NET", "React/Vue/Angular")
+ *   or  → when at least one side looks like a tech token
+ *   and → only when ALL sides look like tech tokens (avoids splitting "communication and leadership")
+ */
+function splitAlternatives(token: string): string[] {
+  // Slash split (not URLs)
+  if (token.includes("/") && !token.startsWith("http")) {
+    const parts = token
+      .split("/")
+      .map((p) => p.trim())
+      .filter(Boolean);
+    if (parts.length > 1 && parts.every(looksLikeTechToken)) {
+      return parts;
+    }
+  }
+
+  // " or " split — apply when at least one side is a clear tech token
+  const orParts = token
+    .split(/\s+or\s+/i)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (orParts.length > 1 && orParts.some(looksLikeTechToken)) {
+    return orParts;
+  }
+
+  // " and " split — conservative; require ALL sides to look like tech tokens
+  const andParts = token
+    .split(/\s+and\s+/i)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (andParts.length > 1 && andParts.every(looksLikeTechToken)) {
+    return andParts;
+  }
+
+  return [token];
+}
+
+/**
+ * Normalize a raw array of skill strings into atomic, deduplicated skill tokens.
+ *
+ * - Splits "C#/.NET", "Python or Java", "React and Vue" into separate tokens
+ * - Strips filler words: "programming", "development", "knowledge of", etc.
+ * - Drops YoE phrases ("5+ years experience"), soft skills, degree requirements
+ * - Drops placeholder values ("<UNKNOWN>", "N/A", "TBD", etc.)
+ * - Deduplicates case-insensitively
+ */
+export function normalizeSkillTokens(raw: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const rawToken of raw) {
+    const trimmed = rawToken.trim();
+    if (!trimmed) continue;
+
+    // Drop YoE / prose phrases before splitting
+    if (YOE_OR_PROSE_RE.test(trimmed)) continue;
+
+    // Drop placeholder values
+    if (PLACEHOLDER_RE.test(trimmed)) continue;
+
+    // Strip filler context, then split compound tokens
+    const extracted = stripFillerContext(trimmed);
+    const parts = splitAlternatives(extracted);
+
+    for (const part of parts) {
+      // Apply filler stripping to each split part too (defensive)
+      const cleaned = part
+        .replace(FILLER_PREFIX_RE, "")
+        .replace(FILLER_SUFFIX_RE, "")
+        .trim();
+
+      if (!cleaned) continue;
+      if (YOE_OR_PROSE_RE.test(cleaned)) continue;
+      if (PLACEHOLDER_RE.test(cleaned)) continue;
+
+      const key = cleaned.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      result.push(cleaned);
+    }
+  }
+
+  return result;
+}
+
+// ─── Location guard ───────────────────────────────────────────────────────────
+
+// Values the LLM may return for an unknown location — skip chip creation for these.
+const UNKNOWN_LOCATION_RE =
+  /^(?:<unknown>|unknown|n\/a|n\.a\.|tbd|tba|none|not\s+(?:specified|stated|mentioned|applicable|available)|\?+|-)$/i;
+
+function isUnknownLocation(loc: string): boolean {
+  return UNKNOWN_LOCATION_RE.test(loc.trim());
+}
+
+// ─── Main converter ───────────────────────────────────────────────────────────
 
 export type ParsedBriefInput = {
   title?: string;
@@ -59,11 +220,11 @@ export function parsedBriefToConditions(
     });
   }
 
-  // Location — single chip; split on " / " if multiple cities are joined
-  if (brief.location?.trim()) {
+  // Location — skip unknown/placeholder values; split on " / " if multiple cities
+  if (brief.location?.trim() && !isUnknownLocation(brief.location)) {
     const parts = brief.location.split(/\s*\/\s*/);
     for (const part of parts) {
-      if (part.trim()) {
+      if (part.trim() && !isUnknownLocation(part)) {
         add({ category: "location", disposition: "require", value: part });
       }
     }
@@ -84,40 +245,40 @@ export function parsedBriefToConditions(
     add({ category: "experience_range", disposition: "require", value });
   }
 
-  // required_skills → skill/require
+  // required_skills → skill/require (normalized)
   const seenSkillRequire = new Set<string>();
-  for (const s of brief.required_skills ?? []) {
-    const v = s.trim().toLowerCase();
-    if (v && !seenSkillRequire.has(v)) {
+  for (const s of normalizeSkillTokens(brief.required_skills ?? [])) {
+    const v = s.toLowerCase();
+    if (!seenSkillRequire.has(v)) {
       seenSkillRequire.add(v);
       add({ category: "skill", disposition: "require", value: s });
     }
   }
 
-  // must_have_keywords → skill/require (deduplicate against required_skills)
-  for (const kw of brief.must_have_keywords ?? []) {
-    const v = kw.trim().toLowerCase();
-    if (v && !seenSkillRequire.has(v)) {
+  // must_have_keywords → skill/require (normalized, deduplicate against required_skills)
+  for (const kw of normalizeSkillTokens(brief.must_have_keywords ?? [])) {
+    const v = kw.toLowerCase();
+    if (!seenSkillRequire.has(v)) {
       seenSkillRequire.add(v);
       add({ category: "skill", disposition: "require", value: kw });
     }
   }
 
-  // nice_to_have_keywords → skill/prefer
+  // nice_to_have_keywords → skill/prefer (normalized)
   const seenSkillPrefer = new Set<string>();
-  for (const kw of brief.nice_to_have_keywords ?? []) {
-    const v = kw.trim().toLowerCase();
-    if (v && !seenSkillPrefer.has(v)) {
+  for (const kw of normalizeSkillTokens(brief.nice_to_have_keywords ?? [])) {
+    const v = kw.toLowerCase();
+    if (!seenSkillPrefer.has(v)) {
       seenSkillPrefer.add(v);
       add({ category: "skill", disposition: "prefer", value: kw });
     }
   }
 
-  // preference_tiers → skill/prefer (secondary tiers)
+  // preference_tiers → skill/prefer (normalized)
   for (const tier of brief.preference_tiers ?? []) {
-    for (const kw of tier.keywords ?? []) {
-      const v = kw.trim().toLowerCase();
-      if (v && !seenSkillPrefer.has(v)) {
+    for (const kw of normalizeSkillTokens(tier.keywords ?? [])) {
+      const v = kw.toLowerCase();
+      if (!seenSkillPrefer.has(v)) {
         seenSkillPrefer.add(v);
         add({ category: "skill", disposition: "prefer", value: kw });
       }

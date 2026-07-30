@@ -1,5 +1,117 @@
 import { describe, it, expect } from "vitest";
-import { parsedBriefToConditions } from "./parsedBriefToConditions";
+import {
+  parsedBriefToConditions,
+  normalizeSkillTokens,
+} from "./parsedBriefToConditions";
+
+// ─── normalizeSkillTokens ─────────────────────────────────────────────────────
+
+describe("normalizeSkillTokens", () => {
+  it("passes through clean atomic tokens unchanged", () => {
+    expect(normalizeSkillTokens(["Python", "React", "AWS"])).toEqual([
+      "Python",
+      "React",
+      "AWS",
+    ]);
+  });
+
+  it("splits C#/.NET into separate tokens", () => {
+    expect(normalizeSkillTokens(["C#/.NET"])).toEqual(["C#", ".NET"]);
+  });
+
+  it("splits compound prose phrase with tech alternatives via slash", () => {
+    // Key Harsha feedback example
+    expect(
+      normalizeSkillTokens(["Enterprise applications with C#/.NET"]),
+    ).toEqual(["C#", ".NET"]);
+  });
+
+  it("splits X or Y when both sides look like tech tokens", () => {
+    const result = normalizeSkillTokens(["Python or Java"]);
+    expect(result).toContain("Python");
+    expect(result).toContain("Java");
+  });
+
+  it("splits X and Y when both sides look like tech tokens", () => {
+    const result = normalizeSkillTokens(["React and Vue"]);
+    expect(result).toContain("React");
+    expect(result).toContain("Vue");
+  });
+
+  it("handles SQL Server or relational databases — keeps at least SQL Server", () => {
+    const result = normalizeSkillTokens(["SQL Server or relational databases"]);
+    expect(result).toContain("SQL Server");
+  });
+
+  it("strips 'programming' suffix — Python programming → Python", () => {
+    expect(normalizeSkillTokens(["Python programming"])).toEqual(["Python"]);
+  });
+
+  it("strips 'development' suffix — ASP.NET Core development → ASP.NET Core", () => {
+    expect(normalizeSkillTokens(["ASP.NET Core development"])).toEqual([
+      "ASP.NET Core",
+    ]);
+  });
+
+  it("strips 'knowledge of' prefix", () => {
+    expect(normalizeSkillTokens(["knowledge of Kubernetes"])).toEqual([
+      "Kubernetes",
+    ]);
+  });
+
+  it("strips 'familiarity with' prefix", () => {
+    expect(normalizeSkillTokens(["familiarity with Docker"])).toEqual([
+      "Docker",
+    ]);
+  });
+
+  it("drops YoE phrases — '5+ years software development experience'", () => {
+    expect(
+      normalizeSkillTokens(["5+ years software development experience"]),
+    ).toEqual([]);
+  });
+
+  it("drops '3-5 years backend experience'", () => {
+    expect(normalizeSkillTokens(["3-5 years backend experience"])).toEqual([]);
+  });
+
+  it("drops degree requirements", () => {
+    expect(
+      normalizeSkillTokens(["Bachelor's degree in Computer Science"]),
+    ).toEqual([]);
+  });
+
+  it("drops placeholder values — <UNKNOWN>", () => {
+    expect(normalizeSkillTokens(["<UNKNOWN>"])).toEqual([]);
+  });
+
+  it("drops placeholder values — N/A", () => {
+    expect(normalizeSkillTokens(["N/A"])).toEqual([]);
+  });
+
+  it("drops placeholder values — TBD", () => {
+    expect(normalizeSkillTokens(["TBD"])).toEqual([]);
+  });
+
+  it("deduplicates case-insensitively", () => {
+    const result = normalizeSkillTokens(["Python", "python", "PYTHON"]);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toBe("Python");
+  });
+
+  it("drops empty and blank tokens", () => {
+    expect(normalizeSkillTokens(["", "  ", "Python"])).toEqual(["Python"]);
+  });
+
+  it("handles slash split with three alternatives", () => {
+    const result = normalizeSkillTokens(["React/Vue/Angular"]);
+    expect(result).toContain("React");
+    expect(result).toContain("Vue");
+    expect(result).toContain("Angular");
+  });
+});
+
+// ─── parsedBriefToConditions ──────────────────────────────────────────────────
 
 describe("parsedBriefToConditions", () => {
   it("maps title to title/require", () => {
@@ -35,6 +147,26 @@ describe("parsedBriefToConditions", () => {
     expect(locs).toHaveLength(2);
     expect(locs[0].value).toBe("Delhi");
     expect(locs[1].value).toBe("Mumbai");
+  });
+
+  it("skips <UNKNOWN> location — no location chip", () => {
+    const result = parsedBriefToConditions({ location: "<UNKNOWN>" });
+    expect(result.filter((c) => c.category === "location")).toHaveLength(0);
+  });
+
+  it("skips 'unknown' location (case-insensitive)", () => {
+    const result = parsedBriefToConditions({ location: "unknown" });
+    expect(result.filter((c) => c.category === "location")).toHaveLength(0);
+  });
+
+  it("skips 'N/A' location", () => {
+    const result = parsedBriefToConditions({ location: "N/A" });
+    expect(result.filter((c) => c.category === "location")).toHaveLength(0);
+  });
+
+  it("skips 'TBD' location", () => {
+    const result = parsedBriefToConditions({ location: "TBD" });
+    expect(result.filter((c) => c.category === "location")).toHaveLength(0);
   });
 
   it("maps years_experience_min/max range", () => {
@@ -75,6 +207,48 @@ describe("parsedBriefToConditions", () => {
       (c) => c.category === "skill" && c.disposition === "require",
     );
     expect(skills.map((c) => c.value)).toEqual(["React", "TypeScript"]);
+  });
+
+  it("normalizes C#/.NET compound in required_skills", () => {
+    const result = parsedBriefToConditions({
+      required_skills: ["C#/.NET"],
+    });
+    const skills = result
+      .filter((c) => c.category === "skill" && c.disposition === "require")
+      .map((c) => c.value);
+    expect(skills).toContain("C#");
+    expect(skills).toContain(".NET");
+  });
+
+  it("normalizes prose phrase with tech alternatives", () => {
+    const result = parsedBriefToConditions({
+      required_skills: ["Enterprise applications with C#/.NET"],
+    });
+    const skills = result
+      .filter((c) => c.category === "skill" && c.disposition === "require")
+      .map((c) => c.value);
+    expect(skills).toContain("C#");
+    expect(skills).toContain(".NET");
+    // Should not contain the raw prose phrase
+    expect(skills).not.toContain("Enterprise applications with C#/.NET");
+  });
+
+  it("drops YoE phrase from required_skills", () => {
+    const result = parsedBriefToConditions({
+      required_skills: ["5+ years software development experience"],
+    });
+    expect(result.filter((c) => c.category === "skill")).toHaveLength(0);
+  });
+
+  it("strips 'programming' suffix from skill tokens", () => {
+    const result = parsedBriefToConditions({
+      required_skills: ["Python programming"],
+    });
+    const skills = result
+      .filter((c) => c.category === "skill" && c.disposition === "require")
+      .map((c) => c.value);
+    expect(skills).toContain("Python");
+    expect(skills).not.toContain("Python programming");
   });
 
   it("deduplicates must_have_keywords against required_skills (case-insensitive)", () => {

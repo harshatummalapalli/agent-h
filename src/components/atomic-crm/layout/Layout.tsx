@@ -12,7 +12,10 @@ export const Layout = ({ children }: { children: ReactNode }) => {
   return (
     <>
       <AppShell>
-        <main className="flex-1 overflow-auto" id="main-content">
+        <main
+          className="flex-1 min-h-0 overflow-hidden flex flex-col"
+          id="main-content"
+        >
           <ErrorBoundary FallbackComponent={Error}>
             <Suspense
               fallback={<Skeleton className="h-12 w-12 rounded-full m-6" />}

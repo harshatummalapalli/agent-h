@@ -16,11 +16,14 @@ export const AgentHShell = ({
 }: AgentHShellProps) => {
   return (
     <div
-      className="ah-scope"
+      className="ah-scope h-full min-h-0"
       style={{
         display: "grid",
-        gridTemplateRows: commandBar ? "auto 1fr auto" : "auto 1fr",
-        minHeight: "calc(100dvh - 8rem)",
+        gridTemplateRows: commandBar
+          ? "auto minmax(0, 1fr) auto"
+          : "auto minmax(0, 1fr)",
+        height: "100%",
+        maxHeight: "100%",
       }}
     >
       <ContextStrip context={context} />

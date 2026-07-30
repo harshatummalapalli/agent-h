@@ -49,7 +49,13 @@ export const CommandBar = ({
 
   return (
     <div
-      style={{ padding: "12px 22px 16px", flexShrink: 0, position: "relative" }}
+      style={{
+        padding: "12px 22px 16px",
+        flexShrink: 0,
+        position: "relative",
+        borderTop: "1px solid var(--ah-border)",
+        background: "var(--background)",
+      }}
     >
       {showSlashMenu && slashActions.length > 0 && (
         <div

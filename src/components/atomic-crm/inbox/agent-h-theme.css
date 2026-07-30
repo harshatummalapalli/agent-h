@@ -57,7 +57,8 @@
 .ah-scope {
   position: relative;
   width: 100%;
-  min-height: calc(100dvh - 8rem);
+  min-height: 0;
+  height: 100%;
   overflow: visible;
   background: var(--ah-bg-0);
 }

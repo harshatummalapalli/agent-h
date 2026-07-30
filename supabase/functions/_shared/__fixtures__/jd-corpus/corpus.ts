@@ -278,4 +278,77 @@ export const JD_CORPUS: CorpusFixture[] = [
       filterHas: [{ field: "basic_profile.location.country", type: "=" }],
     },
   },
+
+  // ── 13: Company exclude survives pipeline (P0 bug fix regression) ──────────
+  // Verified live bug: Cognizant appeared after explicit hard-exclude.
+  // Excludes routed through company/exclude must produce a must_not filter
+  // on current_employer_company_name in compiled output.
+  {
+    name: "13-company-exclude-survives-pipeline",
+    conditions: [
+      { category: "title", disposition: "require", value: "Software Engineer" },
+      { category: "company", disposition: "exclude", value: "Cognizant" },
+      { category: "company", disposition: "exclude", value: "TCS" },
+    ],
+    invariants: {
+      hasFilters: true,
+      unenforceableCount: 0,
+      // Both company excludes must appear as not-contains on the employer field.
+      filterHas: [
+        {
+          field: "experience.employment_details.current.company_name",
+          type: "(!)",
+        },
+      ],
+    },
+  },
+
+  // ── 14: Title exclude survives pipeline ────────────────────────────────────
+  // title/exclude conditions must produce a must_not filter preventing
+  // candidates whose title matches the excluded keyword from being returned.
+  {
+    name: "14-title-exclude-survives-pipeline",
+    conditions: [
+      { category: "title", disposition: "require", value: "Data Scientist" },
+      { category: "title", disposition: "exclude", value: "Manager" },
+    ],
+    invariants: {
+      hasFilters: true,
+      unenforceableCount: 0,
+    },
+  },
+
+  // ── 15: Multi-location: SF + Austin → two city chips (P0 Bug 2 regression) ─
+  // "San Francisco, Austin" must produce two separate location/require conditions
+  // and thus two city filters, not zero-results from a single mangled string.
+  {
+    name: "15-multi-location-sf-austin",
+    conditions: [
+      { category: "title", disposition: "require", value: "Software Engineer" },
+      { category: "location", disposition: "require", value: "San Francisco" },
+      { category: "location", disposition: "require", value: "Austin" },
+    ],
+    invariants: {
+      hasFilters: true,
+      unenforceableCount: 0,
+      filterFieldsInclude: ["basic_profile.location.city"],
+    },
+  },
+
+  // ── 16: remote other/require does not produce a broken city filter ─────────
+  // When the only location signal is other/require:remote, no city filter must
+  // be generated (it would zero out results by filtering on a garbage city value).
+  // The 'other' category routes to unenforceable_constraints (count: 1).
+  {
+    name: "16-remote-only-no-city-filter",
+    conditions: [
+      { category: "title", disposition: "require", value: "Backend Engineer" },
+      { category: "other", disposition: "require", value: "remote", note: "remote-ok flag" },
+    ],
+    invariants: {
+      hasFilters: true,
+      unenforceableCount: 1,
+      filterFieldsExclude: ["basic_profile.location.city"],
+    },
+  },
 ];

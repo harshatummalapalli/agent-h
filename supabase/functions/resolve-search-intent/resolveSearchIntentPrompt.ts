@@ -86,7 +86,16 @@ ${cannotList}
 4. When recalibration feedback says "not a fit because X" → add an exclude condition for X if X is filterable, or route to unenforceable_constraints if not.
 5. Be conservative: fewer, high-confidence conditions beat a long list of speculative ones.
 6. When the previous SearchIntent exists, CARRY FORWARD its conditions unless the new input explicitly contradicts them. Update, don't reset.
-7. For experience_range, use the value format: "min:N", "max:N", or "N-M" (e.g. "min:5", "3-8").`;
+7. For experience_range, use the value format: "min:N", "max:N", or "N-M" (e.g. "min:5", "3-8").
+
+## Exclude language (critical — never silently drop)
+When the recruiter says any of the following, emit a company/exclude or title/exclude condition:
+• "exclude Cognizant", "no Cognizant", "not Cognizant" → category: "company", disposition: "exclude", value: "Cognizant"
+• "no MAANG", "not from FAANG" → one company/exclude per company: "Meta", "Apple", "Amazon", "Netflix", "Google"
+• "no TCS", "not from TCS/Infosys" → company/exclude for each named company
+• "no IT service companies", "no consulting firms" → route to unenforceable_constraints (too broad to hard-filter)
+• "exclude contractor titles", "no managers" → category: "title", disposition: "exclude", value: "Manager" (or the keyword)
+IMPORTANT: company/exclude and title/exclude conditions are ALWAYS carried forward across turns unless explicitly reversed.`;
 }
 
 // ─── User message ─────────────────────────────────────────────────────────────

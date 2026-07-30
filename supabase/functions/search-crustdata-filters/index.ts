@@ -24,6 +24,7 @@ import * as jose from "jsr:@panva/jose@6";
 import { validateAndAssembleIntent } from "../_shared/crustdataIntentValidator.ts";
 import { makeInitialIntent } from "../_shared/searchIntent.ts";
 import type { SearchIntentCondition } from "../_shared/searchIntent.ts";
+import { applyExcludeFilter } from "../_shared/excludePostFilter.ts";
 import {
   normalizeCrustdataProfile,
   type RawCalibrationCandidate,
@@ -316,9 +317,13 @@ Deno.serve(async (req: Request) => {
   }
 
   const profiles = crustdataResponse.profiles ?? [];
-  const candidates: RawCalibrationCandidate[] = profiles.map(
+  const rawCandidates: RawCalibrationCandidate[] = profiles.map(
     normalizeCrustdataProfile,
   );
+  // Defense-in-depth: re-apply exclude conditions after Crustdata response.
+  // conditions[] already contains any exclude conditions the recruiter set —
+  // filter here so exclude failures at the query layer don't reach the UI.
+  const candidates = applyExcludeFilter(rawCandidates, conditions);
 
   return jsonResponse({
     candidates,

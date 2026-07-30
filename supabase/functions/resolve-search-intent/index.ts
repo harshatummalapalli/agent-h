@@ -153,12 +153,26 @@ async function writeIntentTurn(
 
 // ─── Persist updated intent to deals ─────────────────────────────────────────
 // Rides the caller's JWT — RLS blocks cross-tenant writes automatically.
+//
+// Also back-fills flat brief columns (excluded_companies, exclusion_keywords)
+// derived from exclude conditions so source-candidates-discovery — which reads
+// those flat columns — always sees up-to-date excludes. Without this backfill,
+// conversational "exclude Cognizant" updates SearchIntent but leaves the flat
+// columns empty, causing the discovery query to silently ignore the exclusion.
 
 async function persistIntent(
   dealId: number,
   record: SearchIntentRecord,
   authHeader: string,
 ): Promise<void> {
+  const conditions = record.current.conditions;
+  const excludedCompanies = conditions
+    .filter((c) => c.category === "company" && c.disposition === "exclude")
+    .map((c) => c.value);
+  const exclusionKeywords = conditions
+    .filter((c) => c.category === "title" && c.disposition === "exclude")
+    .map((c) => c.value);
+
   await fetch(`${SUPABASE_URL}/rest/v1/deals?id=eq.${dealId}`, {
     method: "PATCH",
     headers: {
@@ -167,7 +181,16 @@ async function persistIntent(
       Authorization: authHeader,
       Prefer: "return=minimal",
     },
-    body: JSON.stringify({ role_brief_search_intent: record }),
+    body: JSON.stringify({
+      role_brief_search_intent: record,
+      // Back-fill flat columns so discovery always reads current excludes.
+      ...(excludedCompanies.length > 0
+        ? { excluded_companies: excludedCompanies }
+        : {}),
+      ...(exclusionKeywords.length > 0
+        ? { exclusion_keywords: exclusionKeywords }
+        : {}),
+    }),
   });
 }
 

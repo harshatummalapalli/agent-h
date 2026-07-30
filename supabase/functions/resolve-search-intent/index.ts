@@ -173,6 +173,9 @@ async function persistIntent(
     .filter((c) => c.category === "title" && c.disposition === "exclude")
     .map((c) => c.value);
 
+  // Always overwrite flat exclude columns (even when empty arrays) so a
+  // "remove all excludes" update clears the previous values rather than
+  // leaving stale company/keyword excludes in place.
   await fetch(`${SUPABASE_URL}/rest/v1/deals?id=eq.${dealId}`, {
     method: "PATCH",
     headers: {
@@ -183,13 +186,8 @@ async function persistIntent(
     },
     body: JSON.stringify({
       role_brief_search_intent: record,
-      // Back-fill flat columns so discovery always reads current excludes.
-      ...(excludedCompanies.length > 0
-        ? { excluded_companies: excludedCompanies }
-        : {}),
-      ...(exclusionKeywords.length > 0
-        ? { exclusion_keywords: exclusionKeywords }
-        : {}),
+      excluded_companies: excludedCompanies,
+      exclusion_keywords: exclusionKeywords,
     }),
   });
 }

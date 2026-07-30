@@ -11,6 +11,7 @@ import type { QueryClient } from "@tanstack/react-query";
 
 import type { CrmDataProvider } from "../providers/types";
 import type { Identifier } from "ra-core";
+import type { VersionedSearchIntent, SearchIntentCondition } from "../types";
 import {
   initialSourcingSteps,
   type SourcingStep,
@@ -18,6 +19,48 @@ import {
 } from "./sourcingThreadTypes";
 
 const makeId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+// ─── intentDelta helpers ──────────────────────────────────────────────────────
+
+function conditionKey(c: SearchIntentCondition): string {
+  return `${c.category}:${c.disposition}:${c.value.toLowerCase()}`;
+}
+
+function formatIntentDelta(
+  prev: VersionedSearchIntent,
+  curr: VersionedSearchIntent,
+): string | null {
+  const prevKeys = new Set(prev.conditions.map(conditionKey));
+  const currKeys = new Set(curr.conditions.map(conditionKey));
+  const added = curr.conditions.filter((c) => !prevKeys.has(conditionKey(c)));
+  const removed = prev.conditions.filter((c) => !currKeys.has(conditionKey(c)));
+
+  if (added.length === 0 && removed.length === 0) return null;
+
+  const parts: string[] = [];
+
+  const byDisp = (conds: SearchIntentCondition[], disp: string) =>
+    conds.filter((c) => c.disposition === disp);
+
+  const fmt = (conds: SearchIntentCondition[], prefix: string) => {
+    if (!conds.length) return null;
+    const vals = conds.map((c) => c.value).join(", ");
+    return `${prefix}: ${vals}`;
+  };
+
+  parts.push(
+    ...[
+      fmt(byDisp(added, "require"), `+${byDisp(added, "require").length} required`),
+      fmt(byDisp(added, "exclude"), `+${byDisp(added, "exclude").length} excluded`),
+      fmt(byDisp(added, "prefer"), `+${byDisp(added, "prefer").length} preferred`),
+      fmt(byDisp(removed, "require"), `-${byDisp(removed, "require").length} required`),
+      fmt(byDisp(removed, "exclude"), `-${byDisp(removed, "exclude").length} excluded`),
+      fmt(byDisp(removed, "prefer"), `-${byDisp(removed, "prefer").length} preferred`),
+    ].filter(Boolean) as string[],
+  );
+
+  return parts.join(" · ") || null;
+}
 
 type UseSourcingThreadArgs = {
   dataProvider: CrmDataProvider;
@@ -156,14 +199,29 @@ export const useSourcingThread = ({
               tone: "info",
             });
           } else {
-            await dataProvider.refineSearchIntent(parsed.deal_id, trimmed);
+            const refineResult = await dataProvider.refineSearchIntent(parsed.deal_id, trimmed);
             queryClient.invalidateQueries({
               queryKey: ["inbox_per_deal_signals"],
             });
+
+            // Show intentDelta: what changed in this refine turn.
+            const record = (refineResult as { record?: { current?: VersionedSearchIntent; history?: VersionedSearchIntent[] } })?.record;
+            const curr = record?.current;
+            const prevHistory = record?.history ?? [];
+            const prev = prevHistory.at(-1);
+            const delta = curr && prev ? formatIntentDelta(prev, curr) : null;
+
+            const recap = curr
+              ? `Require ${curr.conditions.filter((c) => c.disposition === "require").length} · Prefer ${curr.conditions.filter((c) => c.disposition === "prefer").length} · Exclude ${curr.conditions.filter((c) => c.disposition === "exclude").length}`
+              : null;
+
+            const deltaLine = delta ? `\n\nChanged: ${delta}` : "";
+            const recapLine = recap ? `\n${recap}` : "";
+
             appendItem({
               kind: "assistant",
               id: makeId(),
-              text: parsed.explanation,
+              text: `${parsed.explanation}${deltaLine}${recapLine}`,
               tone: "success",
             });
           }

@@ -395,9 +395,15 @@ export async function dispatchJdPasteCommand(
     (parsed.required_skills ?? parsed.must_have_keywords ?? [])
       .slice(0, 5)
       .join(", ") || "not specified";
+  const expMin = parsed.years_experience_min;
+  const expMax = parsed.years_experience_max;
   const expSummary =
-    parsed.years_experience_min != null || parsed.years_experience_max != null
-      ? `${parsed.years_experience_min ?? 0}–${parsed.years_experience_max ?? "∞"} years`
+    expMin != null || expMax != null
+      ? expMax == null
+        ? `${expMin ?? 0}+ years`
+        : expMin == null
+          ? `up to ${expMax} years`
+          : `${expMin}–${expMax} years`
       : "not specified";
   const summaryLines = [
     `**Role:** ${parsed.title || "untitled"}`,

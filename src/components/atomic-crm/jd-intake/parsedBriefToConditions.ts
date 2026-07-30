@@ -263,22 +263,32 @@ export function parsedBriefToConditions(
     add({ category: "experience_range", disposition: "require", value });
   }
 
-  // required_skills → skill/require (normalized)
+  // required_skills + must_have_keywords → skill/require (up to MAX_REQUIRE),
+  // then skill/prefer for the remainder.
+  //
+  // Spec §4.1: "only skills the recruiter explicitly marks, or that the JD
+  // states with unambiguous hard language stay Require; everything else Prefer."
+  // A JD with 6+ stated must-haves → zero-candidate search by default — cap at
+  // MAX_REQUIRE so at most 2-3 are hard filters, the rest rank via prefer.
+  const MAX_REQUIRE = 3;
   const seenSkillRequire = new Set<string>();
-  for (const s of normalizeSkillTokens(brief.required_skills ?? [])) {
-    const v = s.toLowerCase();
-    if (!seenSkillRequire.has(v)) {
-      seenSkillRequire.add(v);
-      add({ category: "skill", disposition: "require", value: s });
-    }
-  }
+  let requireCount = 0;
 
-  // must_have_keywords → skill/require (normalized, deduplicate against required_skills)
-  for (const kw of normalizeSkillTokens(brief.must_have_keywords ?? [])) {
-    const v = kw.toLowerCase();
-    if (!seenSkillRequire.has(v)) {
-      seenSkillRequire.add(v);
-      add({ category: "skill", disposition: "require", value: kw });
+  const allHardSkills = [
+    ...normalizeSkillTokens(brief.required_skills ?? []),
+    ...normalizeSkillTokens(brief.must_have_keywords ?? []),
+  ];
+
+  for (const s of allHardSkills) {
+    const v = s.toLowerCase();
+    if (seenSkillRequire.has(v)) continue;
+    seenSkillRequire.add(v);
+    if (requireCount < MAX_REQUIRE) {
+      add({ category: "skill", disposition: "require", value: s });
+      requireCount++;
+    } else {
+      // Overflow → prefer so the search doesn't zero out.
+      add({ category: "skill", disposition: "prefer", value: s });
     }
   }
 

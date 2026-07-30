@@ -12,7 +12,6 @@ import type {
   Deal,
   DealCandidate,
   DealNote,
-  FilterDraft,
   RAFile,
   Sale,
   SalesFormData,
@@ -2226,7 +2225,7 @@ const getDataProviderWithCustomMethods = () => {
     },
 
     async searchCrustdataFilters(
-      filterDraft: FilterDraft,
+      conditions: SearchIntentCondition[],
       limit?: number,
       dealId?: string,
     ) {
@@ -2243,13 +2242,14 @@ const getDataProviderWithCustomMethods = () => {
         }>;
         compiled_filters: unknown;
         applied_groups: string[];
+        unenforceable?: unknown[];
         total_count: number;
         note?: string;
         error?: string;
       }>("search-crustdata-filters", {
         method: "POST",
         body: {
-          filter_draft: filterDraft,
+          conditions,
           ...(limit ? { limit } : {}),
           ...(dealId ? { deal_id: dealId } : {}),
         },

@@ -40,6 +40,14 @@ const CATEGORY_LABELS: Record<SearchIntentCategory, string> = {
   company: "Company",
   experience_range: "Experience",
   seniority: "Seniority",
+  headcount_range: "Headcount",
+  connections_min: "Min connections",
+  education_school: "School",
+  education_degree: "Degree",
+  education_field: "Field of study",
+  headline_keyword: "Headline",
+  language: "Language",
+  company_industry: "Industry",
   other: "Other",
 };
 
@@ -50,6 +58,14 @@ const CATEGORY_OPTIONS: SearchIntentCategory[] = [
   "company",
   "seniority",
   "experience_range",
+  "headcount_range",
+  "education_school",
+  "education_degree",
+  "education_field",
+  "headline_keyword",
+  "language",
+  "company_industry",
+  "connections_min",
   "other",
 ];
 

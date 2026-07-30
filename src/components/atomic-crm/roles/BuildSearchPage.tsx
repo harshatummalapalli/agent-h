@@ -22,13 +22,13 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import type { Deal, FilterDraft } from "../types";
+import type {
+  Deal,
+  FilterDraft,
+  SearchIntentCondition,
+  VersionedSearchIntent,
+} from "../types";
 import type { CrmDataProvider } from "../providers/types";
-import {
-  intentToDraft,
-  dealBriefToDraft,
-  type DealBriefFields,
-} from "./BuildSearchTab";
 import { CandidateCard } from "./CandidateCard";
 
 // Autocomplete field paths (mirrors crustdataCapabilityManifest CRUSTDATA_FIELDS)
@@ -89,6 +89,239 @@ function isDraftEmpty(draft: FilterDraft): boolean {
     multiEmpty(draft.languages) &&
     !draft.connectionsMin
   );
+}
+
+// ─── Form state ↔ SearchIntentCondition[] helpers ────────────────────────────
+
+/** Convert a VersionedSearchIntent → FilterDraft for the form (replaces intentToDraft). */
+function conditionsToFormDraft(
+  intent: VersionedSearchIntent | null | undefined,
+): FilterDraft {
+  if (!intent) return {};
+  const draft: FilterDraft = {};
+  const titleIncludes: string[] = [];
+  const titleExcludes: string[] = [];
+  const countries: string[] = [];
+  const cities: string[] = [];
+  const skillsRequired: string[] = [];
+  const skillsNiceToHave: string[] = [];
+  const companyExcludes: string[] = [];
+  const schools: string[] = [];
+  const degrees: string[] = [];
+  const fields: string[] = [];
+  const headlineIncludes: string[] = [];
+  const headlineExcludes: string[] = [];
+  const langs: string[] = [];
+  const industries: string[] = [];
+
+  for (const c of intent.conditions) {
+    switch (c.category) {
+      case "title":
+        if (c.disposition === "exclude") titleExcludes.push(c.value);
+        else titleIncludes.push(c.value);
+        break;
+      case "location":
+        if (c.locationKind === "country" || c.note === "country") {
+          countries.push(c.value);
+        } else {
+          cities.push(c.value);
+        }
+        break;
+      case "seniority":
+        if (!draft.currentSeniorities) draft.currentSeniorities = [];
+        draft.currentSeniorities.push(c.value);
+        break;
+      case "skill":
+        if (c.disposition === "prefer") skillsNiceToHave.push(c.value);
+        else skillsRequired.push(c.value);
+        break;
+      case "experience_range": {
+        const minM = c.value.match(/min:(\d+)/i) || c.value.match(/^(\d+)-/);
+        const maxM = c.value.match(/max:(\d+)/i) || c.value.match(/-(\d+)$/);
+        if (minM) draft.yoeMin = Number(minM[1]);
+        if (maxM) draft.yoeMax = Number(maxM[1]);
+        break;
+      }
+      case "company":
+        if (c.disposition === "exclude") companyExcludes.push(c.value);
+        break;
+      case "headcount_range": {
+        const minM = c.value.match(/min:(\d+)/i);
+        const maxM = c.value.match(/max:(\d+)/i);
+        if (minM) draft.headcountMin = Number(minM[1]);
+        if (maxM) draft.headcountMax = Number(maxM[1]);
+        break;
+      }
+      case "education_school":
+        schools.push(c.value);
+        break;
+      case "education_degree":
+        degrees.push(c.value);
+        break;
+      case "education_field":
+        fields.push(c.value);
+        break;
+      case "headline_keyword":
+        if (c.disposition === "exclude") headlineExcludes.push(c.value);
+        else headlineIncludes.push(c.value);
+        break;
+      case "language":
+        langs.push(c.value);
+        break;
+      case "company_industry":
+        industries.push(c.value);
+        break;
+      case "connections_min":
+        draft.connectionsMin = Number(c.value);
+        break;
+    }
+  }
+
+  if (titleIncludes.length) draft.currentTitlesInclude = titleIncludes;
+  if (titleExcludes.length) draft.currentTitlesExclude = titleExcludes;
+  if (countries.length) draft.locationCountries = countries;
+  if (cities.length) draft.locationCities = cities;
+  if (skillsRequired.length) draft.skillsRequired = skillsRequired;
+  if (skillsNiceToHave.length) draft.skillsNiceToHave = skillsNiceToHave;
+  if (companyExcludes.length) draft.currentCompaniesExclude = companyExcludes;
+  if (schools.length) draft.educationSchools = schools;
+  if (degrees.length) draft.educationDegrees = degrees;
+  if (fields.length) draft.educationFieldsOfStudy = fields;
+  if (headlineIncludes.length) draft.headlineKeywordsInclude = headlineIncludes;
+  if (headlineExcludes.length) draft.headlineKeywordsExclude = headlineExcludes;
+  if (langs.length) draft.languages = langs;
+  if (industries.length) draft.companyIndustries = industries;
+
+  return draft;
+}
+
+/** Convert FilterDraft form state → SearchIntentCondition[] for search/save. */
+function draftToConditions(draft: FilterDraft): SearchIntentCondition[] {
+  const conds: SearchIntentCondition[] = [];
+  const add = (c: SearchIntentCondition) => {
+    if (c.value.trim()) conds.push(c);
+  };
+
+  for (const v of draft.currentTitlesInclude ?? [])
+    add({ category: "title", disposition: "require", value: v });
+  for (const v of draft.currentTitlesExclude ?? [])
+    add({ category: "title", disposition: "exclude", value: v });
+  for (const v of draft.pastTitlesInclude ?? [])
+    add({ category: "title", disposition: "require", value: v, note: "past" });
+  for (const v of draft.locationCountries ?? [])
+    add({
+      category: "location",
+      disposition: "require",
+      value: v,
+      locationKind: "country",
+    });
+  if (draft.locationCountry && !draft.locationCountries?.length)
+    add({
+      category: "location",
+      disposition: "require",
+      value: draft.locationCountry,
+      locationKind: "country",
+    });
+  for (const v of draft.locationCities ?? [])
+    add({
+      category: "location",
+      disposition: "require",
+      value: v,
+      locationKind: "city",
+    });
+  if (draft.locationCity && !draft.locationCities?.length)
+    add({
+      category: "location",
+      disposition: "require",
+      value: draft.locationCity,
+      locationKind: "city",
+    });
+  for (const v of draft.locationStates ?? [])
+    add({
+      category: "location",
+      disposition: "require",
+      value: v,
+      locationKind: "state",
+    });
+  for (const v of draft.skillsRequired ?? [])
+    add({ category: "skill", disposition: "require", value: v });
+  for (const v of draft.skillsNiceToHave ?? [])
+    add({ category: "skill", disposition: "prefer", value: v });
+  for (const v of draft.currentSeniorities ?? [])
+    add({ category: "seniority", disposition: "require", value: v });
+  if (draft.seniority && !draft.currentSeniorities?.length)
+    add({
+      category: "seniority",
+      disposition: "require",
+      value: draft.seniority,
+    });
+  if (draft.yoeMin || draft.yoeMax) {
+    const yoeVal =
+      draft.yoeMin && draft.yoeMax
+        ? `${draft.yoeMin}-${draft.yoeMax}`
+        : draft.yoeMin
+          ? `min:${draft.yoeMin}`
+          : `max:${draft.yoeMax}`;
+    if (yoeVal)
+      add({
+        category: "experience_range",
+        disposition: "require",
+        value: yoeVal,
+      });
+  }
+  for (const v of draft.currentCompaniesInclude ?? [])
+    add({ category: "company", disposition: "require", value: v });
+  for (const v of draft.currentCompaniesExclude ?? [])
+    add({ category: "company", disposition: "exclude", value: v });
+  for (const v of draft.pastCompaniesInclude ?? [])
+    add({
+      category: "company",
+      disposition: "require",
+      value: v,
+      note: "past",
+    });
+  for (const v of draft.companyIndustries ?? [])
+    add({ category: "company_industry", disposition: "require", value: v });
+  if (draft.companyHQCountry)
+    add({
+      category: "other",
+      disposition: "require",
+      value: `HQ country: ${draft.companyHQCountry}`,
+    });
+  if (draft.headcountMin || draft.headcountMax) {
+    const hcVal =
+      draft.headcountMin && draft.headcountMax
+        ? `${draft.headcountMin}-${draft.headcountMax}`
+        : draft.headcountMin
+          ? `min:${draft.headcountMin}`
+          : `max:${draft.headcountMax}`;
+    if (hcVal)
+      add({
+        category: "headcount_range",
+        disposition: "require",
+        value: hcVal,
+      });
+  }
+  for (const v of draft.educationSchools ?? [])
+    add({ category: "education_school", disposition: "require", value: v });
+  for (const v of draft.educationDegrees ?? [])
+    add({ category: "education_degree", disposition: "require", value: v });
+  for (const v of draft.educationFieldsOfStudy ?? [])
+    add({ category: "education_field", disposition: "require", value: v });
+  for (const v of draft.headlineKeywordsInclude ?? [])
+    add({ category: "headline_keyword", disposition: "require", value: v });
+  for (const v of draft.headlineKeywordsExclude ?? [])
+    add({ category: "headline_keyword", disposition: "exclude", value: v });
+  for (const v of draft.languages ?? [])
+    add({ category: "language", disposition: "require", value: v });
+  if (draft.connectionsMin)
+    add({
+      category: "connections_min",
+      disposition: "require",
+      value: String(draft.connectionsMin),
+    });
+
+  return conds;
 }
 
 // ─── TagInput ─────────────────────────────────────────────────────────────────
@@ -370,14 +603,23 @@ export function BuildSearchPage() {
   useEffect(() => {
     if (!dealId || !dealRecord || prefillApplied.current) return;
     prefillApplied.current = true;
-    const deal = dealRecord as DealBriefFields;
-    const fromIntent = intentToDraft(deal.role_brief_search_intent?.current);
+    const deal = dealRecord as Deal;
+    const fromIntent = conditionsToFormDraft(
+      deal.role_brief_search_intent?.current,
+    );
     const hasIntent =
       (fromIntent.currentTitlesInclude?.length ?? 0) > 0 ||
       (fromIntent.locationCountries?.length ?? 0) > 0 ||
-      !!fromIntent.locationCountry ||
       (fromIntent.skillsRequired?.length ?? 0) > 0;
-    setDraft(hasIntent ? fromIntent : dealBriefToDraft(deal));
+    if (hasIntent) {
+      setDraft(fromIntent);
+    } else {
+      // Fallback: prefill from flat brief fields if no structured intent exists.
+      const fallback: FilterDraft = {};
+      if ((deal as any).name)
+        fallback.currentTitlesInclude = [(deal as any).name];
+      setDraft(fallback);
+    }
   }, [dealId, dealRecord]);
 
   // Persist draft to localStorage on every change (only when not in deal_id mode)
@@ -392,7 +634,12 @@ export function BuildSearchPage() {
     error,
     reset,
   } = useMutation({
-    mutationFn: () => dataProvider.searchCrustdataFilters(draft, limit, dealId),
+    mutationFn: () =>
+      dataProvider.searchCrustdataFilters(
+        draftToConditions(draft),
+        limit,
+        dealId,
+      ),
     onError: () => {},
   });
 

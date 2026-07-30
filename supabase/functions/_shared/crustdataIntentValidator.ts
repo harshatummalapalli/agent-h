@@ -223,12 +223,15 @@ export function validateAndAssembleIntent(
       }
 
       case "title": {
+        // note="past" → use past title field; default = current title.
+        const titleField =
+          cond.note === "past"
+            ? CRUSTDATA_FIELDS.pastTitle
+            : CRUSTDATA_FIELDS.currentTitle;
         if (isExclude) {
-          assembled.push(
-            buildNotContains(CRUSTDATA_FIELDS.currentTitle, cond.value),
-          );
+          assembled.push(buildNotContains(titleField, cond.value));
         } else {
-          const c = buildContains(CRUSTDATA_FIELDS.currentTitle, cond.value);
+          const c = buildContains(titleField, cond.value);
           if (c) assembled.push(c);
         }
         break;
@@ -268,7 +271,21 @@ export function validateAndAssembleIntent(
       }
 
       case "location": {
-        const resolved = resolveLocation(cond.value);
+        // Honour pre-resolved locationKind if set (populated at parse/edit time),
+        // otherwise call resolveLocation() now. This avoids re-running the
+        // taxonomy lookup for conditions that already carry the resolved kind.
+        const preKind = cond.locationKind; // "country" | "city" | "state" | undefined
+        const resolved = preKind
+          ? (() => {
+              // Treat the value as already-canonical when kind is known.
+              if (preKind === "country")
+                return { kind: "country" as const, canonical: cond.value };
+              if (preKind === "state")
+                return { kind: "city" as const, canonical: cond.value }; // state → city field
+              return { kind: "city" as const, canonical: cond.value };
+            })()
+          : resolveLocation(cond.value);
+
         if (resolved.kind === "unknown") {
           // Unknown location — route to unenforceable rather than sending a
           // broken filter. Caller should also log to unresolved_taxonomy_terms.
@@ -278,39 +295,161 @@ export function validateAndAssembleIntent(
           });
           break;
         }
+
+        // Choose the matching field — previously always city not-contains
+        // regardless of kind (bug fix: India exclude now targets country field).
+        const locationField =
+          resolved.kind === "country"
+            ? CRUSTDATA_FIELDS.locationCountry
+            : preKind === "state"
+              ? CRUSTDATA_FIELDS.locationState
+              : CRUSTDATA_FIELDS.locationCity;
+
         if (isExclude) {
-          // Use the field that matches the resolved kind — previously always
-          // used city not-contains regardless (bug fix: a country exclude like
-          // "India" now checks the country field, not the city field).
-          if (resolved.kind === "country") {
-            assembled.push(
-              buildNotContains(
-                CRUSTDATA_FIELDS.locationCountry,
-                resolved.canonical,
-              ),
-            );
-          } else {
-            assembled.push(
-              buildNotContains(
-                CRUSTDATA_FIELDS.locationCity,
-                resolved.canonical,
-              ),
-            );
-          }
+          assembled.push(buildNotContains(locationField, resolved.canonical));
         } else {
           if (resolved.kind === "country") {
             assembled.push({
-              field: CRUSTDATA_FIELDS.locationCountry,
+              field: locationField,
               type: "=",
               value: resolved.canonical,
             });
           } else {
-            const c = buildContains(
-              CRUSTDATA_FIELDS.locationCity,
-              resolved.canonical,
-            );
+            const c = buildContains(locationField, resolved.canonical);
             if (c) assembled.push(c);
           }
+        }
+        break;
+      }
+
+      case "headcount_range": {
+        const hcMin =
+          cond.value.match(/min:(\d+)/i) || cond.value.match(/^(\d+)-/);
+        const hcMax =
+          cond.value.match(/max:(\d+)/i) || cond.value.match(/-(\d+)$/);
+        if (!hcMin && !hcMax) {
+          unenforceable.push({
+            description: `Headcount range: "${cond.value}"`,
+            reason:
+              "Could not parse headcount range. Use format: 'min:N', 'max:N', or 'N-M'.",
+          });
+        } else {
+          if (hcMin)
+            assembled.push({
+              field: CRUSTDATA_FIELDS.currentCompanyHeadcount,
+              type: "=>",
+              value: Number(hcMin[1]),
+            });
+          if (hcMax)
+            assembled.push({
+              field: CRUSTDATA_FIELDS.currentCompanyHeadcount,
+              type: "=<",
+              value: Number(hcMax[1]),
+            });
+        }
+        break;
+      }
+
+      case "connections_min": {
+        const n = parseInt(cond.value, 10);
+        if (isNaN(n) || n <= 0) {
+          unenforceable.push({
+            description: `Connections min: "${cond.value}"`,
+            reason:
+              "Could not parse connections minimum. Use a positive integer.",
+          });
+        } else {
+          assembled.push({
+            field: CRUSTDATA_FIELDS.connections,
+            type: "=>",
+            value: n,
+          });
+        }
+        break;
+      }
+
+      case "education_school": {
+        if (isExclude) {
+          assembled.push(
+            buildNotContains(CRUSTDATA_FIELDS.educationSchool, cond.value),
+          );
+        } else {
+          const c = buildContains(CRUSTDATA_FIELDS.educationSchool, cond.value);
+          if (c) assembled.push(c);
+        }
+        break;
+      }
+
+      case "education_degree": {
+        if (isExclude) {
+          assembled.push(
+            buildNotContains(CRUSTDATA_FIELDS.educationDegree, cond.value),
+          );
+        } else {
+          const c = buildContains(CRUSTDATA_FIELDS.educationDegree, cond.value);
+          if (c) assembled.push(c);
+        }
+        break;
+      }
+
+      case "education_field": {
+        if (isExclude) {
+          assembled.push(
+            buildNotContains(
+              CRUSTDATA_FIELDS.educationFieldOfStudy,
+              cond.value,
+            ),
+          );
+        } else {
+          const c = buildContains(
+            CRUSTDATA_FIELDS.educationFieldOfStudy,
+            cond.value,
+          );
+          if (c) assembled.push(c);
+        }
+        break;
+      }
+
+      case "headline_keyword": {
+        if (isExclude) {
+          assembled.push(
+            buildNotContains(CRUSTDATA_FIELDS.headline, cond.value),
+          );
+        } else {
+          const c = buildContains(CRUSTDATA_FIELDS.headline, cond.value);
+          if (c) assembled.push(c);
+        }
+        break;
+      }
+
+      case "language": {
+        if (isExclude) {
+          unenforceable.push({
+            description: `Exclude language: "${cond.value}"`,
+            reason:
+              "Crustdata cannot filter out speakers of a specific language — only require.",
+          });
+        } else {
+          const c = buildContains(CRUSTDATA_FIELDS.languages, cond.value);
+          if (c) assembled.push(c);
+        }
+        break;
+      }
+
+      case "company_industry": {
+        if (isExclude) {
+          assembled.push(
+            buildNotContains(
+              CRUSTDATA_FIELDS.currentCompanyIndustries,
+              cond.value,
+            ),
+          );
+        } else {
+          const c = buildContains(
+            CRUSTDATA_FIELDS.currentCompanyIndustries,
+            cond.value,
+          );
+          if (c) assembled.push(c);
         }
         break;
       }

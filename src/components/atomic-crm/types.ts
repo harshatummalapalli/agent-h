@@ -181,6 +181,14 @@ export type SearchIntentCategory =
   | "skill"
   | "experience_range"
   | "location"
+  | "headcount_range"
+  | "connections_min"
+  | "education_school"
+  | "education_degree"
+  | "education_field"
+  | "headline_keyword"
+  | "language"
+  | "company_industry"
   | "other";
 
 export type SearchIntentDisposition = "require" | "exclude" | "prefer";
@@ -190,6 +198,8 @@ export type SearchIntentCondition = {
   disposition: SearchIntentDisposition;
   value: string;
   note?: string;
+  /** For location conditions: resolved kind populated at parse/edit time. */
+  locationKind?: "country" | "city" | "state";
 };
 
 export type UnenforcedConstraint = {

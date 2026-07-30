@@ -3,9 +3,9 @@
 // Powers the "Build search" standalone page. Two modes:
 //
 // MODE: search (default)
-//   Body: { filter_draft: FilterDraft, deal_id?: string, limit?: number }
-//   Response: { candidates, compiled_filters, applied_groups, total_count }
-//   Accepts the full expanded FilterDraft from crustdataFilterCompiler.
+//   Body: { conditions: SearchIntentCondition[], deal_id?: string, limit?: number }
+//   Response: { candidates, compiled_filters, applied_groups, total_count, unenforceable }
+//   Compiles conditions via validateAndAssembleIntent (single canonical compiler).
 //
 // MODE: autocomplete
 //   Body: { mode: "autocomplete", field: string, query: string, limit?: number }
@@ -21,10 +21,9 @@
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import * as jose from "jsr:@panva/jose@6";
-import {
-  compileFilterDraft,
-  type FilterDraft,
-} from "../_shared/crustdataFilterCompiler.ts";
+import { validateAndAssembleIntent } from "../_shared/crustdataIntentValidator.ts";
+import { makeInitialIntent } from "../_shared/searchIntent.ts";
+import type { SearchIntentCondition } from "../_shared/searchIntent.ts";
 import {
   normalizeCrustdataProfile,
   type RawCalibrationCandidate,
@@ -101,7 +100,10 @@ async function handleAutocomplete(body: {
   }
 
   const limit = Math.min(
-    Math.max(1, typeof rawLimit === "number" ? rawLimit : AUTOCOMPLETE_MAX_LIMIT),
+    Math.max(
+      1,
+      typeof rawLimit === "number" ? rawLimit : AUTOCOMPLETE_MAX_LIMIT,
+    ),
     AUTOCOMPLETE_MAX_LIMIT,
   );
 
@@ -124,7 +126,9 @@ async function handleAutocomplete(body: {
       return jsonResponse({ suggestions: [] });
     }
 
-    const data = (await res.json()) as { suggestions?: Array<{ value: string }> };
+    const data = (await res.json()) as {
+      suggestions?: Array<{ value: string }>;
+    };
     const suggestions = (data.suggestions ?? []).map((s) => s.value);
     return jsonResponse({ suggestions });
   } catch (err) {
@@ -170,23 +174,34 @@ Deno.serve(async (req: Request) => {
   }
 
   // ── Search mode (default) ────────────────────────────────────────────────
-  const filterDraft = body.filter_draft as FilterDraft | undefined;
+  const conditions = body.conditions as SearchIntentCondition[] | undefined;
   const rawLimit = body.limit as number | undefined;
 
-  if (!filterDraft || typeof filterDraft !== "object") {
-    return jsonResponse({ error: "filter_draft is required" }, 400);
+  if (!Array.isArray(conditions)) {
+    return jsonResponse({ error: "conditions (array) is required" }, 400);
   }
 
-  // Compile UI draft → Crustdata filter tree.
-  const { filters, appliedGroups } = compileFilterDraft(filterDraft);
+  // Compile SearchIntentCondition[] → Crustdata filter tree via the single
+  // canonical compiler (validateAndAssembleIntent). This is the only compiler.
+  const intent = makeInitialIntent(conditions, []);
+  const { filters, unenforceable } = validateAndAssembleIntent(intent);
+
+  // Derive applied_groups from the filter conditions for the UI summary.
+  const appliedGroups: string[] = filters
+    ? [
+        "conditions: " +
+          conditions.filter((c) => c.disposition !== "prefer").length,
+      ]
+    : [];
 
   if (!filters) {
     return jsonResponse({
       candidates: [],
       compiled_filters: null,
       applied_groups: [],
+      unenforceable,
       total_count: 0,
-      note: "No filters provided — please fill in at least one filter field.",
+      note: "No enforceable filters — all conditions were unenforceable or prefer-only. Check unenforceable list.",
     });
   }
 
@@ -239,6 +254,7 @@ Deno.serve(async (req: Request) => {
         candidates: [],
         compiled_filters: filters,
         applied_groups: appliedGroups,
+        unenforceable,
         total_count: 0,
         note: "Search returned an error — credits are not consumed on errors.",
         error: crustdataResponse.error,
@@ -256,6 +272,7 @@ Deno.serve(async (req: Request) => {
     candidates,
     compiled_filters: filters,
     applied_groups: appliedGroups,
+    unenforceable,
     total_count: crustdataResponse.total_count ?? candidates.length,
   });
 });

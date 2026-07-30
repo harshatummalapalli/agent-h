@@ -78,10 +78,42 @@ const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 // Forcing a tool_use call (rather than asking Claude to "return JSON" in
 // plain text) is what guarantees the response is always valid, correctly
 // shaped JSON -- no parsing-a-string-that-might-not-be-JSON risk.
+
+// System prompt instructs the model on atomic skill extraction rules.
+// These rules are the primary defence against prose fragments ending up as
+// skill chips (e.g. "Enterprise applications with C#/.NET" → ["C#", ".NET"]).
+// A deterministic normalizer in parsedBriefToConditions.ts is the second
+// layer of defence so even older parse results stay clean.
+const EXTRACTION_SYSTEM_PROMPT = `You are a recruiting data extractor. Your task is to produce a structured role brief that will be used to drive people-search filters in a sourcing tool.
+
+CRITICAL RULES FOR SKILL FIELDS (required_skills, must_have_keywords, nice_to_have_keywords, preference_tiers[*].keywords):
+
+1. ATOMIC TOKENS ONLY. Every entry must be a single searchable skill token (language, framework, tool, domain, certification). NOT a sentence fragment from the JD.
+   ✓ Good: "Python", "C#", ".NET", "RAG", "Azure", "Kubernetes", "SQL Server"
+   ✗ Bad: "Enterprise applications with C#/.NET", "5+ years Python programming experience", "knowledge of databases"
+
+2. SPLIT ALTERNATIVES. When the JD uses "X/Y", "X or Y", or "X and Y" for technologies, emit SEPARATE entries for each — do not concatenate them.
+   "C#/.NET" → ["C#", ".NET"]
+   "Python or Java" → ["Python", "Java"]
+   "SQL Server and PostgreSQL" → ["SQL Server", "PostgreSQL"]
+
+3. STRIP FILLER. Remove suffixes like "programming", "development", "experience", "knowledge of", "familiarity with", "applications with", "proficiency in", "working knowledge of". Extract only the core skill name.
+   "Python programming" → "Python"
+   "ASP.NET Core development" → "ASP.NET Core"
+   "knowledge of Kubernetes" → "Kubernetes"
+
+4. EXPERIENCE BELONGS IN years_experience_min/max ONLY. Any phrase containing "years", "YoE", "experience", or seniority qualifiers (e.g. "5+ years software development", "3-5 years backend experience") must NOT appear in skill arrays. Put numeric YoE in years_experience_min/max instead.
+
+5. SOFT SKILLS AND DEGREE REQUIREMENTS are never skill tokens. "excellent communication", "bachelor's degree", "team player", "problem solving" — omit these entirely from skill arrays.
+
+6. KEEP MUST-HAVES TIGHT. JDs dump everything as "required". For sourcing, cap required_skills + must_have_keywords to ≤8-10 true hard requirements. Move the long laundry list into nice_to_have_keywords.
+
+7. LOCATION: If the location is unknown, ambiguous, or not stated, return an empty string "" — NEVER return "<UNKNOWN>", "unknown", "N/A", "TBD", or any placeholder string.`;
+
 const EXTRACTION_TOOL = {
   name: "extract_role_brief",
   description:
-    "Extract a structured recruiting role brief from a natural-language job description.",
+    "Extract a structured recruiting role brief from a natural-language job description. All skill entries must be atomic searchable tokens — not prose phrases.",
   input_schema: {
     type: "object",
     properties: {
@@ -98,7 +130,7 @@ const EXTRACTION_TOOL = {
       location: {
         type: "string",
         description:
-          "Primary work location as stated or implied. When remote work is offered but a geographic location is also specified (e.g. 'remote based in India', 'remote candidates from Bangalore only', 'UK remote'), store as 'Remote, <place>' (e.g. 'Remote, India', 'Remote, Bangalore', 'Remote, UK'). Use bare 'Remote' only when no geography is mentioned at all.",
+          "Primary work location as stated or implied. When remote work is offered but a geographic location is also specified (e.g. 'remote based in India', 'remote candidates from Bangalore only', 'UK remote'), store as 'Remote, <place>' (e.g. 'Remote, India', 'Remote, Bangalore', 'Remote, UK'). Use bare 'Remote' only when no geography is mentioned at all. Return empty string if location is unknown or not stated — NEVER use placeholder values like '<UNKNOWN>', 'N/A', or 'TBD'.",
       },
       industry: {
         type: ["string", "null"],
@@ -113,7 +145,7 @@ const EXTRACTION_TOOL = {
       years_experience_min: {
         type: ["integer", "null"],
         description:
-          "Minimum years of experience required, if stated. Null if not stated.",
+          "Minimum years of experience required, if stated. Null if not stated. Do NOT put YoE phrases into skill arrays.",
       },
       years_experience_max: {
         type: ["integer", "null"],
@@ -124,24 +156,24 @@ const EXTRACTION_TOOL = {
         type: "array",
         items: { type: "string" },
         description:
-          "Concrete skills/technologies/tools mentioned (e.g. 'Python', 'AWS', 'stakeholder management'). Short keyword form, not full sentences.",
+          "Atomic skill tokens that are clearly required (e.g. 'Python', 'AWS', 'React'). Each entry must be a single technology/tool name — NOT a sentence fragment. Split 'X/Y' and 'X or Y' into separate entries. Strip filler words like 'programming', 'development', 'knowledge of'. Cap at ≤8 items — move extras to nice_to_have_keywords.",
       },
       must_have_keywords: {
         type: "array",
         items: { type: "string" },
         description:
-          "Hard requirements explicitly framed as required/must-have. Short keyword/phrase form. If the JD describes a genuine ranked primary-vs-fallback profile, put that structure in preference_tiers instead of cramming the whole paragraph in here -- this field is for flat, non-tiered hard requirements.",
+          "Additional atomic skill tokens explicitly framed as must-have/required, not already in required_skills. Single technology/tool names only — no YoE phrases, no soft skills, no degree requirements. If the JD describes a genuine ranked primary-vs-fallback profile, use preference_tiers instead.",
       },
       nice_to_have_keywords: {
         type: "array",
         items: { type: "string" },
         description:
-          "Preferred-but-not-required qualifications (framed as 'nice to have', 'bonus', 'preferred'). Short keyword/phrase form.",
+          "Atomic skill tokens preferred but not required ('nice to have', 'bonus', 'preferred', 'plus'). Also use this for additional skills beyond the ≤8 hard-must cap. Single technology/tool names only.",
       },
       preference_tiers: {
         type: "array",
         description:
-          "ONLY populate this when the JD explicitly describes a ranked, primary-vs-fallback candidate profile (e.g. 'ideally X, but Y is also acceptable', 'primary preference... secondary/acceptable...'). Leave as an empty array for the common case of a single flat requirement set -- do not invent tiers that aren't really there. Order by preference, rank 1 = most preferred.",
+          "ONLY populate this when the JD explicitly describes a ranked, primary-vs-fallback candidate profile (e.g. 'ideally X, but Y is also acceptable', 'primary preference... secondary/acceptable...'). Leave as an empty array for the common case of a single flat requirement set -- do not invent tiers that aren't really there. Order by preference, rank 1 = most preferred. Keywords within each tier must be atomic skill tokens (same rules as required_skills).",
         items: {
           type: "object",
           properties: {
@@ -158,7 +190,7 @@ const EXTRACTION_TOOL = {
               type: "array",
               items: { type: "string" },
               description:
-                "The concrete skills/qualifications that define this specific tier.",
+                "Atomic skill tokens defining this tier. Same rules as required_skills — no prose fragments, split X/Y alternatives.",
             },
             condition: {
               type: ["string", "null"],
@@ -228,6 +260,7 @@ const parseJobDescription = async (req: Request) => {
       body: JSON.stringify({
         model: ANTHROPIC_MODEL,
         max_tokens: 1536,
+        system: EXTRACTION_SYSTEM_PROMPT,
         tools: [EXTRACTION_TOOL],
         tool_choice: { type: "tool", name: "extract_role_brief" },
         messages: [

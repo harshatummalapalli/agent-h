@@ -16,6 +16,7 @@
 // packs" only a recruiter can toggle intentionally.
 
 import type { SearchIntentCondition } from "../types";
+import { resolveLocation } from "../../../../supabase/functions/_shared/taxonomies/location";
 
 // ─── Skill normalizer ─────────────────────────────────────────────────────────
 //
@@ -220,12 +221,29 @@ export function parsedBriefToConditions(
     });
   }
 
-  // Location — skip unknown/placeholder values; split on " / " if multiple cities
+  // Location — skip unknown/placeholder values; split on " / " if multiple cities.
+  // resolveLocation() classifies country vs. city at parse time so the compiler
+  // never re-guesses the kind at filter-assembly time.
   if (brief.location?.trim() && !isUnknownLocation(brief.location)) {
     const parts = brief.location.split(/\s*\/\s*/);
     for (const part of parts) {
-      if (part.trim() && !isUnknownLocation(part)) {
-        add({ category: "location", disposition: "require", value: part });
+      if (!part.trim() || isUnknownLocation(part)) continue;
+      const resolved = resolveLocation(part.trim());
+      if (resolved.kind === "unknown") {
+        // Unknown location — skip chip; caller logs to unresolved_taxonomy_terms.
+        // We emit it anyway so the chip exists for the recruiter to edit.
+        add({
+          category: "location",
+          disposition: "require",
+          value: part.trim(),
+        });
+      } else {
+        // Use the canonical name so the compiler always sees the resolved form.
+        add({
+          category: "location",
+          disposition: "require",
+          value: resolved.canonical,
+        });
       }
     }
   }

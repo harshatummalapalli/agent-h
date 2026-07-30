@@ -33,19 +33,12 @@ import type {
 } from "../types";
 import { SearchIntentEditor } from "../roles/SearchIntentEditor";
 import { parsedBriefToConditions } from "./parsedBriefToConditions";
+import { SENIORITY_CANONICALS } from "../../../../supabase/functions/_shared/taxonomies/seniority";
 import "../inbox/agent-h-theme.css";
 
-const SENIORITY_OPTIONS = [
-  "intern",
-  "entry_level",
-  "mid_level",
-  "senior",
-  "staff",
-  "principal",
-  "manager",
-  "director",
-  "executive",
-];
+// Single source of truth — populated from the taxonomy so adding a new
+// canonical seniority level is one edit in seniority.ts, not two.
+const SENIORITY_OPTIONS = SENIORITY_CANONICALS;
 
 const EMPLOYMENT_TYPE_OPTIONS = [
   "full_time",

@@ -493,16 +493,16 @@ Deno.serve(async (req: Request) => {
 
       // Post-filter: defense-in-depth exclude enforcement after the API call.
       // Crustdata's "(!)" query-layer may miss edge cases; this catches them.
-      // Adapt job_company_name / job_title to the MinimalCandidate field names.
-      const candidatesAdapted = crustdataResult.candidates.map((c) => ({
-        ...c,
-        current_employer_company_name: c.job_company_name,
-        title: c.job_title,
-      }));
+      // excludePostFilter now recognises job_company_name / job_title directly
+      // (alias-aware), so RawCalibrationCandidate passes through without a
+      // rename map.
       const postFiltered =
         dealExcludeConditions.length > 0
-          ? applyExcludeFilter(candidatesAdapted, dealExcludeConditions)
-          : candidatesAdapted;
+          ? applyExcludeFilter(
+              crustdataResult.candidates,
+              dealExcludeConditions,
+            )
+          : crustdataResult.candidates;
 
       for (const c of postFiltered) {
         const key = c.linkedin_url || c.id;

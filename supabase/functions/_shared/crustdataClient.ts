@@ -9,9 +9,15 @@
 // title OR (or) title keywords, location, seniority containment,
 // required-skill OR-groups and experience-year bounds.
 //
+// Exclude logic (company "(!)" and keyword "(!)" conditions) is handled by
+// appendCompanyAndKeywordExcludes from crustdataExcludeFilters.ts — the
+// single shared implementation used by both this file and crustdataQueryBuilder.ts.
+//
 // API: POST https://api.crustdata.com/person/search
 // Header: Authorization: Bearer <key>, x-api-version: 2025-11-01
 // Body: { filters: Condition | Group, limit }
+
+import { appendCompanyAndKeywordExcludes } from "./crustdataExcludeFilters.ts";
 
 export const CRUSTDATA_SEARCH_URL = "https://api.crustdata.com/person/search";
 export const CRUSTDATA_API_VERSION = "2025-11-01";
@@ -341,38 +347,22 @@ export function buildCalibrationFilters(
   }
 
   // Excludes: hard "(!)" per excluded company / exclusion keyword.
-  // "(!)" is a literal not-contains match (confirmed live against Crustdata),
-  // so no shingle decomposition — keep precise to avoid over-exclusion.
+  // Implementation lives in crustdataExcludeFilters.ts (single shared copy
+  // used by crustdataQueryBuilder.ts too — not duplicated here).
   const excludedCompanies = Array.isArray(brief.excluded_companies)
     ? (brief.excluded_companies as unknown[]).filter(
         (c): c is string => typeof c === "string" && c.trim().length > 0,
       )
     : [];
-  for (const company of excludedCompanies) {
-    conditions.push({
-      field: F.currentCompanyName,
-      type: "(!)",
-      value: company.trim(),
-    });
-  }
-
   const exclusionKeywords = Array.isArray(brief.exclusion_keywords)
     ? (brief.exclusion_keywords as unknown[]).filter(
         (k): k is string => typeof k === "string" && k.trim().length > 0,
       )
     : [];
-  for (const keyword of exclusionKeywords) {
-    conditions.push({
-      field: F.currentTitle,
-      type: "(!)",
-      value: keyword.trim(),
-    });
-    conditions.push({
-      field: F.currentSkills,
-      type: "(!)",
-      value: keyword.trim(),
-    });
-  }
+  appendCompanyAndKeywordExcludes(conditions, {
+    excludedCompanies,
+    exclusionKeywords,
+  });
 
   if (conditions.length === 0) return null;
   if (conditions.length === 1) return conditions[0];

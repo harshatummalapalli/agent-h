@@ -108,7 +108,9 @@ CRITICAL RULES FOR SKILL FIELDS (required_skills, must_have_keywords, nice_to_ha
 
 6. KEEP MUST-HAVES TIGHT. JDs dump everything as "required". For sourcing, cap required_skills + must_have_keywords to ≤8-10 true hard requirements. Move the long laundry list into nice_to_have_keywords.
 
-7. LOCATION: If the location is unknown, ambiguous, or not stated, return an empty string "" — NEVER return "<UNKNOWN>", "unknown", "N/A", "TBD", or any placeholder string.`;
+7. LOCATION: If the location is unknown, ambiguous, or not stated, return an empty string "" — NEVER return "<UNKNOWN>", "unknown", "N/A", "TBD", or any placeholder string.
+
+8. EXCLUDE LISTS: When the text EXPLICITLY names companies, employers, or title-keywords to exclude, avoid, or filter out ("Exclude candidates at X", "no X", "Hard filter: not from X, Y", "do not source from…"), populate excluded_companies with atomic company names and exclusion_keywords with title/type keywords. Split "X, Y, or Z" into separate entries — each entry must be a single atomic name. Do NOT invent excludes that aren't stated. Return empty arrays when nothing is stated. Example: "Exclude candidates currently at Accenture, Infosys, or Cognizant" → excluded_companies: ["Accenture", "Infosys", "Cognizant"]. When a follow-up message says "Hard filters, no exceptions" and the prior brief JSON already contains excludes, PRESERVE and STRENGTHEN those excludes — do not reset them to empty.`;
 
 const EXTRACTION_TOOL = {
   name: "extract_role_brief",
@@ -200,6 +202,18 @@ const EXTRACTION_TOOL = {
           },
           required: ["rank", "label", "keywords"],
         },
+      },
+      excluded_companies: {
+        type: "array",
+        items: { type: "string" },
+        description:
+          'Company names to exclude from candidate search. Populate ONLY when the text explicitly names companies/employers to exclude, avoid, or not source from (e.g. "Exclude candidates at Accenture, Infosys", "no Cognizant", "Hard filter: not from TCS"). Each entry must be an atomic company name — split comma/or/and lists into separate entries. Do NOT invent excludes. Empty array when not stated.',
+      },
+      exclusion_keywords: {
+        type: "array",
+        items: { type: "string" },
+        description:
+          'Job-title or company-type keywords to exclude (e.g. "no IT service companies", "exclude consulting firms"). Atomic tokens only. Empty array when not stated.',
       },
       clarifying_questions: {
         type: "array",

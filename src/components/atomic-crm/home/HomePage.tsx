@@ -22,6 +22,7 @@ import type { CrmDataProvider } from "../providers/types";
 import type { UnipileLinkedInAccount } from "../settings/UnipileLinkedInConnectionCard";
 import type { CalibrationCandidate } from "../providers/supabase/dataProvider";
 import { parsedBriefToConditions } from "../jd-intake/parsedBriefToConditions";
+import { extractExplicitExcludesFromText } from "../jd-intake/extractExplicitExcludes";
 import "../inbox/agent-h-theme.css";
 
 type ConvTurn = { role: "user" | "agent"; text: string };
@@ -89,7 +90,11 @@ function buildSummary(result: ParsedBrief): string {
   const excludeCompanies = result.excluded_companies ?? [];
   const excludeKeywords = result.exclusion_keywords ?? [];
   const excludeCount = excludeCompanies.length + excludeKeywords.length;
-  const requireCount = (result.required_skills ?? result.must_have_keywords ?? []).length;
+  const requireCount = (
+    result.required_skills ??
+    result.must_have_keywords ??
+    []
+  ).length;
   const preferCount = (result.nice_to_have_keywords ?? []).length;
   return [
     `Role: ${result.title || "untitled"}`,
@@ -140,6 +145,9 @@ export const HomePage = () => {
     addTurn({ role: "user", text });
     setBusy(true);
 
+    // Snapshot prev state before parse so follow-up turns can compute delta.
+    const prevParsed = parsed;
+
     try {
       const isFirstMessage = turns.length === 0;
 
@@ -148,7 +156,27 @@ export const HomePage = () => {
         : text;
 
       const result = await dataProvider.parseJobDescription(inputForParse);
-      setParsed(result as ParsedBrief);
+
+      // Merge regex-extracted excludes with LLM output (defense-in-depth).
+      // The LLM may miss explicit "Exclude candidates at X, Y" if schema was
+      // not deployed yet; the regex catches it deterministically.
+      const regexExcludes = extractExplicitExcludesFromText(text);
+      const merged: ParsedBrief = {
+        ...(result as ParsedBrief),
+        excluded_companies: [
+          ...new Set([
+            ...((result.excluded_companies as string[] | undefined) ?? []),
+            ...regexExcludes.companies,
+          ]),
+        ],
+        exclusion_keywords: [
+          ...new Set([
+            ...((result.exclusion_keywords as string[] | undefined) ?? []),
+            ...regexExcludes.titleKeywords,
+          ]),
+        ],
+      };
+      setParsed(merged);
 
       if (checkUnrealisticConstraints(text) && !expectationShownRef.current) {
         expectationShownRef.current = true;
@@ -157,7 +185,7 @@ export const HomePage = () => {
 
       if (isFirstMessage) {
         const clarifyingQs =
-          (result.clarifying_questions as string[] | undefined) ?? [];
+          (merged.clarifying_questions as string[] | undefined) ?? [];
 
         const hasJdSignal =
           text.length >= 300 ||
@@ -167,7 +195,7 @@ export const HomePage = () => {
           : [JD_QUESTION, ...clarifyingQs];
 
         const [firstQ, ...remainingQs] = fullQueue;
-        const summary = buildSummary(result as ParsedBrief);
+        const summary = buildSummary(merged);
 
         if (firstQ) {
           addTurn({
@@ -188,9 +216,30 @@ export const HomePage = () => {
           addTurn({ role: "agent", text: nextQ });
           setPendingQuestions((prev) => prev.slice(1));
         } else {
+          // Show recruiter a self-verifiable delta so they don't need to open the DB.
+          const prevExcluded = prevParsed?.excluded_companies ?? [];
+          const newExcluded = merged.excluded_companies ?? [];
+          const addedExcludes = newExcluded.filter(
+            (c) =>
+              !prevExcluded
+                .map((x) => x.toLowerCase())
+                .includes(c.toLowerCase()),
+          );
+          const requireCount = (
+            merged.required_skills ??
+            merged.must_have_keywords ??
+            []
+          ).length;
+          const preferCount = (merged.nice_to_have_keywords ?? []).length;
+          const excludeCount = newExcluded.length;
+          const counts = `Require ${requireCount} · Prefer ${preferCount} · Exclude ${excludeCount}`;
+          const deltaPrefix =
+            addedExcludes.length > 0
+              ? `+${addedExcludes.length} excluded: ${addedExcludes.join(", ")} · `
+              : "";
           addTurn({
             role: "agent",
-            text: "Got it — I've updated the brief. We're good to go whenever you're ready.",
+            text: `Brief updated. ${deltaPrefix}${counts}`,
           });
         }
       }

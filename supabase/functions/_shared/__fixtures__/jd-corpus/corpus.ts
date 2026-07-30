@@ -299,6 +299,7 @@ export const JD_CORPUS: CorpusFixture[] = [
   // ── 14: remote other/require does not produce a broken city filter ─────────
   // When the only location signal is other/require:remote, no city filter must
   // be generated (it would zero out results by filtering on a garbage city value).
+  // The 'other' category routes to unenforceable_constraints (count: 1).
   {
     name: "14-remote-only-no-city-filter",
     conditions: [
@@ -307,7 +308,7 @@ export const JD_CORPUS: CorpusFixture[] = [
     ],
     invariants: {
       hasFilters: true,
-      unenforceableCount: 0,
+      unenforceableCount: 1,
       filterFieldsExclude: ["basic_profile.location.city"],
     },
   },

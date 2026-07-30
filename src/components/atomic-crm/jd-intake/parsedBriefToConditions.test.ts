@@ -132,12 +132,14 @@ describe("parsedBriefToConditions", () => {
     });
   });
 
-  it("maps location to location/require", () => {
+  it("maps location to location/require with canonical city name", () => {
+    // "Bangalore, India" resolves to the canonical city name "Bangalore"
+    // (resolveLocation() strips the country suffix and looks up the city).
     const result = parsedBriefToConditions({ location: "Bangalore, India" });
     expect(result).toContainEqual({
       category: "location",
       disposition: "require",
-      value: "Bangalore, India",
+      value: "Bangalore",
     });
   });
 
@@ -342,7 +344,7 @@ describe("parsedBriefToConditions", () => {
     );
     expect(categories).toContain("title/require/Backend Engineer");
     expect(categories).toContain("seniority/require/senior");
-    expect(categories).toContain("location/require/Hyderabad, India");
+    expect(categories).toContain("location/require/Hyderabad");
     expect(categories).toContain("experience_range/require/5-12");
     expect(categories).toContain("skill/require/Java");
     expect(categories).toContain("skill/require/Kafka");

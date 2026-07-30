@@ -20,7 +20,11 @@ export const Layout = ({ children }: { children: ReactNode }) => {
             <Suspense
               fallback={<Skeleton className="h-12 w-12 rounded-full m-6" />}
             >
-              {children}
+              {/* Explicit height wrapper: Suspense/ErrorBoundary don't
+                  propagate % height, which previously hid the role command bar. */}
+              <div className="flex flex-col flex-1 min-h-0 h-full">
+                {children}
+              </div>
             </Suspense>
           </ErrorBoundary>
         </main>

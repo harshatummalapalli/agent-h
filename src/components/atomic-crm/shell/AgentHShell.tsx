@@ -9,41 +9,48 @@ type AgentHShellProps = {
   children: ReactNode;
 };
 
+// Command bar is position:fixed to the viewport bottom so it cannot be
+// pushed below the fold by tall role content or a broken %/flex height
+// chain (Suspense/ErrorBoundary ancestors often lack an explicit height,
+// so height:100% + grid 1fr was unreliable). Spacer keeps content clear.
+const COMMAND_BAR_SPACER_PX = 96;
+
 export const AgentHShell = ({
   context,
   commandBar,
   children,
 }: AgentHShellProps) => {
   return (
-    <div
-      className="ah-scope h-full min-h-0"
-      style={{
-        display: "grid",
-        gridTemplateRows: commandBar
-          ? "auto minmax(0, 1fr) auto"
-          : "auto minmax(0, 1fr)",
-        height: "100%",
-        maxHeight: "100%",
-      }}
-    >
+    <div className="ah-scope flex flex-col h-full min-h-0 w-full">
       <ContextStrip context={context} />
-      <div
-        style={{
-          minHeight: 0,
-          overflow: "hidden",
-          display: "flex",
-          flexDirection: "column",
-        }}
-      >
+      <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
         {children}
       </div>
       {commandBar && (
-        <CommandBar
-          placeholder={commandBar.placeholder}
-          hint={commandBar.hint}
-          slashActions={commandBar.slashActions}
-          onSubmit={commandBar.onSubmit}
-        />
+        <>
+          <div
+            aria-hidden
+            className="shrink-0"
+            style={{ height: COMMAND_BAR_SPACER_PX }}
+          />
+          <div
+            className="ah-command-bar-dock"
+            style={{
+              position: "fixed",
+              bottom: 0,
+              right: 0,
+              zIndex: 45,
+              background: "var(--background)",
+            }}
+          >
+            <CommandBar
+              placeholder={commandBar.placeholder}
+              hint={commandBar.hint}
+              slashActions={commandBar.slashActions}
+              onSubmit={commandBar.onSubmit}
+            />
+          </div>
+        </>
       )}
     </div>
   );

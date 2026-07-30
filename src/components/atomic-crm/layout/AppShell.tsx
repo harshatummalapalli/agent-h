@@ -50,7 +50,10 @@ export const AppShell = ({ children }: { children: React.ReactNode }) => {
   }, [location.pathname]);
 
   return (
-    <div className="flex h-screen overflow-hidden bg-background">
+    <div
+      className="flex h-screen overflow-hidden bg-background"
+      data-sidebar-open={sidebarOpen ? "true" : "false"}
+    >
       {/* Mobile overlay */}
       {mobileOpen && (
         <div

@@ -32,7 +32,7 @@ import type {
   UnenforcedConstraint,
 } from "../types";
 import { SearchIntentEditor } from "../roles/SearchIntentEditor";
-import { parsedBriefToConditions } from "./parsedBriefToConditions";
+import { parsedBriefToConditions, extractUnenforceableFromBrief } from "./parsedBriefToConditions";
 import { SENIORITY_CANONICALS } from "../../../../supabase/functions/_shared/taxonomies/seniority";
 import "../inbox/agent-h-theme.css";
 
@@ -250,7 +250,7 @@ export const JdIntakePage = () => {
       setJdExpanded(false); // collapse JD textarea after parse
       // Seed chip editor from parsed brief.
       setIntentConditions(parsedBriefToConditions(brief));
-      setIntentUnenforceable([]);
+      setIntentUnenforceable(extractUnenforceableFromBrief(brief));
       setPastTitlesText("");
       setPastCompaniesText("");
       setQuestionsDismissed(false);

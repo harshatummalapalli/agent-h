@@ -117,6 +117,8 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
   const [memoryPanelOpen, setMemoryPanelOpen] = useState(true);
   // Track the latest calibration batch so we can offer "Add N confident candidates"
   const [lastBatch, setLastBatch] = useState<CalibrationBatch | null>(null);
+  // Controlled tab state — lets onOpenReview switch to Review tab imperatively.
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>("review");
   // True while a sourcing call is in flight (prevents double-trigger).
   const [sourcingInFlight, setSourcingInFlight] = useState(false);
   const [cardSaveStates, setCardSaveStates] = useState<
@@ -140,6 +142,55 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
     "deal_candidates",
     { pagination: { page: 1, perPage: 1 }, filter: { deal_id: dealId } },
   );
+
+  // Fetch conversation turns to rehydrate lastBatch after reload.
+  // React Query caches this alongside RoleConversationTranscript's identical query.
+  const { data: turns } = useGetList<RoleConversationTurn>(
+    "role_conversation_turns",
+    {
+      filter: { deal_id: dealId },
+      sort: { field: "created_at", order: "ASC" },
+      pagination: { page: 1, perPage: 100 },
+    },
+  );
+
+  // On mount: reconstruct lastBatch from the latest run of candidate_card turns.
+  // Fires once turns are available and only when lastBatch is still null (no live batch).
+  useEffect(() => {
+    if (!turns || lastBatch !== null) return;
+    const batchTurns: RoleConversationTurn[] = [];
+    for (let i = turns.length - 1; i >= 0; i--) {
+      const m = turns[i].metadata as ConversationTurnMetadata | undefined;
+      if (m?.kind === "candidate_card" && m.candidate_card) {
+        batchTurns.unshift(turns[i]);
+      } else if (m?.kind === "decision" || m?.kind === "refinement") {
+        continue;
+      } else {
+        break;
+      }
+    }
+    if (batchTurns.length === 0) return;
+    const candidates: CalibrationCandidate[] = batchTurns.map((t) => {
+      const card = (t.metadata as ConversationTurnMetadata).candidate_card!;
+      return {
+        external_id: card.calibration_external_id ?? String(card.candidate_id),
+        name: card.name,
+        headline: card.headline,
+        why_fit: card.why_fit ?? "",
+        match_score: card.match_score,
+        linkedin_url: card.linkedin_url,
+        location_name: card.location_name ?? null,
+        from_bench: false,
+        must_haves: card.must_haves ?? [],
+      };
+    });
+    setLastBatch({
+      candidates,
+      pool_size: candidates.length,
+      cursor: candidates.length,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [turns]);
 
   const { data: pipelineRows } = useQuery({
     queryKey: ["deal_candidates_for_deal", dealId],
@@ -549,6 +600,14 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
   const defaultTab: WorkspaceTab =
     !pipelinePending && pipelineCount > 0 ? "pipeline" : "review";
 
+  // Sync controlled tab when pipeline data resolves (once, on first load).
+  const tabInitRef = useRef(false);
+  useEffect(() => {
+    if (pipelinePending || tabInitRef.current) return;
+    tabInitRef.current = true;
+    setActiveTab(defaultTab);
+  }, [pipelinePending, defaultTab]);
+
   // Candidates from last batch not yet in pipeline (for "Add N")
   const confidentCandidates = (lastBatch?.candidates ?? []).filter(
     (c) =>
@@ -667,12 +726,14 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
               hideCardTurns={
                 lastBatch !== null && lastBatch.candidates.length > 0
               }
+              onOpenReview={() => setActiveTab("review")}
             />
           </div>
 
           {/* Three-tab spine: Review / Pipeline / Search */}
           <Tabs
-            defaultValue={defaultTab}
+            value={activeTab}
+            onValueChange={(v) => setActiveTab(v as WorkspaceTab)}
             className="flex-1 flex flex-col min-h-0"
           >
             <div className="border-b border-border bg-background sticky top-0 z-10">
@@ -1587,34 +1648,14 @@ const RoleMemoryPanel = ({
   const [editingIntent, setEditingIntent] = useState(false);
   const [intentSaving, setIntentSaving] = useState(false);
 
-  const { data: learnedCriteria = [], refetch: refetchCriteria } = useQuery({
-    queryKey: ["role_brief_learned_criteria", dealId],
-    queryFn: () => dataProvider.getRoleBriefLearnedCriteria(dealId),
-  });
-
   const { data: calibrationFeedback = [] } = useQuery({
     queryKey: ["calibration_feedback", dealId],
     queryFn: () => dataProvider.getCalibrationFeedback(dealId),
   });
 
-  const activeCriteria = (learnedCriteria as Record<string, unknown>[]).filter(
-    (c) => c.status === "active" || !c.status,
-  );
   const negativeFeedback = (calibrationFeedback as Record<string, unknown>[])
     .filter((f) => f.judgment === "not_a_fit" || f.judgment === "no")
     .slice(0, 5);
-
-  const handleRelax = async (criterionId: string | number) => {
-    try {
-      await dataProvider.relaxLearnedCriterion(criterionId as number);
-      void refetchCriteria();
-      queryClient.invalidateQueries({
-        queryKey: ["role_brief_learned_criteria", dealId],
-      });
-    } catch {
-      toast.error("Couldn't relax that criterion");
-    }
-  };
 
   return (
     <div className="flex flex-col h-full">
@@ -1643,41 +1684,6 @@ const RoleMemoryPanel = ({
           <p className="text-xs text-muted-foreground">
             candidate{pipelineCount === 1 ? "" : "s"} added
           </p>
-        </div>
-
-        <Separator />
-
-        {/* Active learned criteria */}
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
-            Active criteria
-          </p>
-          {activeCriteria.length === 0 ? (
-            <p className="text-xs text-muted-foreground">
-              None yet — calibrate to learn.
-            </p>
-          ) : (
-            <ul className="space-y-1.5">
-              {activeCriteria.map((c) => (
-                <li
-                  key={c.id as string}
-                  className="flex items-start gap-1.5 group"
-                >
-                  <span className="flex-1 text-xs leading-snug">
-                    {c.label as string}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => handleRelax(c.id as number)}
-                    className="shrink-0 text-xs text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity"
-                    title="Relax this criterion"
-                  >
-                    Relax
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
         </div>
 
         {/* T6: Search Intent block — rendered from deal.role_brief_search_intent.

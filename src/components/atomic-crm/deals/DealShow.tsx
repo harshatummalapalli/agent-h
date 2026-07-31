@@ -96,7 +96,9 @@ const DealShowContent = () => {
                 {record.expected_closing_date && isValid(new Date(record.expected_closing_date))                    ? formatISODateString(record.expected_closing_date)
                     : translate("resources.deals.invalid_date")}
                 </span>
-                {new Date(record.expected_closing_date) < new Date() ? (
+                {record.expected_closing_date &&
+                isValid(new Date(record.expected_closing_date)) &&
+                new Date(record.expected_closing_date) < new Date() ? (
                   <Badge variant="destructive">
                     {translate("crm.common.past")}
                   </Badge>

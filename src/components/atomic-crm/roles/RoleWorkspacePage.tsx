@@ -32,7 +32,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { EditButton } from "@/components/admin/edit-button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
@@ -517,7 +516,23 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
     !!deal?.role_brief_last_scroll_query || lastBatch !== null;
 
   return (
-    <AgentHShell context={shellContext}>
+    <AgentHShell
+      context={shellContext}
+      commandBar={{
+        placeholder: "Exclude Cognizant, require Python, or paste a JD…",
+        hint: "Press ⌘K to focus · /refine, /exclude, /start",
+        slashActions: [
+          { cmd: "/refine", label: "Refine search criteria" },
+          { cmd: "/exclude", label: "Exclude a company or profile type" },
+          { cmd: "/start", label: "Start or restart sourcing" },
+        ],
+        onSubmit: (v) => {
+          if (commandBusy || sourcingInFlight) return;
+          void runFreeTextCommand(v);
+        },
+        busy: commandBusy || sourcingInFlight,
+      }}
+    >
       {/* 3-pane: memory panel (desktop) + main content */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
         {/* Role Memory Panel — desktop left sidebar */}
@@ -1013,7 +1028,6 @@ const RoleWorkspaceHeader = ({
           <Archive className="h-4 w-4" />
         </Button>
 
-        <EditButton />
       </div>
     </div>
   );

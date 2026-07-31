@@ -20,6 +20,9 @@ const {
   enrichProfileFromHarvest,
   batchEnrichFromHarvest,
   buildWorkHistorySummary,
+  runWithConcurrency,
+  fetchHarvestProfile,
+  enrichCandidatesWithHarvestSkills,
 } = await import("./harvestClient");
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -207,5 +210,237 @@ describe("buildWorkHistorySummary", () => {
 
   it("returns empty string for empty input", () => {
     expect(buildWorkHistorySummary([])).toBe("");
+  });
+});
+
+// ── runWithConcurrency ────────────────────────────────────────────────────────
+
+describe("runWithConcurrency", () => {
+  it("runs all tasks and returns results in order", async () => {
+    const results = await runWithConcurrency(
+      [async () => 1, async () => 2, async () => 3],
+      2,
+    );
+    expect(results).toEqual([1, 2, 3]);
+  });
+
+  it("respects concurrency limit of 1 (serial execution)", async () => {
+    const order: number[] = [];
+    let inflight = 0;
+    let maxInflight = 0;
+
+    const tasks = Array.from({ length: 4 }, (_, i) => async () => {
+      inflight++;
+      maxInflight = Math.max(maxInflight, inflight);
+      await new Promise((r) => setTimeout(r, 5));
+      order.push(i);
+      inflight--;
+    });
+
+    await runWithConcurrency(tasks, 1);
+    expect(maxInflight).toBe(1);
+    expect(order).toEqual([0, 1, 2, 3]);
+  });
+
+  it("handles empty task list", async () => {
+    const results = await runWithConcurrency([], 5);
+    expect(results).toEqual([]);
+  });
+});
+
+// ── fetchHarvestProfile ───────────────────────────────────────────────────────
+
+describe("fetchHarvestProfile", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("retries on 429 and succeeds on second attempt", async () => {
+    let callCount = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(() => {
+        callCount++;
+        if (callCount === 1) {
+          return Promise.resolve({ ok: false, status: 429 });
+        }
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve({
+              skills: ["Python"],
+              experiences: [],
+              educations: [],
+            }),
+        });
+      }),
+    );
+
+    const profile = await fetchHarvestProfile(MOCK_URL);
+    expect(callCount).toBe(2);
+    expect(profile).not.toBeNull();
+    expect(profile!.skills).toEqual(["Python"]);
+  });
+
+  it("returns null after exhausting retries on 429", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: false, status: 429 }),
+    );
+    const profile = await fetchHarvestProfile(MOCK_URL);
+    expect(profile).toBeNull();
+  });
+
+  it("does not retry on 404", async () => {
+    let callCount = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(() => {
+        callCount++;
+        return Promise.resolve({ ok: false, status: 404 });
+      }),
+    );
+    const profile = await fetchHarvestProfile(MOCK_URL);
+    expect(callCount).toBe(1);
+    expect(profile).toBeNull();
+  });
+
+  it("appends main=true when cheap=true (default)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () =>
+        Promise.resolve({ skills: [], experiences: [], educations: [] }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchHarvestProfile(MOCK_URL);
+    const calledUrl = fetchMock.mock.calls[0][0] as string;
+    expect(calledUrl).toContain("main=true");
+  });
+
+  it("does not append main=true when cheap=false", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () =>
+        Promise.resolve({ skills: [], experiences: [], educations: [] }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchHarvestProfile(MOCK_URL, { cheap: false });
+    const calledUrl = fetchMock.mock.calls[0][0] as string;
+    expect(calledUrl).not.toContain("main=true");
+  });
+
+  it("parses certifications from string array", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        skills: [],
+        certifications: ["AWS Certified Developer", "GCP Professional"],
+        experiences: [],
+        educations: [],
+      }),
+    );
+    const profile = await fetchHarvestProfile(MOCK_URL);
+    expect(profile!.certifications).toEqual([
+      "AWS Certified Developer",
+      "GCP Professional",
+    ]);
+  });
+
+  it("parses certifications from object array with .name", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        skills: [],
+        certifications: [{ name: "AWS Certified Developer" }, { name: "CKA" }],
+        experiences: [],
+        educations: [],
+      }),
+    );
+    const profile = await fetchHarvestProfile(MOCK_URL);
+    expect(profile!.certifications).toEqual(["AWS Certified Developer", "CKA"]);
+  });
+
+  it("parses emails from string array", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        skills: [],
+        emails: ["alice@example.com", "alice@work.com"],
+        experiences: [],
+        educations: [],
+      }),
+    );
+    const profile = await fetchHarvestProfile(MOCK_URL);
+    expect(profile!.emails).toEqual(["alice@example.com", "alice@work.com"]);
+  });
+
+  it("sorts emails personal-first when type metadata present", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        skills: [],
+        emails: [
+          { email: "alice@work.com", type: "work" },
+          { email: "alice@gmail.com", type: "personal" },
+        ],
+        experiences: [],
+        educations: [],
+      }),
+    );
+    const profile = await fetchHarvestProfile(MOCK_URL);
+    expect(profile!.emails![0]).toBe("alice@gmail.com");
+  });
+});
+
+// ── enrichCandidatesWithHarvestSkills ─────────────────────────────────────────
+
+describe("enrichCandidatesWithHarvestSkills", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("returns a Map with correct shape for each URL", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        profilePictureUrl: "https://example.com/photo.jpg",
+        skills: ["Go", "Kubernetes"],
+        certifications: ["CKA"],
+        emails: [{ email: "bob@gmail.com", type: "personal" }],
+        experiences: [],
+        educations: [],
+      }),
+    );
+
+    const urls = ["https://linkedin.com/in/bob"];
+    const map = await enrichCandidatesWithHarvestSkills(urls);
+
+    expect(map.size).toBe(1);
+    const entry = map.get(urls[0])!;
+    expect(entry.skills).toEqual(["Go", "Kubernetes"]);
+    expect(entry.certifications).toEqual(["CKA"]);
+    expect(entry.photoUrl).toBe("https://example.com/photo.jpg");
+    expect(entry.email).toBe("bob@gmail.com");
+  });
+
+  it("includes failed URLs with empty defaults", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: false, status: 500 }),
+    );
+
+    const urls = ["https://linkedin.com/in/nobody"];
+    const map = await enrichCandidatesWithHarvestSkills(urls);
+    expect(map.size).toBe(1);
+    const entry = map.get(urls[0])!;
+    expect(entry.skills).toEqual([]);
+    expect(entry.photoUrl).toBeNull();
+    expect(entry.email).toBeNull();
+  });
+
+  it("returns empty map when no URLs provided", async () => {
+    const map = await enrichCandidatesWithHarvestSkills([]);
+    expect(map.size).toBe(0);
   });
 });

@@ -37,11 +37,7 @@ import {
   excludeConditionsFromFlat,
 } from "../_shared/excludePostFilter.ts";
 import type { SearchIntentCondition } from "../_shared/searchIntent.ts";
-import {
-  batchEnrichFromHarvest,
-  buildWorkHistorySummary,
-  HARVEST_PER_ROLE_CEILING_USD,
-} from "../_shared/harvestClient.ts";
+import { enrichCandidatesWithHarvestSkills } from "../_shared/harvestClient.ts";
 import { normalizeLinkedinUrl } from "../_shared/normalizeLinkedinUrl.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
@@ -58,6 +54,9 @@ const BATCH_SIZE = 3;
 // BATCH_SIZE * 3 = 9 — enough for ~3 calibration rounds before the pool
 // runs thin. Raise to 15 explicitly if sourcing quality proves too variable.
 const CRUSTDATA_POOL_FLOOR = BATCH_SIZE * 3;
+const HARVEST_KEY_PRESENT = Boolean(Deno.env.get("HARVESTAPI_KEY"));
+// Top-N ceiling for Harvest enrichment — cost control (~$0.12 max at $0.01/profile).
+const HARVEST_ENRICH_TOP_N = 12;
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -111,11 +110,14 @@ type RawCandidate = {
   job_company_name?: string | null;
   location_name?: string | null;
   skills?: string[] | null;
+  certifications?: string[] | null;
   years_experience?: number | null;
   linkedin_url?: string | null;
+  email?: string | null;
   _from_bench?: boolean;
-  // Harvest-enriched fields (populated after batchEnrichFromHarvest step)
+  // Harvest-enriched fields (populated after Harvest enrichment step)
   photo_url?: string | null;
+  harvest_enriched_at?: string | null;
   work_history?: unknown;
   work_history_summary?: string | null;
 };
@@ -577,45 +579,62 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    // ── Harvest batch enrichment (profile: skills, experience, photo) ──────
-    // Runs after exclude post-filter, before ranking so the LLM sees richer data.
-    // Vendor role (2026-07-30): Harvest = profile. PDL = contact (email/phone).
+    // ── Harvest enrichment — top-N only (concurrency-safe, cheap mode) ───────
+    // Vendor role: Harvest = skills/certifications/photo + free incidental email.
+    // PDL remains primary for personal email/phone via enrich-candidate-contact.
     // Non-blocking: if Harvest fails for any profile, the Crustdata stub is kept.
-    // HARVEST_PER_ROLE_CEILING_USD = $1.50 — hard-stop TODO: for now, log + skip
-    // when the estimated credit spend would exceed the ceiling.
-    const harvestUrls = merged
-      .map((c) => c.linkedin_url)
-      .filter((url): url is string => Boolean(url));
+    // Cost control: only enrich the top-N pre-sorted candidates (~$0.12 max).
+    if (HARVEST_KEY_PRESENT) {
+      // Cheap pre-sort: keyword overlap between role required_skills and candidate
+      // skills + title match. No LLM — just set intersection for ordering.
+      const requiredSkills = (
+        (roleBrief.required_skills as string[] | null) ?? []
+      ).map((s) => s.toLowerCase());
+      const titleKeyword = (
+        (roleBrief.title as string | null) ?? ""
+      ).toLowerCase();
 
-    if (harvestUrls.length > 0) {
-      const HARVEST_COST_PER_PROFILE = 0.01; // ~$0.01/profile estimate
-      const estimatedCost = harvestUrls.length * HARVEST_COST_PER_PROFILE;
-      if (estimatedCost > HARVEST_PER_ROLE_CEILING_USD) {
-        // TODO: surface a toast to the recruiter and skip further auto-enrich
-        console.warn(
-          `[calibration-session] Harvest cost estimate $${estimatedCost.toFixed(2)} exceeds ceiling $${HARVEST_PER_ROLE_CEILING_USD} — skipping batch enrichment for this pull.`,
-        );
-      } else {
+      const scored = merged.map((c) => {
+        const cSkills = (c.skills ?? []).map((s) => s.toLowerCase());
+        const overlap = requiredSkills.filter((rs) =>
+          cSkills.some((cs) => cs.includes(rs) || rs.includes(cs)),
+        ).length;
+        const titleHit =
+          titleKeyword &&
+          ((c.job_title ?? "").toLowerCase().includes(titleKeyword) ||
+            (c.job_company_name ?? "").toLowerCase().includes(titleKeyword))
+            ? 1
+            : 0;
+        return { c, score: overlap + titleHit };
+      });
+      scored.sort((a, b) => b.score - a.score);
+
+      const topNCandidates = scored
+        .slice(0, HARVEST_ENRICH_TOP_N)
+        .map((s) => s.c);
+      const topNUrls = topNCandidates
+        .map((c) => c.linkedin_url)
+        .filter((url): url is string => Boolean(url));
+
+      if (topNUrls.length > 0) {
         try {
-          const harvestMap = await batchEnrichFromHarvest(harvestUrls, 5);
+          const harvestMap = await enrichCandidatesWithHarvestSkills(topNUrls);
           let enrichedCount = 0;
-          for (const c of merged) {
+          for (const c of topNCandidates) {
             if (!c.linkedin_url) continue;
-            const profile = harvestMap.get(c.linkedin_url);
-            if (!profile) continue;
+            const enriched = harvestMap.get(c.linkedin_url);
+            if (!enriched) continue;
             enrichedCount++;
             // Merge photo
-            if (profile.profilePictureUrl)
-              c.photo_url = profile.profilePictureUrl;
+            if (enriched.photoUrl) c.photo_url = enriched.photoUrl;
+            // Free incidental email (no findEmail=true — Harvest free response only)
+            if (enriched.email && !c.email) c.email = enriched.email;
             // Merge skills (union, Harvest first for quality)
-            if (profile.skills.length > 0) {
-              const existing = new Set(
-                (c.skills ?? []).map((s) => s.toLowerCase()),
-              );
-              const merged_skills = [...profile.skills];
+            if (enriched.skills.length > 0) {
+              const merged_skills = [...enriched.skills];
               for (const s of c.skills ?? []) {
                 if (
-                  !profile.skills.some(
+                  !enriched.skills.some(
                     (p) => p.toLowerCase() === s.toLowerCase(),
                   )
                 ) {
@@ -623,22 +642,25 @@ Deno.serve(async (req: Request) => {
                 }
               }
               c.skills = merged_skills;
-              void existing; // suppress unused var
             }
-            // Store work history for ranking context
-            if (profile.experiences.length > 0) {
-              c.work_history = profile.experiences;
-              c.work_history_summary = buildWorkHistorySummary(
-                profile.experiences,
-              );
+            // Certifications (additive, no dedup needed — Harvest is authoritative)
+            if (enriched.certifications?.length) {
+              const existing = new Set(c.certifications ?? []);
+              c.certifications = [
+                ...(c.certifications ?? []),
+                ...enriched.certifications.filter(
+                  (cert) => !existing.has(cert),
+                ),
+              ];
             }
+            c.harvest_enriched_at = new Date().toISOString();
           }
           console.warn(
-            `[calibration-session] Harvest enriched ${enrichedCount}/${harvestUrls.length} profiles (est. cost $${(enrichedCount * HARVEST_COST_PER_PROFILE).toFixed(2)})`,
+            `[calibration-session] Harvest enriched top-${enrichedCount}/${topNUrls.length} candidates (HARVEST_CONCURRENCY=${Deno.env.get("HARVEST_CONCURRENCY") ?? "1"})`,
           );
         } catch (err) {
           console.warn(
-            "[calibration-session] Harvest batch enrichment failed (non-fatal):",
+            "[calibration-session] Harvest enrichment failed (non-fatal):",
             err,
           );
         }

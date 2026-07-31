@@ -95,6 +95,8 @@ type RoleConversationTranscriptProps = {
   /** When true, candidate_card turns are suppressed from the transcript because
    *  the Review tab already shows the same candidates. BatchFooter still renders. */
   hideCardTurns?: boolean;
+  /** Called when the user clicks a historical-batch summary line to open the Review tab. */
+  onOpenReview?: () => void;
 };
 
 export const RoleConversationTranscript = ({
@@ -106,6 +108,7 @@ export const RoleConversationTranscript = ({
   onCalibrationYes,
   onCalibrationNo,
   hideCardTurns = false,
+  onOpenReview,
 }: RoleConversationTranscriptProps) => {
   const {
     data: turns,
@@ -236,7 +239,7 @@ export const RoleConversationTranscript = ({
       ) : (
         <>
           <ul className="flex flex-col gap-3 max-h-[60vh] overflow-y-auto">
-            {list.map((turn) => {
+            {list.map((turn, idx) => {
               if (visibleIds !== null && !visibleIds.has(String(turn.id)))
                 return null;
               const metadata = turn.metadata as
@@ -276,7 +279,49 @@ export const RoleConversationTranscript = ({
                 metadata?.kind === "candidate_card" &&
                 metadata.candidate_card
               ) {
-                // Suppress when Review tab already shows the same candidates.
+                if (!latestBatchIds.has(String(turn.id))) {
+                  // Historical batch: render one summary line per contiguous group.
+                  const prevTurn = idx > 0 ? list[idx - 1] : null;
+                  const prevIsHistoricalCard =
+                    prevTurn &&
+                    !latestBatchIds.has(String(prevTurn.id)) &&
+                    (prevTurn.metadata as ConversationTurnMetadata | undefined)
+                      ?.kind === "candidate_card";
+                  if (prevIsHistoricalCard) return null;
+                  // Count this batch group.
+                  let n = 1;
+                  for (let j = idx + 1; j < list.length; j++) {
+                    const nm = list[j].metadata as
+                      | ConversationTurnMetadata
+                      | undefined;
+                    if (
+                      nm?.kind === "candidate_card" &&
+                      !latestBatchIds.has(String(list[j].id))
+                    )
+                      n++;
+                    else break;
+                  }
+                  const label = `Sourced ${n} candidate${n === 1 ? "" : "s"} — see Review tab`;
+                  return (
+                    <li
+                      key={turn.id}
+                      className="text-xs text-muted-foreground italic"
+                    >
+                      {onOpenReview ? (
+                        <button
+                          type="button"
+                          onClick={onOpenReview}
+                          className="underline underline-offset-2 hover:text-foreground transition-colors"
+                        >
+                          {label}
+                        </button>
+                      ) : (
+                        label
+                      )}
+                    </li>
+                  );
+                }
+                // Latest batch card — suppress when Review tab shows them.
                 if (hideCardTurns) return null;
                 const card = metadata.candidate_card;
                 const extId = card.calibration_external_id;

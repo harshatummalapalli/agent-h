@@ -92,6 +92,9 @@ type RoleConversationTranscriptProps = {
   actionBusy?: boolean;
   onCalibrationYes?: () => void;
   onCalibrationNo?: () => void;
+  /** When true, candidate_card turns are suppressed from the transcript because
+   *  the Review tab already shows the same candidates. BatchFooter still renders. */
+  hideCardTurns?: boolean;
 };
 
 export const RoleConversationTranscript = ({
@@ -102,6 +105,7 @@ export const RoleConversationTranscript = ({
   actionBusy = false,
   onCalibrationYes,
   onCalibrationNo,
+  hideCardTurns = false,
 }: RoleConversationTranscriptProps) => {
   const {
     data: turns,
@@ -272,6 +276,8 @@ export const RoleConversationTranscript = ({
                 metadata?.kind === "candidate_card" &&
                 metadata.candidate_card
               ) {
+                // Suppress when Review tab already shows the same candidates.
+                if (hideCardTurns) return null;
                 const card = metadata.candidate_card;
                 const extId = card.calibration_external_id;
                 return (

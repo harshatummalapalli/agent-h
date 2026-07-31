@@ -12,4 +12,5 @@ export type AgentHShellCommandBarProps = {
   hint: string;
   slashActions: SlashAction[];
   onSubmit: (value: string) => void;
+  busy?: boolean;
 };

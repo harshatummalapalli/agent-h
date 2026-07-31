@@ -48,6 +48,7 @@ export const AgentHShell = ({
               hint={commandBar.hint}
               slashActions={commandBar.slashActions}
               onSubmit={commandBar.onSubmit}
+              busy={commandBar.busy}
             />
           </div>
         </>

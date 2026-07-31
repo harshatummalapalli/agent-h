@@ -32,7 +32,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { EditButton } from "@/components/admin/edit-button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
@@ -567,6 +566,7 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
           if (commandBusy || sourcingInFlight) return;
           void runFreeTextCommand(v);
         },
+        busy: commandBusy || sourcingInFlight,
       }}
     >
       {/* 3-pane: memory panel (desktop) + main content */}
@@ -1077,8 +1077,6 @@ const RoleWorkspaceHeader = ({
         >
           <Archive className="h-4 w-4" />
         </Button>
-
-        <EditButton />
       </div>
     </div>
   );

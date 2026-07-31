@@ -15,7 +15,7 @@
 // Never invent leadership excludes or client excludes — those are "judgment
 // packs" only a recruiter can toggle intentionally.
 
-import type { SearchIntentCondition } from "../types";
+import type { SearchIntentCondition, UnenforcedConstraint } from "../types";
 import { resolveLocation } from "../../../../supabase/functions/_shared/taxonomies/location";
 
 // ─── Skill normalizer ─────────────────────────────────────────────────────────
@@ -187,7 +187,8 @@ function isUnknownLocation(loc: string): boolean {
 function splitLocationString(location: string): string[] {
   // Remove qualifiers that follow "remote": "remote within the United States",
   // "fully remote within X", etc. Extract just the "remote" word.
-  const remoteQualifierRe = /\bfully\s+remote\b|\bremote\s+(?:within|in|across|throughout)\b[^,/]*/gi;
+  const remoteQualifierRe =
+    /\bfully\s+remote\b|\bremote\s+(?:within|in|across|throughout)\b[^,/]*/gi;
   const normalized = location.replace(remoteQualifierRe, "remote");
 
   // Split on " / ", ", or ", ", ", or " or " (in order of specificity).
@@ -257,7 +258,12 @@ export function parsedBriefToConditions(
 
       // Remote flag: any part that is (or contains) the word "remote".
       if (/\bremote\b/i.test(part)) {
-        add({ category: "other", disposition: "require", value: "remote", note: "remote-ok flag" });
+        add({
+          category: "other",
+          disposition: "require",
+          value: "remote",
+          note: "remote-ok flag",
+        });
         continue;
       }
 
@@ -352,4 +358,51 @@ export function parsedBriefToConditions(
   }
 
   return conditions;
+}
+
+// ─── Unenforceable constraint extraction ──────────────────────────────────────
+//
+// Education / degree requirements (bachelor's, master's, PhD, MBA, etc.) are
+// not filterable on Crustdata.  parsedBriefToConditions drops them via
+// YOE_OR_PROSE_RE.  Instead of silently losing them, surface them as
+// UnenforcedConstraint[] so the Prefer tab can show them as context.
+
+const DEGREE_RE =
+  /\b(bachelor'?s?|master'?s?|m\.?s\.?|b\.?s\.?|b\.?a\.?|m\.?b\.?a\.?|m\.?eng\.?|phd|ph\.?d\.?|doctorate|mba|bsc|msc)\b/i;
+
+/**
+ * Scan the raw skill arrays of a ParsedRoleBrief for degree/education tokens
+ * that parsedBriefToConditions would otherwise drop, and return them as
+ * UnenforcedConstraint[] for display in the Prefer tab.
+ *
+ * Pure function — no side effects.
+ */
+export function extractUnenforceableFromBrief(
+  brief: ParsedBriefInput,
+): UnenforcedConstraint[] {
+  const candidates = [
+    ...(brief.required_skills ?? []),
+    ...(brief.must_have_keywords ?? []),
+  ];
+
+  const seen = new Set<string>();
+  const result: UnenforcedConstraint[] = [];
+
+  for (const raw of candidates) {
+    const token = raw.trim();
+    if (!token) continue;
+    if (!DEGREE_RE.test(token)) continue;
+
+    const key = token.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    result.push({
+      description: token,
+      reason:
+        "Crustdata does not filter by education level — shown as context only",
+    });
+  }
+
+  return result;
 }

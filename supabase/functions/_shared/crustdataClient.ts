@@ -398,6 +398,21 @@ export type RawCalibrationCandidate = {
   _source_vendor: "crustdata";
 };
 
+// Inline linkedin normalizer — keeps this file import-free while fixing the
+// dedup key.  Canonical version lives in _shared/normalizeLinkedinUrl.ts.
+function _linkedinKey(url: string | null | undefined): string | null {
+  if (!url) return null;
+  let s = url.trim().toLowerCase();
+  if (!s) return null;
+  s = s.replace(/^https?:\/\//i, "").replace(/^www\./i, "");
+  const qi = s.indexOf("?");
+  if (qi !== -1) s = s.slice(0, qi);
+  const hi = s.indexOf("#");
+  if (hi !== -1) s = s.slice(0, hi);
+  s = s.replace(/\/+$/, "");
+  return s.includes("linkedin.com") ? s : null;
+}
+
 export function normalizeCrustdataProfile(
   raw: Record<string, unknown>,
 ): RawCalibrationCandidate {
@@ -436,26 +451,46 @@ export function normalizeCrustdataProfile(
       : null) ??
     (typeof raw.linkedin_url === "string" ? raw.linkedin_url : null);
 
-  const personId =
+  const full_name =
+    typeof basicProfile.name === "string" ? basicProfile.name : null;
+  const job_title =
+    typeof basicProfile.current_title === "string"
+      ? basicProfile.current_title
+      : typeof currentPosition.title === "string"
+        ? currentPosition.title
+        : null;
+  const job_company_name =
+    typeof currentPosition.name === "string" ? currentPosition.name : null;
+
+  // Normalize linkedin URL once so both the id fallback and the stored field use it.
+  const normalizedLinkedin = _linkedinKey(rawLinkedin);
+
+  // ID fallback chain: crustdata_person_id → normalized linkedin → content fingerprint.
+  // Empty string must never be the dedup key — it collapses all unidentified profiles.
+  const crustdataPersonId =
     typeof raw.crustdata_person_id === "number" ||
     typeof raw.crustdata_person_id === "string"
       ? String(raw.crustdata_person_id)
-      : "";
+      : null;
+  const contentFingerprint = [full_name, job_company_name, locationName]
+    .filter(Boolean)
+    .join("|")
+    .toLowerCase();
+  const personId =
+    crustdataPersonId ||
+    normalizedLinkedin ||
+    contentFingerprint ||
+    // Last resort: random — prevents two empty profiles colliding.
+    Math.random().toString(36).slice(2);
 
   return {
     id: personId,
-    full_name: typeof basicProfile.name === "string" ? basicProfile.name : null,
-    job_title:
-      typeof basicProfile.current_title === "string"
-        ? basicProfile.current_title
-        : typeof currentPosition.title === "string"
-          ? currentPosition.title
-          : null,
-    job_company_name:
-      typeof currentPosition.name === "string" ? currentPosition.name : null,
+    full_name,
+    job_title,
+    job_company_name,
     location_name: locationName,
     skills: [],
-    linkedin_url: rawLinkedin ? rawLinkedin.replace(/^https?:\/\//i, "") : null,
+    linkedin_url: normalizedLinkedin,
     years_experience: crustdataYearsExperience(raw),
     _source_vendor: "crustdata",
   };
@@ -525,6 +560,24 @@ export function filterByCountry(
   return candidates.filter((c) =>
     locationMatchesCountry(c.location_name, canonicalCountry),
   );
+}
+
+// ── Dedup helper ──────────────────────────────────────────────────────────
+
+/** Deduplicate a candidate array using normalized linkedin URL (or id) as key. */
+function dedupByLinkedinKey(
+  candidates: RawCalibrationCandidate[],
+): RawCalibrationCandidate[] {
+  const seen = new Set<string>();
+  const result: RawCalibrationCandidate[] = [];
+  for (const c of candidates) {
+    const key = _linkedinKey(c.linkedin_url) ?? c.id;
+    if (!seen.has(key)) {
+      seen.add(key);
+      result.push(c);
+    }
+  }
+  return result;
 }
 
 // ── Country extraction helper ─────────────────────────────────────────────
@@ -646,7 +699,7 @@ export async function searchCrustdataForRoleBrief(
   }
 
   const firstNormalized = firstResult.profiles.map(normalizeCrustdataProfile);
-  const firstFiltered = applyCountryFilter(firstNormalized);
+  const firstFiltered = dedupByLinkedinKey(applyCountryFilter(firstNormalized));
 
   if (firstFiltered.length > 0) {
     console.warn(
@@ -691,7 +744,7 @@ export async function searchCrustdataForRoleBrief(
   }
 
   const retryNormalized = retryResult.profiles.map(normalizeCrustdataProfile);
-  const retryFiltered = applyCountryFilter(retryNormalized);
+  const retryFiltered = dedupByLinkedinKey(applyCountryFilter(retryNormalized));
 
   if (retryFiltered.length > 0) {
     console.warn(

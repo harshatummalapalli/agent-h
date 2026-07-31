@@ -5,9 +5,11 @@ import {
   buildCalibrationFilters,
   filterByCountry,
   extractCanonicalCountry,
+  normalizeCrustdataProfile,
   COUNTRY_ALIASES,
   type RawCalibrationCandidate,
 } from "./crustdataClient";
+import { normalizeLinkedinUrl } from "./normalizeLinkedinUrl";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -563,5 +565,135 @@ describe("buildCalibrationFilters — title shingle decomposition (regression: C
     // 6-word title → 5 shingles; cap at 6 so all 5 are present
     expect(titleTerms.length).toBeLessThanOrEqual(6);
     expect(titleTerms.length).toBeGreaterThan(0);
+  });
+});
+
+// ── normalizeLinkedinUrl ──────────────────────────────────────────────────────
+
+describe("normalizeLinkedinUrl", () => {
+  it("strips https:// and www.", () => {
+    expect(normalizeLinkedinUrl("https://www.linkedin.com/in/johndoe")).toBe(
+      "linkedin.com/in/johndoe",
+    );
+  });
+
+  it("strips http://", () => {
+    expect(normalizeLinkedinUrl("http://linkedin.com/in/johndoe")).toBe(
+      "linkedin.com/in/johndoe",
+    );
+  });
+
+  it("strips trailing slash", () => {
+    expect(normalizeLinkedinUrl("linkedin.com/in/johndoe/")).toBe(
+      "linkedin.com/in/johndoe",
+    );
+  });
+
+  it("strips query string", () => {
+    expect(
+      normalizeLinkedinUrl("https://linkedin.com/in/johndoe?utm_source=x"),
+    ).toBe("linkedin.com/in/johndoe");
+  });
+
+  it("lowercases", () => {
+    expect(normalizeLinkedinUrl("LinkedIn.com/in/JohnDoe")).toBe(
+      "linkedin.com/in/johndoe",
+    );
+  });
+
+  it("returns null for non-linkedin URLs", () => {
+    expect(normalizeLinkedinUrl("https://github.com/johndoe")).toBeNull();
+  });
+
+  it("returns null for null/empty", () => {
+    expect(normalizeLinkedinUrl(null)).toBeNull();
+    expect(normalizeLinkedinUrl("")).toBeNull();
+    expect(normalizeLinkedinUrl(undefined)).toBeNull();
+  });
+});
+
+// ── normalizeCrustdataProfile dedup key ───────────────────────────────────────
+
+/** Build a minimal raw Crustdata API profile payload for testing. */
+function makeRawProfile(opts: {
+  crustdata_person_id?: string | number | null;
+  linkedin?: string | null;
+  name?: string;
+  company?: string;
+}): Record<string, unknown> {
+  return {
+    crustdata_person_id: opts.crustdata_person_id ?? null,
+    basic_profile: {
+      name: opts.name ?? "Test Person",
+      current_title: "Engineer",
+      location: { raw: "San Francisco, CA" },
+    },
+    experience: {
+      employment_details: {
+        current: [{ name: opts.company ?? "Acme Corp", title: "Engineer" }],
+      },
+    },
+    social_handles: {
+      professional_network_identifier: opts.linkedin
+        ? { profile_url: opts.linkedin }
+        : {},
+    },
+    years_of_experience: null,
+  };
+}
+
+describe("normalizeCrustdataProfile dedup", () => {
+  it("two profiles with different linkedin URL formats produce the same normalized linkedin_url key", () => {
+    const p1 = normalizeCrustdataProfile(
+      makeRawProfile({ linkedin: "https://www.linkedin.com/in/johndoe" }),
+    );
+    const p2 = normalizeCrustdataProfile(
+      makeRawProfile({ linkedin: "linkedin.com/in/johndoe/" }),
+    );
+    // Both should resolve to the same canonical linkedin_url
+    expect(p1.linkedin_url).toBe("linkedin.com/in/johndoe");
+    expect(p2.linkedin_url).toBe("linkedin.com/in/johndoe");
+    // And therefore the same dedup key
+    expect(normalizeLinkedinUrl(p1.linkedin_url)).toBe(
+      normalizeLinkedinUrl(p2.linkedin_url),
+    );
+  });
+
+  it("empty crustdata_person_id falls back to linkedin key then content fingerprint", () => {
+    // Profile A: no crustdata id, no linkedin — should get content fingerprint
+    const a = normalizeCrustdataProfile(
+      makeRawProfile({
+        crustdata_person_id: null,
+        linkedin: null,
+        name: "Alice Smith",
+        company: "Foo Inc",
+      }),
+    );
+    // Profile B: no crustdata id, no linkedin — different name/company
+    const b = normalizeCrustdataProfile(
+      makeRawProfile({
+        crustdata_person_id: null,
+        linkedin: null,
+        name: "Bob Jones",
+        company: "Bar Corp",
+      }),
+    );
+    // They must NOT share the same id
+    expect(a.id).not.toBe(b.id);
+    // And neither should be empty string
+    expect(a.id).not.toBe("");
+    expect(b.id).not.toBe("");
+  });
+
+  it("id is never empty string even when all fields are absent", () => {
+    const p = normalizeCrustdataProfile({
+      crustdata_person_id: null,
+      basic_profile: {},
+      experience: {},
+      social_handles: {},
+      years_of_experience: null,
+    });
+    expect(p.id).not.toBe("");
+    expect(p.id.length).toBeGreaterThan(0);
   });
 });

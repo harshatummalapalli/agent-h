@@ -152,7 +152,7 @@ export const InboxPage = () => {
           status: "success",
           summary: parsed.explanation,
         });
-        navigate("/deals");
+        navigate("/");
       } else if (parsed.action === "refine_search_intent") {
         if (parsed.deal_id == null) {
           updateActivityEntry(logId, {

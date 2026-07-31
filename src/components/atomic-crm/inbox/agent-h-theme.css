@@ -57,9 +57,24 @@
 .ah-scope {
   position: relative;
   width: 100%;
-  min-height: calc(100dvh - 8rem);
-  overflow: visible;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
   background: var(--ah-bg-0);
+}
+
+/* Fixed command bar inset: clear the AppShell icon rail (+ optional roles
+   sidebar). AppShell sets data-sidebar-open on the h-screen root. */
+.ah-command-bar-dock {
+  left: 0;
+}
+@media (min-width: 768px) {
+  [data-sidebar-open="false"] .ah-command-bar-dock {
+    left: 3rem; /* 48px icon rail */
+  }
+  [data-sidebar-open="true"] .ah-command-bar-dock {
+    left: 18rem; /* 48px rail + 240px roles sidebar */
+  }
 }
 
 .ah-theme ::-webkit-scrollbar,

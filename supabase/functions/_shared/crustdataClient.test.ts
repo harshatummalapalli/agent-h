@@ -5,13 +5,21 @@ import {
   buildCalibrationFilters,
   filterByCountry,
   extractCanonicalCountry,
+  normalizeCrustdataProfile,
   COUNTRY_ALIASES,
   type RawCalibrationCandidate,
 } from "./crustdataClient";
+import { normalizeLinkedinUrl } from "./normalizeLinkedinUrl";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-type AnyFilter = { field?: string; type?: string; value?: unknown; op?: string; conditions?: AnyFilter[] };
+type AnyFilter = {
+  field?: string;
+  type?: string;
+  value?: unknown;
+  op?: string;
+  conditions?: AnyFilter[];
+};
 
 /** Recursively flatten a nested filter tree into a flat array of leaf conditions. */
 function flattenConditions(f: AnyFilter): AnyFilter[] {
@@ -438,7 +446,11 @@ describe("parseLocationForFilter — paren-country form (regression: Hyderabad (
 // ── NEW: buildCalibrationFilters — all Hyderabad/India variants → India country filter ──
 
 const INDIA_COUNTRY_FIELD = "basic_profile.location.country";
-const INDIA_COUNTRY_FILTER = { field: INDIA_COUNTRY_FIELD, type: "=", value: "India" };
+const INDIA_COUNTRY_FILTER = {
+  field: INDIA_COUNTRY_FIELD,
+  type: "=",
+  value: "India",
+};
 
 const INDIA_LOCATION_VARIANTS: Array<[string, string]> = [
   ["India", "bare country"],
@@ -451,7 +463,10 @@ const INDIA_LOCATION_VARIANTS: Array<[string, string]> = [
 describe("buildCalibrationFilters — India location variants all produce India country filter", () => {
   for (const [loc, label] of INDIA_LOCATION_VARIANTS) {
     it(`'${loc}' (${label}) → country='India' exact filter`, () => {
-      const filters = buildCalibrationFilters({ name: "Software Engineer", location: loc });
+      const filters = buildCalibrationFilters({
+        name: "Software Engineer",
+        location: loc,
+      });
       expect(filters).not.toBeNull();
       const flat = flattenConditions(filters as AnyFilter);
       expect(flat).toContainEqual(INDIA_COUNTRY_FILTER);
@@ -495,6 +510,90 @@ describe("extractCanonicalCountry", () => {
   });
 });
 
+// ── NEW: buildCalibrationFilters — exclude conditions ────────────────────────
+
+describe("buildCalibrationFilters — excluded_companies", () => {
+  it("emits a (!) condition on currentCompanyName for each excluded company", () => {
+    const filters = buildCalibrationFilters({
+      name: "Software Engineer",
+      excluded_companies: ["Cognizant", "TCS"],
+    });
+    expect(filters).not.toBeNull();
+    const flat = flattenConditions(filters as AnyFilter);
+    const excludeConditions = flat.filter(
+      (c) =>
+        c.type === "(!)" &&
+        c.field === "experience.employment_details.current.company_name",
+    );
+    expect(excludeConditions).toHaveLength(2);
+    expect(excludeConditions.map((c) => c.value)).toContain("Cognizant");
+    expect(excludeConditions.map((c) => c.value)).toContain("TCS");
+  });
+
+  it("does not emit exclude conditions when excluded_companies is empty", () => {
+    const filters = buildCalibrationFilters({
+      name: "Software Engineer",
+      excluded_companies: [],
+    });
+    expect(filters).not.toBeNull();
+    const flat = flattenConditions(filters as AnyFilter);
+    const excludeConditions = flat.filter((c) => c.type === "(!)");
+    expect(excludeConditions).toHaveLength(0);
+  });
+
+  it("skips blank/empty company strings", () => {
+    const filters = buildCalibrationFilters({
+      name: "Engineer",
+      excluded_companies: ["", "  ", "Infosys"],
+    });
+    expect(filters).not.toBeNull();
+    const flat = flattenConditions(filters as AnyFilter);
+    const excludeConditions = flat.filter(
+      (c) =>
+        c.type === "(!)" &&
+        c.field === "experience.employment_details.current.company_name",
+    );
+    expect(excludeConditions).toHaveLength(1);
+    expect(excludeConditions[0].value).toBe("Infosys");
+  });
+});
+
+describe("buildCalibrationFilters — exclusion_keywords", () => {
+  it("emits (!) conditions on both title and skills fields for each keyword", () => {
+    const filters = buildCalibrationFilters({
+      name: "Software Engineer",
+      exclusion_keywords: ["Manager", "Director"],
+    });
+    expect(filters).not.toBeNull();
+    const flat = flattenConditions(filters as AnyFilter);
+    const titleExcludes = flat.filter(
+      (c) =>
+        c.type === "(!)" &&
+        c.field === "experience.employment_details.current.title",
+    );
+    const skillExcludes = flat.filter(
+      (c) =>
+        c.type === "(!)" && c.field === "skills.professional_network_skills",
+    );
+    expect(titleExcludes).toHaveLength(2);
+    expect(skillExcludes).toHaveLength(2);
+  });
+
+  it("combines excluded_companies and exclusion_keywords in one AND filter", () => {
+    const filters = buildCalibrationFilters({
+      name: "Engineer",
+      location: "India",
+      excluded_companies: ["Wipro"],
+      exclusion_keywords: ["Manager"],
+    });
+    expect(filters).not.toBeNull();
+    const flat = flattenConditions(filters as AnyFilter);
+    const notConditions = flat.filter((c) => c.type === "(!)");
+    // Wipro on company + Manager on title + Manager on skills = 3
+    expect(notConditions).toHaveLength(3);
+  });
+});
+
 // ── NEW: title shingle decomposition in buildCalibrationFilters ───────────────
 
 describe("buildCalibrationFilters — title shingle decomposition (regression: Cyber Incident)", () => {
@@ -519,14 +618,15 @@ describe("buildCalibrationFilters — title shingle decomposition (regression: C
     }
 
     // Shingles must not include the raw 5-word full phrase (too long for literal match)
-    const hasFiveWordPhrase = titleTerms.some(
-      (t) => t.split(/\s+/).length > 2,
-    );
+    const hasFiveWordPhrase = titleTerms.some((t) => t.split(/\s+/).length > 2);
     expect(hasFiveWordPhrase).toBe(false);
   });
 
   it("'Software Engineer' (2 words) stays as a single condition", () => {
-    const filters = buildCalibrationFilters({ name: "Software Engineer", location: "India" });
+    const filters = buildCalibrationFilters({
+      name: "Software Engineer",
+      location: "India",
+    });
     expect(filters).not.toBeNull();
     const flat = flattenConditions(filters as AnyFilter);
     const titleConds = flat.filter(
@@ -537,7 +637,10 @@ describe("buildCalibrationFilters — title shingle decomposition (regression: C
   });
 
   it("'Senior Software Engineer' (3 words) produces 2 shingles: 'Senior Software' + 'Software Engineer'", () => {
-    const filters = buildCalibrationFilters({ name: "Senior Software Engineer", location: "India" });
+    const filters = buildCalibrationFilters({
+      name: "Senior Software Engineer",
+      location: "India",
+    });
     expect(filters).not.toBeNull();
     const flat = flattenConditions(filters as AnyFilter);
     const titleTerms = flat
@@ -563,5 +666,135 @@ describe("buildCalibrationFilters — title shingle decomposition (regression: C
     // 6-word title → 5 shingles; cap at 6 so all 5 are present
     expect(titleTerms.length).toBeLessThanOrEqual(6);
     expect(titleTerms.length).toBeGreaterThan(0);
+  });
+});
+
+// ── normalizeLinkedinUrl ──────────────────────────────────────────────────────
+
+describe("normalizeLinkedinUrl", () => {
+  it("strips https:// and www.", () => {
+    expect(normalizeLinkedinUrl("https://www.linkedin.com/in/johndoe")).toBe(
+      "linkedin.com/in/johndoe",
+    );
+  });
+
+  it("strips http://", () => {
+    expect(normalizeLinkedinUrl("http://linkedin.com/in/johndoe")).toBe(
+      "linkedin.com/in/johndoe",
+    );
+  });
+
+  it("strips trailing slash", () => {
+    expect(normalizeLinkedinUrl("linkedin.com/in/johndoe/")).toBe(
+      "linkedin.com/in/johndoe",
+    );
+  });
+
+  it("strips query string", () => {
+    expect(
+      normalizeLinkedinUrl("https://linkedin.com/in/johndoe?utm_source=x"),
+    ).toBe("linkedin.com/in/johndoe");
+  });
+
+  it("lowercases", () => {
+    expect(normalizeLinkedinUrl("LinkedIn.com/in/JohnDoe")).toBe(
+      "linkedin.com/in/johndoe",
+    );
+  });
+
+  it("returns null for non-linkedin URLs", () => {
+    expect(normalizeLinkedinUrl("https://github.com/johndoe")).toBeNull();
+  });
+
+  it("returns null for null/empty", () => {
+    expect(normalizeLinkedinUrl(null)).toBeNull();
+    expect(normalizeLinkedinUrl("")).toBeNull();
+    expect(normalizeLinkedinUrl(undefined)).toBeNull();
+  });
+});
+
+// ── normalizeCrustdataProfile dedup key ───────────────────────────────────────
+
+/** Build a minimal raw Crustdata API profile payload for testing. */
+function makeRawProfile(opts: {
+  crustdata_person_id?: string | number | null;
+  linkedin?: string | null;
+  name?: string;
+  company?: string;
+}): Record<string, unknown> {
+  return {
+    crustdata_person_id: opts.crustdata_person_id ?? null,
+    basic_profile: {
+      name: opts.name ?? "Test Person",
+      current_title: "Engineer",
+      location: { raw: "San Francisco, CA" },
+    },
+    experience: {
+      employment_details: {
+        current: [{ name: opts.company ?? "Acme Corp", title: "Engineer" }],
+      },
+    },
+    social_handles: {
+      professional_network_identifier: opts.linkedin
+        ? { profile_url: opts.linkedin }
+        : {},
+    },
+    years_of_experience: null,
+  };
+}
+
+describe("normalizeCrustdataProfile dedup", () => {
+  it("two profiles with different linkedin URL formats produce the same normalized linkedin_url key", () => {
+    const p1 = normalizeCrustdataProfile(
+      makeRawProfile({ linkedin: "https://www.linkedin.com/in/johndoe" }),
+    );
+    const p2 = normalizeCrustdataProfile(
+      makeRawProfile({ linkedin: "linkedin.com/in/johndoe/" }),
+    );
+    // Both should resolve to the same canonical linkedin_url
+    expect(p1.linkedin_url).toBe("linkedin.com/in/johndoe");
+    expect(p2.linkedin_url).toBe("linkedin.com/in/johndoe");
+    // And therefore the same dedup key
+    expect(normalizeLinkedinUrl(p1.linkedin_url)).toBe(
+      normalizeLinkedinUrl(p2.linkedin_url),
+    );
+  });
+
+  it("empty crustdata_person_id falls back to linkedin key then content fingerprint", () => {
+    // Profile A: no crustdata id, no linkedin — should get content fingerprint
+    const a = normalizeCrustdataProfile(
+      makeRawProfile({
+        crustdata_person_id: null,
+        linkedin: null,
+        name: "Alice Smith",
+        company: "Foo Inc",
+      }),
+    );
+    // Profile B: no crustdata id, no linkedin — different name/company
+    const b = normalizeCrustdataProfile(
+      makeRawProfile({
+        crustdata_person_id: null,
+        linkedin: null,
+        name: "Bob Jones",
+        company: "Bar Corp",
+      }),
+    );
+    // They must NOT share the same id
+    expect(a.id).not.toBe(b.id);
+    // And neither should be empty string
+    expect(a.id).not.toBe("");
+    expect(b.id).not.toBe("");
+  });
+
+  it("id is never empty string even when all fields are absent", () => {
+    const p = normalizeCrustdataProfile({
+      crustdata_person_id: null,
+      basic_profile: {},
+      experience: {},
+      social_handles: {},
+      years_of_experience: null,
+    });
+    expect(p.id).not.toBe("");
+    expect(p.id.length).toBeGreaterThan(0);
   });
 });

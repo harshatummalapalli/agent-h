@@ -284,7 +284,7 @@ export const CanvasPage = () => {
           status: "success",
           summary: parsed.explanation,
         });
-        navigate("/deals");
+        navigate("/");
       } else if (parsed.action === "refine_search_intent") {
         if (!dealId) {
           updateActivityEntry(logId, {

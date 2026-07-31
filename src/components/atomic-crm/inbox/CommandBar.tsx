@@ -16,6 +16,7 @@ type CommandBarProps = {
   hint: string;
   slashActions: SlashAction[];
   onSubmit: (value: string) => void;
+  busy?: boolean;
 };
 
 export const CommandBar = ({
@@ -23,6 +24,7 @@ export const CommandBar = ({
   hint,
   slashActions,
   onSubmit,
+  busy = false,
 }: CommandBarProps) => {
   const [value, setValue] = useState("");
   const [showSlashMenu, setShowSlashMenu] = useState(false);
@@ -49,7 +51,13 @@ export const CommandBar = ({
 
   return (
     <div
-      style={{ padding: "12px 22px 16px", flexShrink: 0, position: "relative" }}
+      style={{
+        padding: "12px 22px 16px",
+        flexShrink: 0,
+        position: "relative",
+        borderTop: "1px solid var(--ah-border)",
+        background: "var(--background)",
+      }}
     >
       {showSlashMenu && slashActions.length > 0 && (
         <div
@@ -130,11 +138,14 @@ export const CommandBar = ({
           type="text"
           value={value}
           placeholder={placeholder}
+          disabled={busy}
           onChange={(e) => {
+            if (busy) return;
             setValue(e.target.value);
             setShowSlashMenu(e.target.value.startsWith("/"));
           }}
           onKeyDown={(e) => {
+            if (busy) return;
             if (e.key === "Enter") {
               e.preventDefault();
               runCommand();
@@ -149,14 +160,16 @@ export const CommandBar = ({
             background: "none",
             border: "none",
             outline: "none",
-            color: "var(--ah-text-1)",
+            color: busy ? "var(--ah-text-3)" : "var(--ah-text-1)",
             fontSize: 14,
+            cursor: busy ? "not-allowed" : undefined,
           }}
         />
         <span className="ah-kbd">&#8984;K</span>
         <button
           className="ah-btn-primary"
           onClick={runCommand}
+          disabled={busy}
           style={{
             width: 28,
             height: 28,
@@ -164,6 +177,8 @@ export const CommandBar = ({
             alignItems: "center",
             justifyContent: "center",
             fontSize: 12,
+            opacity: busy ? 0.5 : 1,
+            cursor: busy ? "not-allowed" : undefined,
           }}
           aria-label="Send"
         >
@@ -179,7 +194,7 @@ export const CommandBar = ({
           textAlign: "center",
         }}
       >
-        {hint}
+        {busy ? "Working\u2026" : hint}
       </div>
     </div>
   );

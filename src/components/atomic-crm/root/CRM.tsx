@@ -18,7 +18,6 @@ import { OAuthConsentPage } from "@/components/supabase/oauth-consent-page";
 import candidates from "../candidates";
 import companies from "../companies";
 import contacts from "../contacts";
-import { CanvasPage } from "../canvas/CanvasPage";
 import { HomePage } from "../home/HomePage";
 import { PreferencesPage } from "../preferences/PreferencesPage";
 import deals from "../deals";
@@ -29,6 +28,7 @@ import { ImportPage } from "../misc/ImportPage";
 import { ChangelogPage } from "../misc/ChangelogPage";
 import { JdIntakePage } from "../jd-intake/JdIntakePage";
 import { RoleWorkspacePage } from "../roles/RoleWorkspacePage";
+import { BuildSearchPage } from "../roles/BuildSearchPage";
 import { AnalyticsPage } from "../analytics/AnalyticsPage";
 import { TemplatesPage } from "../templates/TemplatesPage";
 import { CandidateApplicationPage } from "../apply/CandidateApplicationPage";
@@ -277,7 +277,7 @@ const DesktopAdmin = (
         <Route path={ChangelogPage.path} element={<ChangelogPage />} />
         <Route path={JdIntakePage.path} element={<JdIntakePage />} />
         <Route path={RoleWorkspacePage.path} element={<RoleWorkspacePage />} />
-        <Route path={CanvasPage.path} element={<CanvasPage />} />
+        <Route path="/build-search" element={<BuildSearchPage />} />
         <Route path={AnalyticsPage.path} element={<AnalyticsPage />} />
         <Route path={TemplatesPage.path} element={<TemplatesPage />} />
         <Route path="/deals" element={<RedirectToHome />} />
@@ -377,7 +377,7 @@ const MobileAdmin = (
             path={RoleWorkspacePage.path}
             element={<RoleWorkspacePage />}
           />
-          <Route path={CanvasPage.path} element={<CanvasPage />} />
+          <Route path="/build-search" element={<BuildSearchPage />} />
           <Route path={AnalyticsPage.path} element={<AnalyticsPage />} />
           <Route path={TemplatesPage.path} element={<TemplatesPage />} />
           <Route path="/deals" element={<RedirectToHome />} />

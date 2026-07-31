@@ -382,6 +382,10 @@ export async function dispatchJdPasteCommand(
         preference_tiers: parsed.preference_tiers,
         clarifying_questions: parsed.clarifying_questions,
         clarifying_questions_dismissed: false,
+        excluded_companies:
+          (parsed as Record<string, unknown>).excluded_companies ?? [],
+        exclusion_keywords:
+          (parsed as Record<string, unknown>).exclusion_keywords ?? [],
       },
       previousData: deps.deal ?? {},
     });
@@ -395,17 +399,42 @@ export async function dispatchJdPasteCommand(
     (parsed.required_skills ?? parsed.must_have_keywords ?? [])
       .slice(0, 5)
       .join(", ") || "not specified";
+  const expMin = parsed.years_experience_min;
+  const expMax = parsed.years_experience_max;
   const expSummary =
-    parsed.years_experience_min != null || parsed.years_experience_max != null
-      ? `${parsed.years_experience_min ?? 0}–${parsed.years_experience_max ?? "∞"} years`
+    expMin != null || expMax != null
+      ? expMax == null
+        ? `${expMin ?? 0}+ years`
+        : expMin == null
+          ? `up to ${expMax} years`
+          : `${expMin}–${expMax} years`
       : "not specified";
-  const summaryLines = [
-    `**Role:** ${parsed.title || "untitled"}`,
-    `**Seniority:** ${parsed.seniority || "not specified"}`,
-    `**Location:** ${parsed.location || "not specified"}`,
-    `**Experience:** ${expSummary}`,
-    `**Key skills:** ${skillsSummary}`,
-  ].join("\n");
+  const parsedAny = parsed as Record<string, unknown>;
+  const excludedCompanies =
+    (parsedAny.excluded_companies as string[] | undefined) ?? [];
+  const exclusionKeywords =
+    (parsedAny.exclusion_keywords as string[] | undefined) ?? [];
+  const requireCount = (
+    parsed.required_skills ??
+    parsed.must_have_keywords ??
+    []
+  ).length;
+  const preferCount = (parsed.nice_to_have_keywords ?? []).length;
+  const excludeCount = excludedCompanies.length + exclusionKeywords.length;
+  const countsLine = `Require ${requireCount} · Prefer ${preferCount} · Exclude ${excludeCount}`;
+  const excludeLine =
+    excludedCompanies.length > 0
+      ? `\n**Excludes:** ${excludedCompanies.join(", ")}`
+      : "";
+  const summaryLines =
+    [
+      `**Role:** ${parsed.title || "untitled"}`,
+      `**Seniority:** ${parsed.seniority || "not specified"}`,
+      `**Location:** ${parsed.location || "not specified"}`,
+      `**Experience:** ${expSummary}`,
+      `**Key skills:** ${skillsSummary}`,
+      countsLine,
+    ].join("\n") + excludeLine;
 
   // Build the agent response with summary + questions.
   const questionsBlock = parsed.clarifying_questions?.length
@@ -731,7 +760,11 @@ export async function dispatchRoleAgentCommand(
     },
   });
 
-  const { summary, undo } = await executeReversibleOrRead(deps, parsed, commandText);
+  const { summary, undo } = await executeReversibleOrRead(
+    deps,
+    parsed,
+    commandText,
+  );
 
   await appendAgentTurn(
     deps,

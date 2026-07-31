@@ -16,10 +16,10 @@ export function useInboxShellContext({
   return useMemo(() => {
     const blockers: string[] = [];
     if (isPending) {
-      blockers.push("Checking your roles…");
+      blockers.push("Loading your roles…");
     } else if (pendingDecisionCount > 0) {
       blockers.push(
-        `${pendingDecisionCount} decision${pendingDecisionCount === 1 ? "" : "s"} need you`,
+        `${pendingDecisionCount} candidate${pendingDecisionCount === 1 ? "" : "s"} waiting for review`,
       );
     }
 
@@ -59,9 +59,9 @@ export function useRoleShellContext({
     ];
 
     if (deal.role_brief_last_scroll_token) {
-      blockers.push("Search can continue from your last run");
+      blockers.push("Continue where you left off");
     } else if (!deal.role_brief_last_scroll_query) {
-      blockers.push("No search run yet for this role");
+      blockers.push("Ready to source — kick off a search");
     }
 
     let lastAction: string | undefined;
@@ -99,7 +99,7 @@ export function useJdIntakeShellContext({
       return {
         mode: "intake",
         title: parsedTitle ?? "New role",
-        blockers: ["Parsing job description…"],
+        blockers: ["Analysing job description…"],
       };
     }
 
@@ -107,7 +107,7 @@ export function useJdIntakeShellContext({
       return {
         mode: "intake",
         title: parsedTitle ?? "New role",
-        blockers: ["Saving role brief…"],
+        blockers: ["Saving your role…"],
       };
     }
 
@@ -115,7 +115,7 @@ export function useJdIntakeShellContext({
       return {
         mode: "intake",
         title: parsedTitle,
-        blockers: ["Review extracted fields before saving"],
+        blockers: ["Review the parsed details before saving"],
       };
     }
 
@@ -123,14 +123,14 @@ export function useJdIntakeShellContext({
       return {
         mode: "intake",
         title: "New role",
-        blockers: ["Ready to parse — click Parse with AI or ask below"],
+        blockers: ["Click Parse with AI to extract the role details"],
       };
     }
 
     return {
       mode: "intake",
       title: "New role",
-      blockers: ["Paste a job description to start"],
+      blockers: ["Paste a job description to get started"],
     };
   }, [hasJdText, isParsing, isSaving, parsedTitle]);
 }

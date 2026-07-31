@@ -32,6 +32,13 @@ import {
   parseLocationForFilter,
   extractCanonicalCountry,
 } from "../_shared/crustdataClient.ts";
+import {
+  applyExcludeFilter,
+  excludeConditionsFromFlat,
+} from "../_shared/excludePostFilter.ts";
+import type { SearchIntentCondition } from "../_shared/searchIntent.ts";
+import { enrichCandidatesWithHarvestSkills } from "../_shared/harvestClient.ts";
+import { normalizeLinkedinUrl } from "../_shared/normalizeLinkedinUrl.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY");
@@ -47,11 +54,9 @@ const BATCH_SIZE = 3;
 // BATCH_SIZE * 3 = 9 — enough for ~3 calibration rounds before the pool
 // runs thin. Raise to 15 explicitly if sourcing quality proves too variable.
 const CRUSTDATA_POOL_FLOOR = BATCH_SIZE * 3;
-
-// Talent Bench is permanently disabled — Crustdata is the sole discovery
-// source when CRUSTDATA_API_KEY is set. Never seed the pool from other deals'
-// caches (cross-deal contamination was the root cause of off-role results).
-const FORCE_CRUSTDATA_ONLY = true;
+const HARVEST_KEY_PRESENT = Boolean(Deno.env.get("HARVESTAPI_KEY"));
+// Top-N ceiling for Harvest enrichment — cost control (~$0.12 max at $0.01/profile).
+const HARVEST_ENRICH_TOP_N = 12;
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -105,9 +110,16 @@ type RawCandidate = {
   job_company_name?: string | null;
   location_name?: string | null;
   skills?: string[] | null;
+  certifications?: string[] | null;
   years_experience?: number | null;
   linkedin_url?: string | null;
+  email?: string | null;
   _from_bench?: boolean;
+  // Harvest-enriched fields (populated after Harvest enrichment step)
+  photo_url?: string | null;
+  harvest_enriched_at?: string | null;
+  work_history?: unknown;
+  work_history_summary?: string | null;
 };
 
 type RankedEntry = { id: string; rank: number; why_fit: string };
@@ -138,6 +150,7 @@ type CalibrationCandidate = {
   location_name: string | null;
   from_bench: boolean;
   must_haves: MustHaveCheck[];
+  photo_url?: string | null;
 };
 
 // Common keyword aliases for must-have matching (expand as needed).
@@ -223,29 +236,6 @@ async function fetchCacheRow(
   return rows?.[0] ?? null;
 }
 
-// Pull non-expired bench candidates from OTHER deals in the same tenant.
-// RLS scopes to the caller's tenant automatically.
-async function fetchBenchCandidates(
-  dealId: number,
-  authHeader: string,
-): Promise<RawCandidate[]> {
-  const nowIso = encodeURIComponent(`"${new Date().toISOString()}"`);
-  const res = await restFetch(
-    `role_discovery_cache?deal_id=neq.${dealId}&expires_at=gt.${nowIso}&select=payload&limit=5`,
-    authHeader,
-    { method: "GET", headers: {} },
-  );
-  if (!res.ok) return [];
-  const rows = (await res.json()) as { payload: RawCandidate[] }[];
-  const bench: RawCandidate[] = [];
-  for (const row of rows) {
-    for (const c of row.payload ?? []) {
-      bench.push({ ...c, _from_bench: true });
-    }
-  }
-  return bench;
-}
-
 // Call rank-discovery-batch (sibling edge function) with the user's JWT.
 // searchIntent is optional — when present (T4 wiring), it is forwarded so the
 // ranking prompt can flag conflicts plainly (e.g. "currently Staff, which was excluded").
@@ -274,6 +264,8 @@ async function rankCandidates(
             job_company_name: c.job_company_name,
             location_name: c.location_name,
             skills: c.skills,
+            years_experience: c.years_experience,
+            work_history_summary: c.work_history_summary ?? null,
           })),
           role: roleBrief,
           ...(searchIntent ? { search_intent: searchIntent } : {}),
@@ -358,6 +350,7 @@ function buildBatch(
         location_name: raw.location_name ?? null,
         from_bench: raw._from_bench ?? false,
         must_haves,
+        photo_url: raw.photo_url ?? null,
       };
     })
     .filter((c): c is CalibrationCandidate => c !== null);
@@ -416,23 +409,119 @@ Deno.serve(async (req: Request) => {
     const seen = new Set<string>();
     const merged: RawCandidate[] = [];
     for (const c of [...benchCandidates, ...rawCandidates]) {
-      const key = c.linkedin_url || c.id;
+      const key = (normalizeLinkedinUrl(c.linkedin_url) ?? c.id) || c.id;
       if (seen.has(key)) continue;
       seen.add(key);
       merged.push(c);
     }
 
+    // Fetch stored SearchIntent + flat exclude columns BEFORE calling Crustdata
+    // so excludes are applied at query time (not just as a post-filter).
+    // Non-blocking — a failure here is non-fatal; search proceeds without excludes.
+    let storedSearchIntent: Record<string, unknown> | null = null;
+    let dealExcludeConditions: SearchIntentCondition[] = [];
+    try {
+      const dealRes = await fetch(
+        `${SUPABASE_URL}/rest/v1/deals?id=eq.${deal_id}&select=role_brief_search_intent,excluded_companies,exclusion_keywords`,
+        {
+          headers: {
+            apikey: SUPABASE_ANON_KEY ?? "",
+            Authorization: authHeader,
+          },
+        },
+      );
+      if (dealRes.ok) {
+        const rows = await dealRes.json();
+        const record = rows[0]?.role_brief_search_intent;
+        if (record?.current?.conditions) storedSearchIntent = record.current;
+
+        // Union: SearchIntent exclude conditions (most authoritative) plus any
+        // flat-column values not already represented in the intent.  Handles
+        // the case where refine-only jsonb updates set conditions but the flat
+        // cols haven't been synced yet by persistIntent.
+        const flatCompanies = Array.isArray(rows[0]?.excluded_companies)
+          ? (rows[0].excluded_companies as string[])
+          : [];
+        const flatKeywords = Array.isArray(rows[0]?.exclusion_keywords)
+          ? (rows[0].exclusion_keywords as string[])
+          : [];
+        const intentExcludes: SearchIntentCondition[] = Array.isArray(
+          record?.current?.conditions,
+        )
+          ? (record.current.conditions as SearchIntentCondition[]).filter(
+              (c) => c.disposition === "exclude",
+            )
+          : [];
+        const intentCompanyValues = new Set(
+          intentExcludes
+            .filter((c) => c.category === "company")
+            .map((c) => c.value.toLowerCase().trim()),
+        );
+        const intentKeywordValues = new Set(
+          intentExcludes
+            .filter((c) => c.category === "title")
+            .map((c) => c.value.toLowerCase().trim()),
+        );
+        dealExcludeConditions = [
+          ...intentExcludes,
+          ...excludeConditionsFromFlat(
+            flatCompanies.filter(
+              (v) => !intentCompanyValues.has(v.toLowerCase().trim()),
+            ),
+            flatKeywords.filter(
+              (v) => !intentKeywordValues.has(v.toLowerCase().trim()),
+            ),
+          ),
+        ];
+      }
+    } catch {
+      // non-fatal
+    }
+
+    // Build exclude arrays for Crustdata query-layer filtering.
+    const queryExcludedCompanies = dealExcludeConditions
+      .filter((c) => c.category === "company")
+      .map((c) => c.value);
+    const queryExclusionKeywords = dealExcludeConditions
+      .filter((c) => c.category === "title")
+      .map((c) => c.value);
+
     // Always call Crustdata when the API key is present — no pool-floor gate.
+    // Merge exclude conditions into the role brief so buildCalibrationFilters
+    // emits "(!)" conditions for each excluded company / exclusion keyword.
     let crustdataNote: string | undefined;
     if (CRUSTDATA_API_KEY) {
+      const briefWithExcludes = {
+        ...roleBrief,
+        ...(queryExcludedCompanies.length > 0
+          ? { excluded_companies: queryExcludedCompanies }
+          : {}),
+        ...(queryExclusionKeywords.length > 0
+          ? { exclusion_keywords: queryExclusionKeywords }
+          : {}),
+      };
       const crustdataResult = await searchCrustdataForRoleBrief(
-        roleBrief,
+        briefWithExcludes,
         Math.min(CRUSTDATA_POOL_FLOOR + 10, 30),
         CRUSTDATA_API_KEY,
       );
       crustdataNote = crustdataResult.note;
-      for (const c of crustdataResult.candidates) {
-        const key = c.linkedin_url || c.id;
+
+      // Post-filter: defense-in-depth exclude enforcement after the API call.
+      // Crustdata's "(!)" query-layer may miss edge cases; this catches them.
+      // excludePostFilter now recognises job_company_name / job_title directly
+      // (alias-aware), so RawCalibrationCandidate passes through without a
+      // rename map.
+      const postFiltered =
+        dealExcludeConditions.length > 0
+          ? applyExcludeFilter(
+              crustdataResult.candidates,
+              dealExcludeConditions,
+            )
+          : crustdataResult.candidates;
+
+      for (const c of postFiltered) {
+        const key = (normalizeLinkedinUrl(c.linkedin_url) ?? c.id) || c.id;
         if (seen.has(key)) continue;
         seen.add(key);
         merged.push(c);
@@ -465,7 +554,8 @@ Deno.serve(async (req: Request) => {
       ) {
         bench_note = canonicalCountry
           ? `Found profiles in web search but none were based in ${canonicalCountry} — check the location in the brief.`
-          : crustdataNote ?? "No profiles matched the location in this brief.";
+          : (crustdataNote ??
+            "No profiles matched the location in this brief.");
       } else if (
         crustdataNote?.includes("No profiles matched") ||
         crustdataNote?.includes("too little detail")
@@ -489,30 +579,111 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    // Fetch stored SearchIntent for conflict-aware why-fit ranking (T4).
-    // Non-blocking read — missing or failed intent does not block ranking.
-    let storedSearchIntent: Record<string, unknown> | null = null;
-    try {
-      const dealRes = await fetch(
-        `${SUPABASE_URL}/rest/v1/deals?id=eq.${deal_id}&select=role_brief_search_intent`,
-        {
-          headers: {
-            apikey: SUPABASE_ANON_KEY ?? "",
-            Authorization: authHeader,
-          },
-        },
-      );
-      if (dealRes.ok) {
-        const rows = await dealRes.json();
-        const record = rows[0]?.role_brief_search_intent;
-        if (record?.current?.conditions) storedSearchIntent = record.current;
+    // ── Harvest enrichment — top-N only (concurrency-safe, cheap mode) ───────
+    // Vendor role: Harvest = skills/certifications/photo + free incidental email.
+    // PDL remains primary for personal email/phone via enrich-candidate-contact.
+    // Non-blocking: if Harvest fails for any profile, the Crustdata stub is kept.
+    // Cost control: only enrich the top-N pre-sorted candidates (~$0.12 max).
+    if (HARVEST_KEY_PRESENT) {
+      // Cheap pre-sort: keyword overlap between role required_skills and candidate
+      // skills + title match. No LLM — just set intersection for ordering.
+      const requiredSkills = (
+        (roleBrief.required_skills as string[] | null) ?? []
+      ).map((s) => s.toLowerCase());
+      const titleKeyword = (
+        (roleBrief.title as string | null) ?? ""
+      ).toLowerCase();
+
+      const scored = merged.map((c) => {
+        const cSkills = (c.skills ?? []).map((s) => s.toLowerCase());
+        const overlap = requiredSkills.filter((rs) =>
+          cSkills.some((cs) => cs.includes(rs) || rs.includes(cs)),
+        ).length;
+        const titleHit =
+          titleKeyword &&
+          ((c.job_title ?? "").toLowerCase().includes(titleKeyword) ||
+            (c.job_company_name ?? "").toLowerCase().includes(titleKeyword))
+            ? 1
+            : 0;
+        return { c, score: overlap + titleHit };
+      });
+      scored.sort((a, b) => b.score - a.score);
+
+      const topNCandidates = scored
+        .slice(0, HARVEST_ENRICH_TOP_N)
+        .map((s) => s.c);
+      const topNUrls = topNCandidates
+        .map((c) => c.linkedin_url)
+        .filter((url): url is string => Boolean(url));
+
+      if (topNUrls.length > 0) {
+        try {
+          const harvestMap = await enrichCandidatesWithHarvestSkills(topNUrls);
+          let enrichedCount = 0;
+          for (const c of topNCandidates) {
+            if (!c.linkedin_url) continue;
+            const enriched = harvestMap.get(c.linkedin_url);
+            if (!enriched) continue;
+            enrichedCount++;
+            // Merge photo
+            if (enriched.photoUrl) c.photo_url = enriched.photoUrl;
+            // Free incidental email (no findEmail=true — Harvest free response only)
+            if (enriched.email && !c.email) c.email = enriched.email;
+            // Merge skills (union, Harvest first for quality)
+            if (enriched.skills.length > 0) {
+              const merged_skills = [...enriched.skills];
+              for (const s of c.skills ?? []) {
+                if (
+                  !enriched.skills.some(
+                    (p) => p.toLowerCase() === s.toLowerCase(),
+                  )
+                ) {
+                  merged_skills.push(s);
+                }
+              }
+              c.skills = merged_skills;
+            }
+            // Certifications (additive, no dedup needed — Harvest is authoritative)
+            if (enriched.certifications?.length) {
+              const existing = new Set(c.certifications ?? []);
+              c.certifications = [
+                ...(c.certifications ?? []),
+                ...enriched.certifications.filter(
+                  (cert) => !existing.has(cert),
+                ),
+              ];
+            }
+            c.harvest_enriched_at = new Date().toISOString();
+          }
+          console.warn(
+            `[calibration-session] Harvest enriched top-${enrichedCount}/${topNUrls.length} candidates (HARVEST_CONCURRENCY=${Deno.env.get("HARVEST_CONCURRENCY") ?? "1"})`,
+          );
+        } catch (err) {
+          console.warn(
+            "[calibration-session] Harvest enrichment failed (non-fatal):",
+            err,
+          );
+        }
       }
-    } catch {
-      // non-fatal
     }
+    // ── End Harvest enrichment ───────────────────────────────────────────────
+
+    // Second-pass content-fingerprint dedup: catches the same person appearing
+    // with different IDs and different linkedin URL formats.  Key = normalized
+    // name + company (lowercase).  Skip profiles where both are absent.
+    const seenContent = new Set<string>();
+    const dedupedMerged = merged.filter((c) => {
+      const name = (c.full_name ?? "").toLowerCase().trim();
+      const company = (c.job_company_name ?? "").toLowerCase().trim();
+      if (!name && !company) return true; // can't fingerprint → keep
+      const fp = `${name}|${company}`;
+      if (seenContent.has(fp)) return false;
+      seenContent.add(fp);
+      return true;
+    });
 
     const ranked = await rankCandidates(
-      merged,
+      dedupedMerged,
       roleBrief,
       authHeader,
       storedSearchIntent,
@@ -525,7 +696,7 @@ Deno.serve(async (req: Request) => {
     await upsertCacheRow(
       deal_id,
       {
-        payload: merged,
+        payload: dedupedMerged,
         ranked,
         cursor: 0,
         negative_reasons: [],
@@ -537,7 +708,7 @@ Deno.serve(async (req: Request) => {
 
     const cacheForBatch: CacheRow = {
       deal_id,
-      payload: merged,
+      payload: dedupedMerged,
       ranked,
       cursor: 0,
       negative_reasons: [],

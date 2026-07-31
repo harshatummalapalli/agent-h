@@ -11,7 +11,16 @@
 // No Deno-specific imports — pure, Vitest-testable.
 
 import { CRUSTDATA_FIELDS } from "./crustdataCapabilityManifest.ts";
-import type { SearchIntentCondition, VersionedSearchIntent, UnenforcedConstraint } from "./searchIntent.ts";
+import type {
+  SearchIntentCondition,
+  VersionedSearchIntent,
+  UnenforcedConstraint,
+} from "./searchIntent.ts";
+import {
+  resolveSeniority,
+  SENIORITY_CRUSTDATA_VOCAB,
+} from "./taxonomies/seniority.ts";
+import { resolveLocation } from "./taxonomies/location.ts";
 
 // ─── Re-exported types (callers can import from here) ─────────────────────────
 
@@ -29,7 +38,7 @@ export type CrustdataGroup = {
 export type CrustdataFilters = CrustdataCondition | CrustdataGroup;
 
 export type ValidatorResult = {
-  filters: CrustdataGroup | null;     // null when nothing is enforceable
+  filters: CrustdataGroup | null; // null when nothing is enforceable
   unenforceable: UnenforcedConstraint[];
 };
 
@@ -43,7 +52,7 @@ const COMPANY_ACRONYMS: Record<string, string[]> = {
   MAMAA: ["Meta", "Apple", "Microsoft", "Amazon", "Alphabet"],
   MANGA: ["Meta", "Apple", "Netflix", "Google", "Amazon"],
   GAFAM: ["Google", "Apple", "Facebook", "Amazon", "Microsoft"],
-  FANG:  ["Facebook", "Amazon", "Netflix", "Google"],
+  FANG: ["Facebook", "Amazon", "Netflix", "Google"],
 };
 
 /** Expand an acronym to real company names. Returns [value] unchanged if not an acronym. */
@@ -80,13 +89,18 @@ function decomposePhrase(phrase: string, maxTerms = 6): string[] {
 }
 
 /** Build a contains condition (or OR-group for multi-term phrases). */
-function buildContains(field: string, phrase: string): CrustdataCondition | CrustdataGroup | null {
+function buildContains(
+  field: string,
+  phrase: string,
+): CrustdataCondition | CrustdataGroup | null {
   const terms = decomposePhrase(phrase);
   if (terms.length === 0) return null;
   if (terms.length === 1) return { field, type: "(.)", value: terms[0] };
   return {
     op: "or",
-    conditions: terms.map((t) => ({ field, type: "(.)", value: t }) as CrustdataCondition),
+    conditions: terms.map(
+      (t) => ({ field, type: "(.)", value: t }) as CrustdataCondition,
+    ),
   };
 }
 
@@ -100,8 +114,18 @@ function buildExperienceRange(value: string): CrustdataCondition[] {
   const minMatch = value.match(/min:(\d+)/i) || value.match(/^(\d+)-/);
   const maxMatch = value.match(/max:(\d+)/i) || value.match(/-(\d+)$/);
   const conditions: CrustdataCondition[] = [];
-  if (minMatch) conditions.push({ field: CRUSTDATA_FIELDS.yearsOfExperience, type: "=>", value: Number(minMatch[1]) });
-  if (maxMatch) conditions.push({ field: CRUSTDATA_FIELDS.yearsOfExperience, type: "=<", value: Number(maxMatch[1]) });
+  if (minMatch)
+    conditions.push({
+      field: CRUSTDATA_FIELDS.yearsOfExperience,
+      type: "=>",
+      value: Number(minMatch[1]),
+    });
+  if (maxMatch)
+    conditions.push({
+      field: CRUSTDATA_FIELDS.yearsOfExperience,
+      type: "=<",
+      value: Number(maxMatch[1]),
+    });
   return conditions;
 }
 
@@ -111,7 +135,8 @@ function buildExperienceRange(value: string): CrustdataCondition[] {
 function routePrefer(cond: SearchIntentCondition): UnenforcedConstraint {
   return {
     description: `Prefer ${cond.category}: "${cond.value}"`,
-    reason: "Crustdata only supports hard AND/OR filters; 'prefer' (soft/ranking) cannot be expressed as a filter. This will inform why-fit scoring instead.",
+    reason:
+      "Crustdata only supports hard AND/OR filters; 'prefer' (soft/ranking) cannot be expressed as a filter. This will inform why-fit scoring instead.",
   };
 }
 
@@ -119,9 +144,13 @@ function routePrefer(cond: SearchIntentCondition): UnenforcedConstraint {
  * Validate and assemble a VersionedSearchIntent into a Crustdata filter tree.
  * Enforceable conditions → filters. Non-filterable → unenforceable list.
  */
-export function validateAndAssembleIntent(intent: VersionedSearchIntent): ValidatorResult {
+export function validateAndAssembleIntent(
+  intent: VersionedSearchIntent,
+): ValidatorResult {
   const assembled: Array<CrustdataCondition | CrustdataGroup> = [];
-  const unenforceable: UnenforcedConstraint[] = [...intent.unenforceable_constraints];
+  const unenforceable: UnenforcedConstraint[] = [
+    ...intent.unenforceable_constraints,
+  ];
 
   for (const cond of intent.conditions) {
     // All "prefer" conditions are inherently unenforceable as hard filters.
@@ -134,13 +163,42 @@ export function validateAndAssembleIntent(intent: VersionedSearchIntent): Valida
 
     switch (cond.category) {
       case "seniority": {
+        const canonical = resolveSeniority(cond.value);
+        if (!canonical) {
+          // Unrecognized phrasing — route to unenforceable rather than sending
+          // a broken filter. Caller should also log to unresolved_taxonomy_terms.
+          unenforceable.push({
+            description: `${isExclude ? "Exclude" : "Require"} seniority: "${cond.value}"`,
+            reason: `Seniority phrase "${cond.value}" not yet in taxonomy — filtered out, added to review queue. Add an alias row to taxonomies/seniority.ts to fix for all JDs.`,
+          });
+          break;
+        }
+        const vocab = SENIORITY_CRUSTDATA_VOCAB[canonical];
         if (isExclude) {
-          // Exclude seniority: not-contains on seniority_level field.
-          assembled.push(buildNotContains(CRUSTDATA_FIELDS.currentSeniorityLevel, cond.value));
+          // Exclude: not-contains for each known Crustdata vocab term (OR semantics
+          // for exclude = any match → excluded, so AND all not-contains together).
+          for (const term of vocab) {
+            assembled.push(
+              buildNotContains(CRUSTDATA_FIELDS.currentSeniorityLevel, term),
+            );
+          }
         } else {
-          // Require seniority: fuzzy contains (vocabulary unconfirmed, see manifest).
-          const c = buildContains(CRUSTDATA_FIELDS.currentSeniorityLevel, cond.value);
-          if (c) assembled.push(c);
+          // Require: OR-group across all known Crustdata vocab terms for this canonical.
+          if (vocab.length === 1) {
+            const c = buildContains(
+              CRUSTDATA_FIELDS.currentSeniorityLevel,
+              vocab[0],
+            );
+            if (c) assembled.push(c);
+          } else {
+            const groups = vocab
+              .map((v) =>
+                buildContains(CRUSTDATA_FIELDS.currentSeniorityLevel, v),
+              )
+              .filter(Boolean) as Array<CrustdataCondition | CrustdataGroup>;
+            if (groups.length > 0)
+              assembled.push({ op: "or", conditions: groups });
+          }
         }
         break;
       }
@@ -149,21 +207,31 @@ export function validateAndAssembleIntent(intent: VersionedSearchIntent): Valida
         const companies = expandCompanyAcronym(cond.value);
         if (isExclude) {
           for (const company of companies) {
-            assembled.push(buildNotContains(CRUSTDATA_FIELDS.currentCompanyName, company));
+            assembled.push(
+              buildNotContains(CRUSTDATA_FIELDS.currentCompanyName, company),
+            );
           }
         } else {
-          const groups = companies.map((c) => buildContains(CRUSTDATA_FIELDS.currentCompanyName, c)).filter(Boolean) as Array<CrustdataCondition | CrustdataGroup>;
+          const groups = companies
+            .map((c) => buildContains(CRUSTDATA_FIELDS.currentCompanyName, c))
+            .filter(Boolean) as Array<CrustdataCondition | CrustdataGroup>;
           if (groups.length === 1) assembled.push(groups[0]);
-          else if (groups.length > 1) assembled.push({ op: "or", conditions: groups });
+          else if (groups.length > 1)
+            assembled.push({ op: "or", conditions: groups });
         }
         break;
       }
 
       case "title": {
+        // note="past" → use past title field; default = current title.
+        const titleField =
+          cond.note === "past"
+            ? CRUSTDATA_FIELDS.pastTitle
+            : CRUSTDATA_FIELDS.currentTitle;
         if (isExclude) {
-          assembled.push(buildNotContains(CRUSTDATA_FIELDS.currentTitle, cond.value));
+          assembled.push(buildNotContains(titleField, cond.value));
         } else {
-          const c = buildContains(CRUSTDATA_FIELDS.currentTitle, cond.value);
+          const c = buildContains(titleField, cond.value);
           if (c) assembled.push(c);
         }
         break;
@@ -174,7 +242,8 @@ export function validateAndAssembleIntent(intent: VersionedSearchIntent): Valida
         if (looksLikeRecencyConstraint(cond.value)) {
           unenforceable.push({
             description: `${isExclude ? "Exclude" : "Require"} skill with recency: "${cond.value}"`,
-            reason: "Crustdata has no skill-date or recency field. Only skill presence/absence can be filtered.",
+            reason:
+              "Crustdata has no skill-date or recency field. Only skill presence/absence can be filtered.",
           });
           break;
         }
@@ -192,7 +261,8 @@ export function validateAndAssembleIntent(intent: VersionedSearchIntent): Valida
         if (rangeConds.length === 0) {
           unenforceable.push({
             description: `Experience range: "${cond.value}"`,
-            reason: "Could not parse experience range. Use format: 'min:N', 'max:N', or 'N-M'.",
+            reason:
+              "Could not parse experience range. Use format: 'min:N', 'max:N', or 'N-M'.",
           });
         } else {
           assembled.push(...rangeConds);
@@ -201,21 +271,185 @@ export function validateAndAssembleIntent(intent: VersionedSearchIntent): Valida
       }
 
       case "location": {
-        // Route to either country (exact) or city (contains).
-        const lower = cond.value.toLowerCase().trim();
+        // Honour pre-resolved locationKind if set (populated at parse/edit time),
+        // otherwise call resolveLocation() now. This avoids re-running the
+        // taxonomy lookup for conditions that already carry the resolved kind.
+        const preKind = cond.locationKind; // "country" | "city" | "state" | undefined
+        const resolved = preKind
+          ? (() => {
+              // Treat the value as already-canonical when kind is known.
+              if (preKind === "country")
+                return { kind: "country" as const, canonical: cond.value };
+              if (preKind === "state")
+                return { kind: "city" as const, canonical: cond.value }; // state → city field
+              return { kind: "city" as const, canonical: cond.value };
+            })()
+          : resolveLocation(cond.value);
+
+        if (resolved.kind === "unknown") {
+          // Unknown location — route to unenforceable rather than sending a
+          // broken filter. Caller should also log to unresolved_taxonomy_terms.
+          unenforceable.push({
+            description: `${isExclude ? "Exclude" : "Require"} location: "${cond.value}"`,
+            reason: `Location "${cond.value}" could not be resolved as a known country or city. Add an alias row to taxonomies/location.ts to fix for all JDs.`,
+          });
+          break;
+        }
+
+        // Choose the matching field — previously always city not-contains
+        // regardless of kind (bug fix: India exclude now targets country field).
+        const locationField =
+          resolved.kind === "country"
+            ? CRUSTDATA_FIELDS.locationCountry
+            : preKind === "state"
+              ? CRUSTDATA_FIELDS.locationState
+              : CRUSTDATA_FIELDS.locationCity;
+
         if (isExclude) {
-          // Location excludes are unusual but supported via not-contains on city.
-          assembled.push(buildNotContains(CRUSTDATA_FIELDS.locationCity, cond.value));
+          assembled.push(buildNotContains(locationField, resolved.canonical));
         } else {
-          // Simple heuristic: short values (1-2 words, no comma) that are known
-          // country aliases use the country field; others use city contains.
-          const isCountryLike = !cond.value.includes(",") && cond.value.split(/\s+/).length <= 3;
-          if (isCountryLike) {
-            assembled.push({ field: CRUSTDATA_FIELDS.locationCountry, type: "=", value: cond.value.trim() });
+          if (resolved.kind === "country") {
+            assembled.push({
+              field: locationField,
+              type: "=",
+              value: resolved.canonical,
+            });
           } else {
-            const c = buildContains(CRUSTDATA_FIELDS.locationCity, cond.value);
+            const c = buildContains(locationField, resolved.canonical);
             if (c) assembled.push(c);
           }
+        }
+        break;
+      }
+
+      case "headcount_range": {
+        const hcMin =
+          cond.value.match(/min:(\d+)/i) || cond.value.match(/^(\d+)-/);
+        const hcMax =
+          cond.value.match(/max:(\d+)/i) || cond.value.match(/-(\d+)$/);
+        if (!hcMin && !hcMax) {
+          unenforceable.push({
+            description: `Headcount range: "${cond.value}"`,
+            reason:
+              "Could not parse headcount range. Use format: 'min:N', 'max:N', or 'N-M'.",
+          });
+        } else {
+          if (hcMin)
+            assembled.push({
+              field: CRUSTDATA_FIELDS.currentCompanyHeadcount,
+              type: "=>",
+              value: Number(hcMin[1]),
+            });
+          if (hcMax)
+            assembled.push({
+              field: CRUSTDATA_FIELDS.currentCompanyHeadcount,
+              type: "=<",
+              value: Number(hcMax[1]),
+            });
+        }
+        break;
+      }
+
+      case "connections_min": {
+        const n = parseInt(cond.value, 10);
+        if (isNaN(n) || n <= 0) {
+          unenforceable.push({
+            description: `Connections min: "${cond.value}"`,
+            reason:
+              "Could not parse connections minimum. Use a positive integer.",
+          });
+        } else {
+          assembled.push({
+            field: CRUSTDATA_FIELDS.connections,
+            type: "=>",
+            value: n,
+          });
+        }
+        break;
+      }
+
+      case "education_school": {
+        if (isExclude) {
+          assembled.push(
+            buildNotContains(CRUSTDATA_FIELDS.educationSchool, cond.value),
+          );
+        } else {
+          const c = buildContains(CRUSTDATA_FIELDS.educationSchool, cond.value);
+          if (c) assembled.push(c);
+        }
+        break;
+      }
+
+      case "education_degree": {
+        if (isExclude) {
+          assembled.push(
+            buildNotContains(CRUSTDATA_FIELDS.educationDegree, cond.value),
+          );
+        } else {
+          const c = buildContains(CRUSTDATA_FIELDS.educationDegree, cond.value);
+          if (c) assembled.push(c);
+        }
+        break;
+      }
+
+      case "education_field": {
+        if (isExclude) {
+          assembled.push(
+            buildNotContains(
+              CRUSTDATA_FIELDS.educationFieldOfStudy,
+              cond.value,
+            ),
+          );
+        } else {
+          const c = buildContains(
+            CRUSTDATA_FIELDS.educationFieldOfStudy,
+            cond.value,
+          );
+          if (c) assembled.push(c);
+        }
+        break;
+      }
+
+      case "headline_keyword": {
+        if (isExclude) {
+          assembled.push(
+            buildNotContains(CRUSTDATA_FIELDS.headline, cond.value),
+          );
+        } else {
+          const c = buildContains(CRUSTDATA_FIELDS.headline, cond.value);
+          if (c) assembled.push(c);
+        }
+        break;
+      }
+
+      case "language": {
+        if (isExclude) {
+          unenforceable.push({
+            description: `Exclude language: "${cond.value}"`,
+            reason:
+              "Crustdata cannot filter out speakers of a specific language — only require.",
+          });
+        } else {
+          const c = buildContains(CRUSTDATA_FIELDS.languages, cond.value);
+          if (c) assembled.push(c);
+        }
+        break;
+      }
+
+      case "company_industry": {
+        if (isExclude) {
+          assembled.push(
+            buildNotContains(
+              CRUSTDATA_FIELDS.currentCompanyIndustries,
+              cond.value,
+            ),
+          );
+        } else {
+          const c = buildContains(
+            CRUSTDATA_FIELDS.currentCompanyIndustries,
+            cond.value,
+          );
+          if (c) assembled.push(c);
         }
         break;
       }
@@ -224,7 +458,8 @@ export function validateAndAssembleIntent(intent: VersionedSearchIntent): Valida
       default: {
         unenforceable.push({
           description: `${isExclude ? "Exclude" : "Require"} (other): "${cond.value}"`,
-          reason: "Condition category 'other' cannot be mapped to a Crustdata field.",
+          reason:
+            "Condition category 'other' cannot be mapped to a Crustdata field.",
         });
         break;
       }

@@ -50,7 +50,10 @@ export const AppShell = ({ children }: { children: React.ReactNode }) => {
   }, [location.pathname]);
 
   return (
-    <div className="flex h-screen overflow-hidden bg-background">
+    <div
+      className="flex h-screen overflow-hidden bg-background"
+      data-sidebar-open={sidebarOpen ? "true" : "false"}
+    >
       {/* Mobile overlay */}
       {mobileOpen && (
         <div
@@ -60,7 +63,7 @@ export const AppShell = ({ children }: { children: React.ReactNode }) => {
       )}
 
       {/* Icon rail — always visible on desktop; hidden on mobile */}
-      <aside className="hidden md:flex w-12 shrink-0 flex-col items-center border-r border-sidebar-border bg-sidebar py-3 gap-1 z-20">
+      <aside className="hidden md:flex w-16 shrink-0 flex-col items-center border-r border-sidebar-border bg-sidebar py-3 gap-1 z-20">
         <RailTop
           onToggleSidebar={() => setSidebarOpen((v) => !v)}
           sidebarOpen={sidebarOpen}
@@ -95,7 +98,7 @@ export const AppShell = ({ children }: { children: React.ReactNode }) => {
       </aside>
 
       {/* Main content */}
-      <div className="flex-1 flex flex-col min-w-0 overflow-auto">
+      <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
         {children}
       </div>
     </div>
@@ -150,12 +153,6 @@ function RailTop({
         label="Home"
         active={currentPath === "/"}
       />
-      <RailIcon
-        to="/"
-        icon={<Plus className="h-4 w-4" />}
-        label="New role"
-        active={false}
-      />
     </>
   );
 }
@@ -167,13 +164,13 @@ function RailBottom() {
       <RailIcon
         to="/analytics"
         icon={<BarChart2 className="h-4 w-4" />}
-        label="Analytics"
+        label="Reports"
         active={location.pathname.startsWith("/analytics")}
       />
       <RailIcon
         to="/preferences"
         icon={<Settings className="h-4 w-4" />}
-        label="Preferences"
+        label="Settings"
         active={location.pathname.startsWith("/preferences")}
       />
       <div className="mt-1">
@@ -181,7 +178,10 @@ function RailBottom() {
           <ProfileMenuItem />
         </UserMenu>
       </div>
-      <ThemeModeToggle />
+      {/* Theme toggle in footer — not a peer primary nav destination */}
+      <div className="mt-1 pb-1">
+        <ThemeModeToggle />
+      </div>
     </>
   );
 }
@@ -202,27 +202,27 @@ function RailIcon({
   if (disabled) {
     return (
       <span
-        title={label}
         aria-label={label}
-        className="rounded-lg p-2.5 text-sidebar-foreground/30 cursor-not-allowed"
+        className="flex flex-col items-center gap-0.5 rounded-lg px-1 py-1.5 text-sidebar-foreground/30 cursor-not-allowed w-full"
       >
         {icon}
+        <span className="text-[10px] leading-none">{label}</span>
       </span>
     );
   }
   return (
     <Link
       to={to}
-      title={label}
       aria-label={label}
       className={cn(
-        "rounded-lg p-2.5 transition-colors",
+        "flex flex-col items-center gap-0.5 rounded-lg px-1 py-1.5 transition-colors w-full",
         active
           ? "bg-sidebar-accent text-sidebar-primary"
           : "text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-sidebar-foreground",
       )}
     >
       {icon}
+      <span className="text-[10px] leading-none">{label}</span>
     </Link>
   );
 }

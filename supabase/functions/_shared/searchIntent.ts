@@ -13,25 +13,45 @@
 // ─── Core condition type ──────────────────────────────────────────────────────
 
 export type IntentCategory =
-  | "seniority"      // e.g. "Staff", "Senior", "IC5"
-  | "company"        // specific company name (current or past)
-  | "title"          // job title phrase
-  | "skill"          // technical or domain skill
-  | "experience_range" // years of experience (value: "5-10" or "min:5" or "max:10")
-  | "location"       // city, country, or region
-  | "other";         // anything that doesn't map cleanly
+  | "seniority" // e.g. "Staff", "Senior", "IC5"
+  | "company" // specific company name (current or past)
+  | "title" // job title phrase (current by default; note="past" for past titles)
+  | "skill" // technical or domain skill
+  | "experience_range" // years of experience (value: "min:5" or "max:10" or "5-10")
+  | "location" // city, country, or region — see locationKind for sub-type
+  // ── Extended categories (from compiler consolidation) ──────────────────────
+  | "headcount_range" // company headcount (value: "min:N", "max:N", or "N-M")
+  | "connections_min" // minimum LinkedIn connections (value: plain integer string)
+  | "education_school" // university / school name
+  | "education_degree" // degree type (e.g. "MBA", "BS", "PhD")
+  | "education_field" // field of study
+  | "headline_keyword" // LinkedIn headline contains/not-contains keyword
+  | "language" // spoken language
+  | "company_industry" // company industry tag
+  | "other"; // anything that doesn't map cleanly
 
 export type IntentDisposition =
-  | "require"   // hard filter — must match
-  | "exclude"   // hard exclusion — must not match
-  | "prefer";   // soft preference — informs ranking/why-fit but cannot be a hard filter
+  | "require" // hard filter — must match
+  | "exclude" // hard exclusion — must not match
+  | "prefer"; // soft preference — informs ranking/why-fit but cannot be a hard filter
 
 export type SearchIntentCondition = {
   category: IntentCategory;
   disposition: IntentDisposition;
   value: string;
-  /** Optional clarifying note (e.g. "from JD phrase: 'Staff Engineer or above'") */
+  /**
+   * Optional clarifying note.
+   * For `location`: use locationKind instead for country/city/state sub-type.
+   * For `title`: "past" to indicate a past-title condition.
+   * Otherwise: free-text note (e.g. "from JD phrase: '...'").
+   */
   note?: string;
+  /**
+   * For `location` conditions only: resolved kind from taxonomy.
+   * Populated by resolveLocation() at parse/edit time so the compiler never
+   * re-guesses country vs. city at filter-assembly time.
+   */
+  locationKind?: "country" | "city" | "state";
 };
 
 // ─── Unenforceable constraints ─────────────────────────────────────────────────
@@ -55,8 +75,8 @@ export type UnenforcedConstraint = {
 // subsequent versions come from recalibration feedback.
 
 export type VersionedSearchIntent = {
-  version: number;          // 1-based, increments on each resolve-search-intent call
-  updated_at: string;       // ISO 8601 timestamp
+  version: number; // 1-based, increments on each resolve-search-intent call
+  updated_at: string; // ISO 8601 timestamp
   conditions: SearchIntentCondition[];
   unenforceable_constraints: UnenforcedConstraint[];
 };
@@ -65,7 +85,7 @@ export type VersionedSearchIntent = {
 
 export type SearchIntentRecord = {
   current: VersionedSearchIntent;
-  history: VersionedSearchIntent[];  // previous versions, oldest first
+  history: VersionedSearchIntent[]; // previous versions, oldest first
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

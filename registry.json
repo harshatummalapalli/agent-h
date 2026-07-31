@@ -346,7 +346,27 @@
           "type": "registry:component"
         },
         {
+          "path": "src/components/atomic-crm/roles/SearchIntentEditor.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/roles/SearchIntentDisplay.tsx",
+          "type": "registry:component"
+        },
+        {
           "path": "src/components/atomic-crm/roles/RoleWorkspacePage.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/roles/CandidateCard.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/roles/BuildSearchTab.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/roles/BuildSearchPage.tsx",
           "type": "registry:component"
         },
         {
@@ -582,6 +602,10 @@
           "type": "registry:component"
         },
         {
+          "path": "src/components/atomic-crm/misc/normalizeLinkedinUrl.ts",
+          "type": "registry:component"
+        },
+        {
           "path": "src/components/atomic-crm/misc/isLinkedInUrl.ts",
           "type": "registry:component"
         },
@@ -703,6 +727,10 @@
         },
         {
           "path": "src/components/atomic-crm/layout/AppShell.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/atomic-crm/jd-intake/parsedBriefToConditions.ts",
           "type": "registry:component"
         },
         {

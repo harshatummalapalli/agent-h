@@ -1,5 +1,6 @@
 import { useGetList, useDataProvider, useNotify } from "ra-core";
 import { useState, useMemo } from "react";
+import { Button } from "@/components/ui/button";
 import type { CrmDataProvider } from "../providers/types";
 import type { RoleConversationTurn } from "../types";
 import {
@@ -7,7 +8,7 @@ import {
   isPendingTier3Proposal,
 } from "./agentActionTiers";
 import { PendingApprovalCard } from "./PendingApprovalCard";
-import { normalizeLinkedinUrl } from "../misc/normalizeLinkedinUrl";
+import { CandidateCard } from "../roles/CandidateCard";
 
 // Loop B calibration: inline candidate card — pipeline action only.
 // Yes / Not-a-fit appears once as a BatchFooter after the latest batch.
@@ -21,89 +22,19 @@ function CandidateCardTurn({
   pipelineSaveState?: "idle" | "saving" | "saved";
 }) {
   return (
-    <li className="border rounded-md p-3 flex flex-col gap-1.5 text-sm bg-muted/20">
-      <div className="font-medium flex items-center gap-2 flex-wrap">
-        {metadata.name}
-        {metadata.match_score != null && (
-          <span className="text-xs font-normal text-muted-foreground border rounded px-1.5 py-0.5">
-            Match {Math.round(metadata.match_score * 100)}%
-          </span>
-        )}
-      </div>
-      {metadata.headline && (
-        <div className="text-xs text-muted-foreground">{metadata.headline}</div>
-      )}
-      {/* why_fit is always non-empty from the server; show it prominently */}
-      {metadata.why_fit && (
-        <div className="text-xs text-muted-foreground italic">
-          {metadata.why_fit}
-        </div>
-      )}
-      {metadata.location_name && (
-        <div className="text-xs text-muted-foreground">
-          📍 {metadata.location_name}
-        </div>
-      )}
-      {(() => {
-        const normalized = normalizeLinkedinUrl(metadata.linkedin_url);
-        const href =
-          normalized ??
-          (metadata.linkedin_url
-            ? `https://${metadata.linkedin_url.replace(/^https?:\/\//i, "")}`
-            : null);
-        return href ? (
-          <a
-            href={href}
-            target="_blank"
-            rel="noreferrer"
-            className="text-xs text-blue-700 underline"
-          >
-            LinkedIn profile
-          </a>
-        ) : null;
-      })()}
-      {metadata.must_haves.length > 0 && (
-        <ul className="flex flex-col gap-0.5 mt-0.5">
-          {metadata.must_haves.map((m, i) => (
-            <li key={i} className="text-xs flex items-center gap-1.5">
-              <span
-                className={
-                  m.status === "found"
-                    ? "text-green-600"
-                    : m.status === "inferred"
-                      ? "text-yellow-600"
-                      : "text-red-500"
-                }
-              >
-                {m.status === "found"
-                  ? "✓"
-                  : m.status === "inferred"
-                    ? "~"
-                    : "✗"}
-              </span>
-              {m.label}
-            </li>
-          ))}
-        </ul>
-      )}
-      {onAddToPipeline && (
-        <div className="flex gap-2 mt-2">
-          <button
-            type="button"
-            className="text-xs border rounded px-2 py-1 transition-colors text-blue-700 border-blue-200 bg-blue-50/60 hover:bg-blue-100 disabled:opacity-50"
-            onClick={onAddToPipeline}
-            disabled={
-              pipelineSaveState === "saving" || pipelineSaveState === "saved"
-            }
-          >
-            {pipelineSaveState === "saved"
-              ? "✓ Added to pipeline"
-              : pipelineSaveState === "saving"
-                ? "Adding…"
-                : "+ Add to pipeline"}
-          </button>
-        </div>
-      )}
+    <li>
+      <CandidateCard
+        density="queue"
+        name={metadata.name}
+        headline={metadata.headline}
+        location={metadata.location_name}
+        fitScore={metadata.match_score}
+        whyFit={metadata.why_fit}
+        mustHaves={metadata.must_haves}
+        linkedinUrl={metadata.linkedin_url}
+        onAddToPipeline={onAddToPipeline}
+        pipelineSaveState={pipelineSaveState}
+      />
     </li>
   );
 }
@@ -120,22 +51,26 @@ function BatchFooter({
   return (
     <div className="flex gap-2 flex-wrap pt-1 border-t border-dashed">
       {onCalibrationYes && (
-        <button
+        <Button
           type="button"
-          className="text-xs border rounded px-2 py-1 hover:bg-muted transition-colors text-green-700 border-green-200 bg-green-50/60"
+          variant="outline"
+          size="sm"
+          className="h-7 text-xs"
           onClick={onCalibrationYes}
         >
-          ✓ These look right — show more like this
-        </button>
+          These look right — show more like this
+        </Button>
       )}
       {onCalibrationNo && (
-        <button
+        <Button
           type="button"
-          className="text-xs border rounded px-2 py-1 hover:bg-muted transition-colors text-muted-foreground"
+          variant="ghost"
+          size="sm"
+          className="h-7 text-xs text-muted-foreground"
           onClick={onCalibrationNo}
         >
-          ✗ Not a fit
-        </button>
+          Not a fit
+        </Button>
       )}
     </div>
   );
@@ -157,6 +92,11 @@ type RoleConversationTranscriptProps = {
   actionBusy?: boolean;
   onCalibrationYes?: () => void;
   onCalibrationNo?: () => void;
+  /** When true, candidate_card turns are suppressed from the transcript because
+   *  the Review tab already shows the same candidates. BatchFooter still renders. */
+  hideCardTurns?: boolean;
+  /** Called when the user clicks a historical-batch summary line to open the Review tab. */
+  onOpenReview?: () => void;
 };
 
 export const RoleConversationTranscript = ({
@@ -167,6 +107,8 @@ export const RoleConversationTranscript = ({
   actionBusy = false,
   onCalibrationYes,
   onCalibrationNo,
+  hideCardTurns = false,
+  onOpenReview,
 }: RoleConversationTranscriptProps) => {
   const {
     data: turns,
@@ -297,7 +239,7 @@ export const RoleConversationTranscript = ({
       ) : (
         <>
           <ul className="flex flex-col gap-3 max-h-[60vh] overflow-y-auto">
-            {list.map((turn) => {
+            {list.map((turn, idx) => {
               if (visibleIds !== null && !visibleIds.has(String(turn.id)))
                 return null;
               const metadata = turn.metadata as
@@ -337,6 +279,50 @@ export const RoleConversationTranscript = ({
                 metadata?.kind === "candidate_card" &&
                 metadata.candidate_card
               ) {
+                if (!latestBatchIds.has(String(turn.id))) {
+                  // Historical batch: render one summary line per contiguous group.
+                  const prevTurn = idx > 0 ? list[idx - 1] : null;
+                  const prevIsHistoricalCard =
+                    prevTurn &&
+                    !latestBatchIds.has(String(prevTurn.id)) &&
+                    (prevTurn.metadata as ConversationTurnMetadata | undefined)
+                      ?.kind === "candidate_card";
+                  if (prevIsHistoricalCard) return null;
+                  // Count this batch group.
+                  let n = 1;
+                  for (let j = idx + 1; j < list.length; j++) {
+                    const nm = list[j].metadata as
+                      | ConversationTurnMetadata
+                      | undefined;
+                    if (
+                      nm?.kind === "candidate_card" &&
+                      !latestBatchIds.has(String(list[j].id))
+                    )
+                      n++;
+                    else break;
+                  }
+                  const label = `Sourced ${n} candidate${n === 1 ? "" : "s"} — see Review tab`;
+                  return (
+                    <li
+                      key={turn.id}
+                      className="text-xs text-muted-foreground italic"
+                    >
+                      {onOpenReview ? (
+                        <button
+                          type="button"
+                          onClick={onOpenReview}
+                          className="underline underline-offset-2 hover:text-foreground transition-colors"
+                        >
+                          {label}
+                        </button>
+                      ) : (
+                        label
+                      )}
+                    </li>
+                  );
+                }
+                // Latest batch card — suppress when Review tab shows them.
+                if (hideCardTurns) return null;
                 const card = metadata.candidate_card;
                 const extId = card.calibration_external_id;
                 return (

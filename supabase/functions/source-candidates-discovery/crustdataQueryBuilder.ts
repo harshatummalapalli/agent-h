@@ -11,6 +11,10 @@ import {
   classifyPlace,
   parseLocationForFilter,
 } from "../_shared/crustdataClient.ts";
+import {
+  buildExcludeCondition,
+  appendCompanyAndKeywordExcludes,
+} from "../_shared/crustdataExcludeFilters.ts";
 //
 // Crustdata second-provider addition (2026-07-23): added alongside the
 // existing coresignalProvider so the platform can switch or fall back
@@ -262,18 +266,6 @@ export function buildContainsCondition(
   };
 }
 
-// "(!)" excludes rows whose value contains this substring (case-insensitive,
-// confirmed live) -- unlike "(.)", the spec explicitly says "(!)" matches
-// multi-word values as a literal phrase (not word-split), so no shingle
-// decomposition is applied here: an exclude should stay precise (excluding
-// too broadly is the wrong failure direction for a hard "must_not").
-function buildExcludeCondition(
-  field: string,
-  phrase: string,
-): CrustdataFilterCondition {
-  return { field, type: "(!)", value: phrase.trim() };
-}
-
 type BuildOptions = {
   // Mirrors pdlProvider's { useSeniority } tight-vs-loose toggle -- kept
   // here so a future crustdataProvider fallback pass (same "seniority
@@ -513,25 +505,18 @@ export function buildCrustdataFilters(
 
   // --- Excludes: hard "(!)" per excluded company / exclusion keyword,
   // same "precise term, safe to hard-exclude" reasoning as coresignalProvider's
-  // must_not clauses in index.ts. ---
+  // must_not clauses in index.ts.  Logic lives in the shared helper so the
+  // calibration-session path uses the identical implementation (no third copy). ---
+  appendCompanyAndKeywordExcludes(conditions, {
+    excludedCompanies: criteria.excludedCompanies,
+    exclusionKeywords: criteria.exclusionKeywords,
+  });
   if (criteria.excludedCompanies && criteria.excludedCompanies.length > 0) {
-    for (const company of criteria.excludedCompanies) {
-      conditions.push(
-        buildExcludeCondition(CRUSTDATA_FIELDS.currentCompanyName, company),
-      );
-    }
     notes.push(
       `Excluding candidates currently at: ${criteria.excludedCompanies.join(", ")}.`,
     );
   }
-
   if (criteria.exclusionKeywords && criteria.exclusionKeywords.length > 0) {
-    for (const keyword of criteria.exclusionKeywords) {
-      conditions.push(
-        buildExcludeCondition(CRUSTDATA_FIELDS.currentTitle, keyword),
-      );
-      conditions.push(buildExcludeCondition(CRUSTDATA_FIELDS.skills, keyword));
-    }
     notes.push(
       `Excluding candidates matching: ${criteria.exclusionKeywords.join(", ")} (checked against title and skills).`,
     );

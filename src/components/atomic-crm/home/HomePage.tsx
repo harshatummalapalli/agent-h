@@ -1,8 +1,11 @@
-// Home page: conversational new-role interview as the primary path.
-// One clarifying question at a time; roles list hidden during active conversation.
+// Home page — brand-first.
+//
+// First viewport: Agent H brand, greeting, single compose surface.
+// Below the fold: recent roles as quiet list rows.
+// After first submit: conversation scroll + compact bottom compose bar.
 import { useRef, useState } from "react";
 import { useNavigate, Link } from "react-router";
-import { Linkedin, Mail, ChevronRight, Send, Search } from "lucide-react";
+import { Linkedin, Mail, ChevronRight, Send } from "lucide-react";
 import {
   useGetIdentity,
   useGetList,
@@ -11,7 +14,6 @@ import {
 } from "ra-core";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
@@ -19,6 +21,8 @@ import type { Deal } from "../types";
 import type { CrmDataProvider } from "../providers/types";
 import type { UnipileLinkedInAccount } from "../settings/UnipileLinkedInConnectionCard";
 import type { CalibrationCandidate } from "../providers/supabase/dataProvider";
+import { parsedBriefToConditions } from "../jd-intake/parsedBriefToConditions";
+import { extractExplicitExcludesFromText } from "../jd-intake/extractExplicitExcludes";
 import "../inbox/agent-h-theme.css";
 
 type ConvTurn = { role: "user" | "agent"; text: string };
@@ -64,21 +68,41 @@ function checkUnrealisticConstraints(text: string): boolean {
   );
 }
 
+function formatExperienceRange(
+  min: number | null | undefined,
+  max: number | null | undefined,
+): string {
+  if (min == null && max == null) return "not specified";
+  if (max == null) return `${min ?? 0}+ years`;
+  if (min == null) return `up to ${max} years`;
+  return `${min}–${max} years`;
+}
+
 function buildSummary(result: ParsedBrief): string {
   const skillsSummary =
     ((result.required_skills ?? result.must_have_keywords ?? []) as string[])
       .slice(0, 5)
       .join(", ") || "not specified";
-  const expSummary =
-    result.years_experience_min != null || result.years_experience_max != null
-      ? `${result.years_experience_min ?? 0}–${result.years_experience_max ?? "∞"} years`
-      : "not specified";
+  const expSummary = formatExperienceRange(
+    result.years_experience_min,
+    result.years_experience_max,
+  );
+  const excludeCompanies = result.excluded_companies ?? [];
+  const excludeKeywords = result.exclusion_keywords ?? [];
+  const excludeCount = excludeCompanies.length + excludeKeywords.length;
+  const requireCount = (
+    result.required_skills ??
+    result.must_have_keywords ??
+    []
+  ).length;
+  const preferCount = (result.nice_to_have_keywords ?? []).length;
   return [
     `Role: ${result.title || "untitled"}`,
     `Seniority: ${result.seniority || "not specified"}`,
     `Location: ${result.location || "not specified"}`,
     `Experience: ${expSummary}`,
     `Key skills: ${skillsSummary}`,
+    `Require ${requireCount} · Prefer ${preferCount} · Exclude ${excludeCount}`,
   ].join("\n");
 }
 
@@ -87,7 +111,6 @@ export const HomePage = () => {
   const notify = useNotify();
   const { identity } = useGetIdentity();
   const dataProvider = useDataProvider<CrmDataProvider>();
-  const [search, setSearch] = useState("");
   const [input, setInput] = useState("");
   const [turns, setTurns] = useState<ConvTurn[]>([]);
   const [parsed, setParsed] = useState<ParsedBrief | null>(null);
@@ -104,11 +127,8 @@ export const HomePage = () => {
     filter: { "archived_at@is": null },
   });
 
-  const filtered = search
-    ? deals.filter((d) => d.name.toLowerCase().includes(search.toLowerCase()))
-    : deals;
-
   const greeting = getGreeting(identity?.fullName);
+  const hasConversation = turns.length > 0;
 
   const addTurn = (turn: ConvTurn) => {
     setTurns((prev) => [...prev, turn]);
@@ -125,20 +145,39 @@ export const HomePage = () => {
     addTurn({ role: "user", text });
     setBusy(true);
 
+    // Snapshot prev state before parse so follow-up turns can compute delta.
+    const prevParsed = parsed;
+
     try {
       const isFirstMessage = turns.length === 0;
 
-      // Multi-turn merge: when a prior brief exists, prefix it so the
-      // LLM updates only the affected fields.
       const inputForParse = parsed
         ? `[Existing role brief — update only the fields affected by the hiring manager's follow-up, keep all other fields as-is]\n${JSON.stringify(parsed)}\n\nHiring manager follow-up: ${text}`
         : text;
 
       const result = await dataProvider.parseJobDescription(inputForParse);
-      setParsed(result as ParsedBrief);
 
-      // Expectation setting: fire once per conversation if unrealistic
-      // constraints are detected (immediate joiner, hard salary band).
+      // Merge regex-extracted excludes with LLM output (defense-in-depth).
+      // The LLM may miss explicit "Exclude candidates at X, Y" if schema was
+      // not deployed yet; the regex catches it deterministically.
+      const regexExcludes = extractExplicitExcludesFromText(text);
+      const merged: ParsedBrief = {
+        ...(result as ParsedBrief),
+        excluded_companies: [
+          ...new Set([
+            ...((result.excluded_companies as string[] | undefined) ?? []),
+            ...regexExcludes.companies,
+          ]),
+        ],
+        exclusion_keywords: [
+          ...new Set([
+            ...((result.exclusion_keywords as string[] | undefined) ?? []),
+            ...regexExcludes.titleKeywords,
+          ]),
+        ],
+      };
+      setParsed(merged);
+
       if (checkUnrealisticConstraints(text) && !expectationShownRef.current) {
         expectationShownRef.current = true;
         addTurn({ role: "agent", text: EXPECTATION_TURN });
@@ -146,9 +185,8 @@ export const HomePage = () => {
 
       if (isFirstMessage) {
         const clarifyingQs =
-          (result.clarifying_questions as string[] | undefined) ?? [];
+          (merged.clarifying_questions as string[] | undefined) ?? [];
 
-        // Inject JD question at the front when the user didn't paste a full JD.
         const hasJdSignal =
           text.length >= 300 ||
           /responsibilities|requirements|qualifications/i.test(text);
@@ -157,7 +195,7 @@ export const HomePage = () => {
           : [JD_QUESTION, ...clarifyingQs];
 
         const [firstQ, ...remainingQs] = fullQueue;
-        const summary = buildSummary(result as ParsedBrief);
+        const summary = buildSummary(merged);
 
         if (firstQ) {
           addTurn({
@@ -173,16 +211,35 @@ export const HomePage = () => {
           setPendingQuestions([]);
         }
       } else {
-        // Follow-up: advance through the question queue.
         const nextQ = pendingQuestions[0] ?? null;
-
         if (nextQ) {
           addTurn({ role: "agent", text: nextQ });
           setPendingQuestions((prev) => prev.slice(1));
         } else {
+          // Show recruiter a self-verifiable delta so they don't need to open the DB.
+          const prevExcluded = prevParsed?.excluded_companies ?? [];
+          const newExcluded = merged.excluded_companies ?? [];
+          const addedExcludes = newExcluded.filter(
+            (c) =>
+              !prevExcluded
+                .map((x) => x.toLowerCase())
+                .includes(c.toLowerCase()),
+          );
+          const requireCount = (
+            merged.required_skills ??
+            merged.must_have_keywords ??
+            []
+          ).length;
+          const preferCount = (merged.nice_to_have_keywords ?? []).length;
+          const excludeCount = newExcluded.length;
+          const counts = `Require ${requireCount} · Prefer ${preferCount} · Exclude ${excludeCount}`;
+          const deltaPrefix =
+            addedExcludes.length > 0
+              ? `+${addedExcludes.length} excluded: ${addedExcludes.join(", ")} · `
+              : "";
           addTurn({
             role: "agent",
-            text: "Got it — I've updated the brief. We're good to go whenever you're ready.",
+            text: `Brief updated. ${deltaPrefix}${counts}`,
           });
         }
       }
@@ -200,10 +257,15 @@ export const HomePage = () => {
     if (!parsed || creating) return;
     setCreating(true);
     try {
+      const jdText = turns
+        .filter((t) => t.role === "user")
+        .map((t) => t.text)
+        .join("\n\n");
       const created = await dataProvider.create("deals", {
         data: {
           name: parsed.title || "New Role",
           stage: "sourcing",
+          jd_text: jdText || null,
           seniority: parsed.seniority,
           location: parsed.location,
           industry: parsed.industry,
@@ -232,8 +294,6 @@ export const HomePage = () => {
       });
       const dealId = created.data.id;
 
-      // Seed the transcript and kick off sourcing before navigating
-      // so the user arrives at a role page with content, not a blank screen.
       try {
         await dataProvider.appendAgentConversationTurn(dealId, {
           content:
@@ -249,7 +309,6 @@ export const HomePage = () => {
             content: `${prefix}Found ${batch.pool_size ?? batch.candidates.length} people. Here are the first ${batch.candidates.length}:`,
             metadata: { kind: "agent" },
           });
-          // Seed one candidate-card turn per result.
           for (const c of batch.candidates as CalibrationCandidate[]) {
             await dataProvider.appendAgentConversationTurn(dealId, {
               content: `${c.name}${c.headline ? ` — ${c.headline}` : ""}${c.why_fit ? `\n${c.why_fit}` : ""}`,
@@ -278,8 +337,16 @@ export const HomePage = () => {
           });
         }
       } catch {
-        // Transcript seeding failed — navigate anyway; sourcing can be
-        // triggered from the role page.
+        // Transcript seeding failed — navigate anyway.
+      }
+
+      const seedConditions = parsedBriefToConditions(parsed);
+      if (seedConditions.length > 0) {
+        dataProvider
+          .saveSearchIntent(dealId, seedConditions, [])
+          .catch((err: unknown) =>
+            console.warn("[home] saveSearchIntent failed:", err),
+          );
       }
 
       navigate(`/roles/${dealId}`);
@@ -289,118 +356,159 @@ export const HomePage = () => {
     }
   };
 
-  const hasConversation = turns.length > 0;
+  const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      void handleSubmit();
+    }
+  };
 
+  // ── No conversation: brand-first hero ────────────────────────────────────────
+  if (!hasConversation) {
+    return (
+      <div className="ah-scope min-h-[calc(100dvh-8rem)] flex flex-col">
+        <div className="flex-1 overflow-y-auto">
+          <div className="max-w-xl mx-auto px-5 pt-16 pb-8 flex flex-col gap-10">
+            {/* Hero */}
+            <div className="flex flex-col gap-3">
+              <div>
+                <h1 className="text-3xl font-bold tracking-tight text-foreground">
+                  Agent H
+                </h1>
+                <p className="text-sm text-muted-foreground mt-1">{greeting}</p>
+              </div>
+              <p className="text-base text-foreground/75 leading-snug">
+                Describe the role or paste a JD to start sourcing.
+              </p>
+
+              {/* Compose surface */}
+              <div className="flex flex-col gap-2 mt-1">
+                <textarea
+                  ref={inputRef}
+                  rows={3}
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={onKeyDown}
+                  placeholder='e.g. "Senior backend engineer, Python, remote, 5+ years"'
+                  disabled={busy}
+                  className={cn(
+                    "w-full resize-none rounded-xl border bg-muted/50 px-4 py-3 text-sm",
+                    "focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1",
+                    "disabled:opacity-50 min-h-[84px]",
+                  )}
+                />
+                <div className="flex items-center justify-between gap-3">
+                  <Button
+                    onClick={handleSubmit}
+                    disabled={!input.trim() || busy}
+                    className="gap-1.5"
+                  >
+                    <Send className="h-3.5 w-3.5" />
+                    Start sourcing
+                  </Button>
+                  <span className="text-xs text-muted-foreground/70 flex items-center gap-2">
+                    or{" "}
+                    <Link
+                      to="/jd-intake"
+                      className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
+                    >
+                      paste a full JD
+                    </Link>
+                    ·{" "}
+                    <Link
+                      to="/build-search"
+                      className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
+                    >
+                      build a search
+                    </Link>
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Recent roles */}
+            {!isLoading && deals.length > 0 && (
+              <div className="flex flex-col gap-2">
+                <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                  Recent roles
+                </h2>
+                <ul className="flex flex-col divide-y divide-border rounded-lg border border-border overflow-hidden">
+                  {deals.slice(0, 8).map((deal) => (
+                    <RoleRow key={deal.id} deal={deal} />
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* Integrations — compact */}
+            <IntegrationsStrip />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Active conversation ───────────────────────────────────────────────────────
   return (
     <div
       className="ah-scope"
       style={{
         display: "grid",
-        gridTemplateRows: hasConversation ? "auto 1fr auto" : "1fr auto",
+        gridTemplateRows: "auto 1fr auto",
         minHeight: "calc(100dvh - 8rem)",
       }}
     >
-      {/* Scrollable content */}
+      {/* Compact header */}
+      <div className="border-b bg-background px-5 py-3 flex items-center justify-between">
+        <div>
+          <span className="text-sm font-semibold text-foreground">Agent H</span>
+          <span className="text-xs text-muted-foreground ml-2">{greeting}</span>
+        </div>
+        <button
+          type="button"
+          onClick={() => setTurns([])}
+          className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+        >
+          Your roles
+          <ChevronRight className="h-3 w-3" />
+        </button>
+      </div>
+
+      {/* Conversation scroll */}
       <div className="overflow-y-auto">
-        <div className="max-w-2xl mx-auto px-6 pt-12 pb-4 flex flex-col gap-10">
-          {/* Greeting */}
-          <div className="flex items-start justify-between gap-2">
-            <div>
-              <h1 className="text-2xl font-semibold tracking-tight text-foreground">
-                {greeting}
-              </h1>
-              <p className="mt-1 text-sm text-muted-foreground">
-                What are you hiring for today?
-              </p>
+        <div className="max-w-2xl mx-auto px-5 py-4 flex flex-col gap-4">
+          {turns.map((turn, i) => (
+            <div
+              key={i}
+              className={cn(
+                "rounded-xl px-4 py-3 text-sm whitespace-pre-wrap max-w-[88%]",
+                turn.role === "user"
+                  ? "self-end bg-primary text-primary-foreground ml-auto"
+                  : "self-start bg-muted text-foreground",
+              )}
+            >
+              {turn.text}
             </div>
-            {/* Compact roles link — replaces full list during conversation */}
-            {hasConversation && deals.length > 0 && (
-              <Link
-                to="/"
-                onClick={() => setTurns([])}
-                className="shrink-0 flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground mt-1 no-underline"
-              >
-                Your roles
-                <ChevronRight className="h-3 w-3" />
-              </Link>
-            )}
-          </div>
-
-          {/* Conversation transcript */}
-          {hasConversation && (
-            <div className="flex flex-col gap-4">
-              {turns.map((turn, i) => (
-                <div
-                  key={i}
-                  className={cn(
-                    "rounded-xl px-4 py-3 text-sm whitespace-pre-wrap max-w-[88%]",
-                    turn.role === "user"
-                      ? "self-end bg-primary text-primary-foreground ml-auto"
-                      : "self-start bg-muted text-foreground",
-                  )}
-                >
-                  {turn.text}
-                </div>
-              ))}
-              {busy && (
-                <div className="self-start bg-muted text-muted-foreground rounded-xl px-4 py-3 text-sm animate-pulse">
-                  Thinking…
-                </div>
-              )}
-              {parsed && !busy && (
-                <Button
-                  className="self-start gap-2 mt-1"
-                  onClick={handleStartSourcing}
-                  disabled={creating}
-                >
-                  {creating ? "Searching…" : "Start sourcing →"}
-                </Button>
-              )}
-              <div ref={bottomRef} />
+          ))}
+          {busy && (
+            <div className="self-start bg-muted text-muted-foreground rounded-xl px-4 py-3 text-sm animate-pulse">
+              Thinking…
             </div>
           )}
-
-          {/* Roles search + list — hidden while conversation is active */}
-          {!hasConversation && (
-            <div className="flex flex-col gap-3">
-              <div className="relative">
-                <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground pointer-events-none" />
-                <Input
-                  placeholder="Search your roles…"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  className="pl-9 h-10"
-                />
-              </div>
-
-              {!isLoading && filtered.length > 0 && (
-                <ul className="flex flex-col divide-y divide-border rounded-lg border border-border overflow-hidden">
-                  {filtered.slice(0, 8).map((deal) => (
-                    <RoleRow key={deal.id} deal={deal} />
-                  ))}
-                </ul>
-              )}
-              {!isLoading && filtered.length === 0 && search && (
-                <p className="text-sm text-muted-foreground text-center py-4">
-                  No roles match &ldquo;{search}&rdquo;
-                </p>
-              )}
-              {!isLoading && deals.length === 0 && !search && (
-                <div className="text-center py-8 flex flex-col gap-3 text-muted-foreground">
-                  <p className="text-sm">
-                    No open roles yet — describe one below.
-                  </p>
-                </div>
-              )}
-            </div>
+          {parsed && !busy && (
+            <Button
+              className="self-start gap-2 mt-1"
+              onClick={handleStartSourcing}
+              disabled={creating}
+            >
+              {creating ? "Searching…" : "Start sourcing →"}
+            </Button>
           )}
-
-          {/* Integrations strip — hidden during active conversation */}
-          {!hasConversation && <IntegrationsStrip />}
+          <div ref={bottomRef} />
         </div>
       </div>
 
-      {/* Command bar — primary conversational entry */}
+      {/* Compact bottom compose bar */}
       <div className="border-t bg-background px-4 py-3">
         <div className="max-w-2xl mx-auto flex items-end gap-2">
           <textarea
@@ -408,17 +516,8 @@ export const HomePage = () => {
             rows={1}
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                void handleSubmit();
-              }
-            }}
-            placeholder={
-              hasConversation
-                ? "Reply here…"
-                : 'Describe a role — e.g. "Senior backend engineer, Python, remote, 5+ years"'
-            }
+            onKeyDown={onKeyDown}
+            placeholder="Reply here…"
             disabled={busy || creating}
             className={cn(
               "flex-1 resize-none rounded-xl border bg-muted/50 px-4 py-2.5 text-sm",
@@ -437,45 +536,48 @@ export const HomePage = () => {
             <Send className="h-4 w-4" />
           </Button>
         </div>
-        <p className="max-w-2xl mx-auto mt-1.5 text-[11px] text-muted-foreground/60">
-          Enter to send · Shift+Enter for newline · or{" "}
-          <button
-            type="button"
-            className="underline hover:text-muted-foreground"
-            onClick={() => navigate("/jd-intake")}
-          >
-            paste a full JD
-          </button>
-        </p>
       </div>
     </div>
   );
 };
 
-/* ------------------------------------------------------------------ */
+/* ─── Role row ────────────────────────────────────────────────────────────── */
 
 function RoleRow({ deal }: { deal: Deal }) {
+  const anyDeal = deal as Deal & { location?: string; seniority?: string };
+  const meta = [anyDeal.location, anyDeal.seniority]
+    .filter(Boolean)
+    .join(" · ");
+  const pipelineCount = deal.contact_ids?.length ?? 0;
+
   return (
     <li>
       <Link
         to={`/roles/${deal.id}`}
-        className="flex items-center gap-3 px-4 py-3 bg-card hover:bg-accent/50 transition-colors no-underline group"
+        className="flex items-center gap-3 px-4 py-2.5 bg-card hover:bg-accent/50 transition-colors no-underline group"
       >
         <span className="flex-1 min-w-0">
           <span className="block text-sm font-medium text-foreground truncate">
             {deal.name}
           </span>
-          {deal.stage && (
-            <span className="block text-xs text-muted-foreground mt-0.5">
-              {deal.stage}
+          {meta && (
+            <span className="block text-xs text-muted-foreground mt-0.5 truncate">
+              {meta}
             </span>
           )}
         </span>
+        {pipelineCount > 0 && (
+          <span className="text-xs text-muted-foreground shrink-0">
+            {pipelineCount} in pipeline
+          </span>
+        )}
         <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/50 group-hover:text-muted-foreground transition-colors shrink-0" />
       </Link>
     </li>
   );
 }
+
+/* ─── Integrations strip ─────────────────────────────────────────────────── */
 
 function IntegrationsStrip() {
   const dataProvider = useDataProvider<CrmDataProvider>();
@@ -493,24 +595,19 @@ function IntegrationsStrip() {
     "connected";
 
   return (
-    <div className="flex flex-col gap-2">
-      <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-        Connected accounts
-      </h2>
-      <div className="flex flex-wrap gap-2">
-        <IntegrationChip
-          icon={<Linkedin className="h-3.5 w-3.5" />}
-          label="LinkedIn"
-          connected={liConnected}
-          settingsPath="/preferences?tab=accounts"
-        />
-        <IntegrationChip
-          icon={<Mail className="h-3.5 w-3.5" />}
-          label="Email"
-          connected={false}
-          settingsPath="/preferences?tab=accounts"
-        />
-      </div>
+    <div className="flex flex-wrap items-center gap-2">
+      <IntegrationChip
+        icon={<Linkedin className="h-3.5 w-3.5" />}
+        label="LinkedIn"
+        connected={liConnected}
+        settingsPath="/preferences?tab=accounts"
+      />
+      <IntegrationChip
+        icon={<Mail className="h-3.5 w-3.5" />}
+        label="Email"
+        connected={false}
+        settingsPath="/preferences?tab=accounts"
+      />
     </div>
   );
 }

@@ -7,6 +7,10 @@ import {
   Archive,
   ChevronLeft,
   ChevronRight,
+  Link2,
+  MoreHorizontal,
+  PauseCircle,
+  PlayCircle,
   Settings,
   Sparkles,
   Upload,
@@ -32,7 +36,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { EditButton } from "@/components/admin/edit-button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
@@ -67,7 +77,10 @@ import {
 } from "../shell/roleAgentOrchestrator";
 import type { ConversationTurnMetadata } from "../shell/agentActionTiers";
 import type { Deal, RoleConversationTurn } from "../types";
+import { CandidateCard } from "./CandidateCard";
 import { SearchIntentDisplay } from "./SearchIntentDisplay";
+import { SearchIntentEditor } from "./SearchIntentEditor";
+import { BuildSearchTab } from "./BuildSearchTab";
 import "../inbox/agent-h-theme.css";
 
 export const RoleWorkspacePage = () => {
@@ -80,7 +93,7 @@ export const RoleWorkspacePage = () => {
   );
 };
 
-type WorkspaceTab = "sourcing" | "review";
+type WorkspaceTab = "review" | "pipeline" | "build-search";
 
 const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
   const navigate = useNavigate();
@@ -104,8 +117,20 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
   const [memoryPanelOpen, setMemoryPanelOpen] = useState(true);
   // Track the latest calibration batch so we can offer "Add N confident candidates"
   const [lastBatch, setLastBatch] = useState<CalibrationBatch | null>(null);
+  // Controlled tab state — lets onOpenReview switch to Review tab imperatively.
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>("review");
   // True while a sourcing call is in flight (prevents double-trigger).
   const [sourcingInFlight, setSourcingInFlight] = useState(false);
+  const [cardSaveStates, setCardSaveStates] = useState<
+    Map<string, "idle" | "saving" | "saved">
+  >(new Map());
+  // Contact enrichment state per candidate external_id (PDL via enrich-candidate-contact)
+  const [contactStates, setContactStates] = useState<
+    Map<string, "idle" | "loading" | "done" | "error">
+  >(new Map());
+  const [contactDataMap, setContactDataMap] = useState<
+    Map<string, { email?: string | null; phone?: string | null }>
+  >(new Map());
   const autostartFiredRef = useRef(false);
 
   const { data: openDeals } = useGetList<Deal>("deals", {
@@ -117,6 +142,55 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
     "deal_candidates",
     { pagination: { page: 1, perPage: 1 }, filter: { deal_id: dealId } },
   );
+
+  // Fetch conversation turns to rehydrate lastBatch after reload.
+  // React Query caches this alongside RoleConversationTranscript's identical query.
+  const { data: turns } = useGetList<RoleConversationTurn>(
+    "role_conversation_turns",
+    {
+      filter: { deal_id: dealId },
+      sort: { field: "created_at", order: "ASC" },
+      pagination: { page: 1, perPage: 100 },
+    },
+  );
+
+  // On mount: reconstruct lastBatch from the latest run of candidate_card turns.
+  // Fires once turns are available and only when lastBatch is still null (no live batch).
+  useEffect(() => {
+    if (!turns || lastBatch !== null) return;
+    const batchTurns: RoleConversationTurn[] = [];
+    for (let i = turns.length - 1; i >= 0; i--) {
+      const m = turns[i].metadata as ConversationTurnMetadata | undefined;
+      if (m?.kind === "candidate_card" && m.candidate_card) {
+        batchTurns.unshift(turns[i]);
+      } else if (m?.kind === "decision" || m?.kind === "refinement") {
+        continue;
+      } else {
+        break;
+      }
+    }
+    if (batchTurns.length === 0) return;
+    const candidates: CalibrationCandidate[] = batchTurns.map((t) => {
+      const card = (t.metadata as ConversationTurnMetadata).candidate_card!;
+      return {
+        external_id: card.calibration_external_id ?? String(card.candidate_id),
+        name: card.name,
+        headline: card.headline,
+        why_fit: card.why_fit ?? "",
+        match_score: card.match_score,
+        linkedin_url: card.linkedin_url,
+        location_name: card.location_name ?? null,
+        from_bench: false,
+        must_haves: card.must_haves ?? [],
+      };
+    });
+    setLastBatch({
+      candidates,
+      pool_size: candidates.length,
+      cursor: candidates.length,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [turns]);
 
   const { data: pipelineRows } = useQuery({
     queryKey: ["deal_candidates_for_deal", dealId],
@@ -151,6 +225,35 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
       ) as string[];
     }),
   );
+
+  // Map linkedin_url → DB candidate id for Contact button wiring (saved candidates only)
+  const dbIdByLinkedinUrl = new Map(
+    (pipelineRows ?? []).map(({ candidate }) => {
+      const fields = candidate as unknown as Record<string, unknown>;
+      return [fields.linkedin_url as string | undefined, candidate.id];
+    }),
+  );
+
+  // Contact enrichment handler — PDL via enrich-candidate-contact edge fn
+  const handleContactEnrich = async (c: CalibrationCandidate) => {
+    const dbId = c.linkedin_url
+      ? dbIdByLinkedinUrl.get(c.linkedin_url)
+      : undefined;
+    if (!dbId) return; // candidate not saved yet
+    setContactStates((prev) => new Map(prev).set(c.external_id, "loading"));
+    try {
+      const result = await dataProvider.enrichCandidateContact(dbId);
+      setContactDataMap((prev) =>
+        new Map(prev).set(c.external_id, {
+          email: result?.email ?? null,
+          phone: result?.phone ?? null,
+        }),
+      );
+      setContactStates((prev) => new Map(prev).set(c.external_id, "done"));
+    } catch {
+      setContactStates((prev) => new Map(prev).set(c.external_id, "error"));
+    }
+  };
 
   const shellContext = useRoleShellContext({
     deal,
@@ -338,6 +441,33 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
     }
   };
 
+  const handleAddCardToPipeline = async (candidate: CalibrationCandidate) => {
+    const { external_id } = candidate;
+    if (pipelineExternalIds.has(external_id)) {
+      toast.info("Already in your pipeline.");
+      return;
+    }
+    setCardSaveStates((prev) => new Map(prev).set(external_id, "saving"));
+    try {
+      await dataProvider.saveSourcedCandidate(dealId, {
+        id: external_id,
+        full_name: candidate.name,
+        linkedin_url: candidate.linkedin_url ?? null,
+        job_title: candidate.headline ?? null,
+      });
+      queryClient.invalidateQueries({ queryKey: ["deal_candidates"] });
+      queryClient.invalidateQueries({
+        queryKey: ["deal_candidates_for_deal", dealId],
+      });
+      setCardSaveStates((prev) => new Map(prev).set(external_id, "saved"));
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Couldn't add candidate",
+      );
+      setCardSaveStates((prev) => new Map(prev).set(external_id, "idle"));
+    }
+  };
+
   const handleCalibrationYes = () => {
     if (deal?.sourcing_paused) {
       toast.info("Sourcing is paused — resume it before continuing.");
@@ -468,7 +598,15 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
   };
 
   const defaultTab: WorkspaceTab =
-    !pipelinePending && pipelineCount > 0 ? "review" : "sourcing";
+    !pipelinePending && pipelineCount > 0 ? "pipeline" : "review";
+
+  // Sync controlled tab when pipeline data resolves (once, on first load).
+  const tabInitRef = useRef(false);
+  useEffect(() => {
+    if (pipelinePending || tabInitRef.current) return;
+    tabInitRef.current = true;
+    setActiveTab(defaultTab);
+  }, [pipelinePending, defaultTab]);
 
   // Candidates from last batch not yet in pipeline (for "Add N")
   const confidentCandidates = (lastBatch?.candidates ?? []).filter(
@@ -484,7 +622,23 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
     !!deal?.role_brief_last_scroll_query || lastBatch !== null;
 
   return (
-    <AgentHShell context={shellContext}>
+    <AgentHShell
+      context={shellContext}
+      commandBar={{
+        placeholder: "Exclude Cognizant, require Python, or paste a JD…",
+        hint: "Press ⌘K to focus · /refine, /exclude, /start",
+        slashActions: [
+          { cmd: "/refine", label: "Refine search criteria" },
+          { cmd: "/exclude", label: "Exclude a company or profile type" },
+          { cmd: "/start", label: "Start or restart sourcing" },
+        ],
+        onSubmit: (v) => {
+          if (commandBusy || sourcingInFlight) return;
+          void runFreeTextCommand(v);
+        },
+        busy: commandBusy || sourcingInFlight,
+      }}
+    >
       {/* 3-pane: memory panel (desktop) + main content */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
         {/* Role Memory Panel — desktop left sidebar */}
@@ -569,12 +723,17 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
               actionBusy={approvalBusy || commandBusy}
               onCalibrationYes={handleCalibrationYes}
               onCalibrationNo={handleCalibrationNo}
+              hideCardTurns={
+                lastBatch !== null && lastBatch.candidates.length > 0
+              }
+              onOpenReview={() => setActiveTab("review")}
             />
           </div>
 
-          {/* Two-tab spine */}
+          {/* Three-tab spine: Review / Pipeline / Search */}
           <Tabs
-            defaultValue={defaultTab}
+            value={activeTab}
+            onValueChange={(v) => setActiveTab(v as WorkspaceTab)}
             className="flex-1 flex flex-col min-h-0"
           >
             <div className="border-b border-border bg-background sticky top-0 z-10">
@@ -582,8 +741,9 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
                 <TabsList className="h-auto gap-0 bg-transparent p-0 rounded-none">
                   {(
                     [
-                      { value: "sourcing", label: "Sourcing" },
-                      { value: "review", label: "Review & Contact" },
+                      { value: "review", label: "Review" },
+                      { value: "pipeline", label: "Pipeline" },
+                      { value: "build-search", label: "Search" },
                     ] as const
                   ).map(({ value, label }) => (
                     <TabsTrigger
@@ -598,40 +758,99 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
               </div>
             </div>
 
-            {/* Sourcing tab — simplified; Add candidates is now in the header */}
-            <TabsContent
-              value="sourcing"
-              className="flex-1 mt-0 overflow-y-auto"
-            >
-              <div className="max-w-4xl mx-auto px-6 py-8 flex flex-col items-center gap-4 text-center">
+            {/* Review tab — sourced/calibration CandidateCards */}
+            <TabsContent value="review" className="flex-1 mt-0 overflow-y-auto">
+              <div className="max-w-4xl mx-auto px-6 py-6">
                 {sourcingInFlight ? (
-                  <p className="text-sm text-muted-foreground max-w-sm animate-pulse">
-                    Sourcing candidates — this can take 30–90 seconds. You can
-                    stay on this page; no need to refresh.
+                  <p className="text-sm text-muted-foreground animate-pulse">
+                    Sourcing candidates — this usually takes 30–90 seconds.
+                    Results will appear here automatically.
                   </p>
-                ) : hasSearchRun ? (
-                  <>
-                    <p className="text-sm text-muted-foreground max-w-sm">
-                      Use the Role Memory panel to refine your search, or add
-                      candidates manually with the{" "}
-                      <strong>Add candidates</strong> button above.
+                ) : lastBatch && lastBatch.candidates.length > 0 ? (
+                  <div className="flex flex-col gap-3">
+                    <p className="text-xs text-muted-foreground">
+                      {lastBatch.candidates.length} candidate
+                      {lastBatch.candidates.length === 1 ? "" : "s"} from the
+                      latest search — add the ones you like to Pipeline.
                     </p>
-                    {hasCacheToken && (
+                    <ul className="flex flex-col gap-3 list-none p-0 m-0">
+                      {lastBatch.candidates.map((c) => (
+                        <li key={c.external_id}>
+                          <CandidateCard
+                            density="queue"
+                            name={c.name}
+                            headline={c.headline}
+                            location={c.location_name}
+                            fitScore={c.match_score}
+                            whyFit={c.why_fit}
+                            mustHaves={c.must_haves}
+                            linkedinUrl={c.linkedin_url}
+                            photoUrl={c.photo_url}
+                            onAddToPipeline={
+                              pipelineExternalIds.has(c.external_id)
+                                ? undefined
+                                : () => handleAddCardToPipeline(c)
+                            }
+                            pipelineSaveState={
+                              pipelineExternalIds.has(c.external_id)
+                                ? "saved"
+                                : (cardSaveStates.get(c.external_id) ?? "idle")
+                            }
+                            onContact={
+                              pipelineExternalIds.has(c.external_id) &&
+                              c.linkedin_url &&
+                              dbIdByLinkedinUrl.has(c.linkedin_url)
+                                ? () => handleContactEnrich(c)
+                                : undefined
+                            }
+                            contactState={
+                              contactStates.get(c.external_id) ?? "idle"
+                            }
+                            contactData={
+                              contactDataMap.get(c.external_id) ?? null
+                            }
+                          />
+                        </li>
+                      ))}
+                    </ul>
+                    {/* Calibration actions */}
+                    <div className="flex gap-2 flex-wrap pt-2 border-t border-dashed">
                       <Button
                         size="sm"
-                        onClick={handleContinueSearch}
-                        disabled={commandBusy || sourcingInFlight}
+                        variant="outline"
+                        onClick={handleCalibrationYes}
+                        disabled={commandBusy}
+                        className="text-xs"
                       >
-                        <Sparkles className="h-4 w-4 mr-1.5" />
-                        Show more from search
+                        These look right — show more
                       </Button>
-                    )}
-                  </>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={handleCalibrationNo}
+                        disabled={commandBusy}
+                        className="text-xs text-muted-foreground"
+                      >
+                        Not a fit
+                      </Button>
+                      {hasCacheToken && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={handleContinueSearch}
+                          disabled={commandBusy || sourcingInFlight}
+                          className="text-xs ml-auto"
+                        >
+                          <Sparkles className="h-3.5 w-3.5 mr-1" />
+                          Show more from search
+                        </Button>
+                      )}
+                    </div>
+                  </div>
                 ) : (
-                  <>
+                  <div className="flex flex-col items-center gap-4 py-12 text-center">
                     <p className="text-sm text-muted-foreground max-w-sm">
-                      No search run yet. Start sourcing to find candidates, or
-                      add them manually.
+                      No candidates yet — start sourcing to see results here.
                     </p>
                     <div className="flex gap-2 flex-wrap justify-center">
                       <Button
@@ -640,7 +859,7 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
                         disabled={commandBusy || sourcingInFlight}
                       >
                         <Sparkles className="h-4 w-4 mr-1.5" />
-                        {sourcingInFlight ? "Sourcing…" : "Start sourcing"}
+                        Start sourcing
                       </Button>
                       <Button
                         size="sm"
@@ -651,13 +870,16 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
                         Add candidates
                       </Button>
                     </div>
-                  </>
+                  </div>
                 )}
               </div>
             </TabsContent>
 
-            {/* Review & Contact tab */}
-            <TabsContent value="review" className="flex-1 mt-0 overflow-y-auto">
+            {/* Pipeline tab — review table + notes */}
+            <TabsContent
+              value="pipeline"
+              className="flex-1 mt-0 overflow-y-auto"
+            >
               <div className="max-w-4xl mx-auto px-6 py-6 flex flex-col gap-6">
                 <div className="ah-panel p-6">
                   <div className="flex items-center justify-between mb-4">
@@ -702,6 +924,14 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
                   </InfiniteListBase>
                 </div>
               </div>
+            </TabsContent>
+
+            {/* Search tab */}
+            <TabsContent
+              value="build-search"
+              className="flex-1 mt-0 overflow-y-auto"
+            >
+              <BuildSearchTab deal={deal} />
             </TabsContent>
           </Tabs>
         </div>
@@ -811,6 +1041,12 @@ const RoleWorkspaceHeader = ({
     }
   };
 
+  const stateText = deal.sourcing_paused
+    ? "Paused"
+    : hasSearchRun
+      ? "Actively searching"
+      : "Ready to search";
+
   return (
     <div className="flex items-start justify-between gap-3">
       <div className="min-w-0">
@@ -821,14 +1057,7 @@ const RoleWorkspaceHeader = ({
           <Badge variant="outline" className="text-xs">
             {findDealLabel(dealStages, deal.stage)}
           </Badge>
-          {deal.sourcing_paused && (
-            <Badge
-              variant="secondary"
-              className="text-xs text-amber-700 bg-amber-100 border-amber-200"
-            >
-              Sourcing paused
-            </Badge>
-          )}
+          <span className="text-xs">{stateText}</span>
           {deal.expected_closing_date &&
             isValid(new Date(deal.expected_closing_date)) && (
               <span>
@@ -839,91 +1068,86 @@ const RoleWorkspaceHeader = ({
       </div>
 
       <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
-        {/* Add N confident candidates — only when cache has unreviewed people */}
+        {/* Situational: add N confident candidates when cache has unreviewed */}
         {nConfident > 0 && (
           <Button
             size="sm"
+            variant="outline"
             onClick={onAddNConfident}
             disabled={commandBusy}
             className="text-xs"
           >
             <Sparkles className="h-3.5 w-3.5 mr-1" />
-            Add {nConfident} confident candidate{nConfident === 1 ? "" : "s"}
+            Add {nConfident} candidate{nConfident === 1 ? "" : "s"}
           </Button>
         )}
 
-        {/* Continue search — shown when any search has run */}
+        {/* Situational: continue / show more when a search has run */}
         {hasSearchRun && (
           <Button
             size="sm"
-            variant={hasCacheToken ? "default" : "outline"}
+            variant="outline"
             onClick={onContinueSearch}
             disabled={commandBusy}
             className="text-xs"
           >
             <Sparkles className="h-3.5 w-3.5 mr-1" />
-            {hasCacheToken ? "Show more candidates" : "Continue search"}
+            {hasCacheToken ? "Show more" : "Continue search"}
           </Button>
         )}
 
-        {/* Add candidates */}
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={onAddCandidates}
-          className="text-xs"
-        >
+        {/* Primary CTA — always visible */}
+        <Button size="sm" onClick={onAddCandidates} className="text-xs">
           <UserPlus className="h-3.5 w-3.5 mr-1" />
           Add candidates
         </Button>
 
-        {/* Pause / Resume sourcing */}
-        <Button
-          size="sm"
-          variant={deal.sourcing_paused ? "destructive" : "ghost"}
-          onClick={onToggleSourcingPause}
-          className="text-xs px-2"
-          title={deal.sourcing_paused ? "Resume sourcing" : "Pause sourcing"}
-        >
-          {deal.sourcing_paused ? "Resume sourcing" : "Pause sourcing"}
-        </Button>
-
-        {/* Copy application link */}
-        {deal.public_application_token && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleCopyApplicationLink}
-            className="text-xs"
-          >
-            {linkCopied ? "Copied!" : "Copy link"}
-          </Button>
-        )}
-
-        {/* Role settings */}
-        <Button
-          variant="ghost"
-          size="sm"
-          aria-label="Role settings"
-          onClick={onSettings}
-          className="px-2"
-        >
-          <Settings className="h-4 w-4" />
-        </Button>
-
-        {/* Archive role */}
-        <Button
-          variant="ghost"
-          size="sm"
-          aria-label="Archive role"
-          onClick={onArchive}
-          className="px-2 text-muted-foreground hover:text-destructive"
-          title="Archive role"
-        >
-          <Archive className="h-4 w-4" />
-        </Button>
-
-        <EditButton />
+        {/* Overflow menu — secondary actions */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label="More options"
+              className="px-2"
+            >
+              <MoreHorizontal className="h-4 w-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-48">
+            <DropdownMenuItem onClick={onToggleSourcingPause}>
+              {deal.sourcing_paused ? (
+                <>
+                  <PlayCircle className="h-4 w-4 mr-2" />
+                  Resume sourcing
+                </>
+              ) : (
+                <>
+                  <PauseCircle className="h-4 w-4 mr-2" />
+                  Pause sourcing
+                </>
+              )}
+            </DropdownMenuItem>
+            {deal.public_application_token && (
+              <DropdownMenuItem onClick={handleCopyApplicationLink}>
+                <Link2 className="h-4 w-4 mr-2" />
+                {linkCopied ? "Copied!" : "Copy application link"}
+              </DropdownMenuItem>
+            )}
+            <DropdownMenuItem onClick={onSettings}>
+              <Settings className="h-4 w-4 mr-2" />
+              Role settings
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onClick={onArchive}
+              className="text-destructive focus:text-destructive"
+            >
+              <Archive className="h-4 w-4 mr-2" />
+              Archive role
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </div>
   );
@@ -1260,9 +1484,7 @@ const RoleSettingsDialog = ({
   open: boolean;
   onOpenChange: (v: boolean) => void;
 }) => {
-  const [section, setSection] = useState<"coordinator" | "autopilot">(
-    "coordinator",
-  );
+  const [section, setSection] = useState<"coordinator">("coordinator");
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -1276,7 +1498,7 @@ const RoleSettingsDialog = ({
             {(
               [
                 { key: "coordinator", label: "Coordinator" },
-                { key: "autopilot", label: "Autopilot" },
+                // Autopilot is not yet a live feature — hidden from nav
               ] as const
             ).map(({ key, label }) => (
               <button
@@ -1300,7 +1522,6 @@ const RoleSettingsDialog = ({
             {section === "coordinator" && (
               <CoordinatorSettings dealId={dealId} />
             )}
-            {section === "autopilot" && <AutopilotSettings />}
           </div>
         </div>
       </DialogContent>
@@ -1401,28 +1622,6 @@ const CoordinatorSettings = ({ dealId }: { dealId: string }) => {
 };
 
 /* ------------------------------------------------------------------ */
-/* Autopilot settings — honest "off" stub                             */
-/* ------------------------------------------------------------------ */
-
-const AutopilotSettings = () => (
-  <div className="flex flex-col gap-3">
-    <div className="flex items-center gap-3 rounded-lg border border-border p-4">
-      <div className="flex-1">
-        <p className="text-sm font-medium">Autopilot</p>
-        <p className="text-xs text-muted-foreground mt-0.5">Off</p>
-      </div>
-      <Badge variant="secondary" className="text-xs">
-        Disabled
-      </Badge>
-    </div>
-    <p className="text-sm text-muted-foreground">
-      Candidates remain in your review queue. Agent H drafts outreach for your
-      approval — nothing sends automatically.
-    </p>
-  </div>
-);
-
-/* ------------------------------------------------------------------ */
 /* Role Memory Panel (left sidebar on desktop)                        */
 /* ------------------------------------------------------------------ */
 
@@ -1430,60 +1629,33 @@ const RoleMemoryPanel = ({
   dealId,
   deal,
   pipelineCount,
-  onRefine,
-  commandBusy,
   onClose,
   lastBatch,
 }: {
   dealId: string;
   deal: Deal | undefined;
   pipelineCount: number;
-  onRefine: (text: string) => void;
-  commandBusy: boolean;
+  /** @deprecated Refine textarea removed — use command bar */
+  onRefine?: (text: string) => void;
+  /** @deprecated Refine textarea removed — use command bar */
+  commandBusy?: boolean;
   onClose: () => void;
   lastBatch: CalibrationBatch | null;
 }) => {
   const dataProvider = useDataProvider<CrmDataProvider>();
   const queryClient = useQueryClient();
-  const [refineText, setRefineText] = useState("");
-
-  const { data: learnedCriteria = [], refetch: refetchCriteria } = useQuery({
-    queryKey: ["role_brief_learned_criteria", dealId],
-    queryFn: () => dataProvider.getRoleBriefLearnedCriteria(dealId),
-  });
+  // Toggle SearchIntentEditor in the T6 Sourcing criteria block.
+  const [editingIntent, setEditingIntent] = useState(false);
+  const [intentSaving, setIntentSaving] = useState(false);
 
   const { data: calibrationFeedback = [] } = useQuery({
     queryKey: ["calibration_feedback", dealId],
     queryFn: () => dataProvider.getCalibrationFeedback(dealId),
   });
 
-  const activeCriteria = (learnedCriteria as Record<string, unknown>[]).filter(
-    (c) => c.status === "active" || !c.status,
-  );
   const negativeFeedback = (calibrationFeedback as Record<string, unknown>[])
     .filter((f) => f.judgment === "not_a_fit" || f.judgment === "no")
     .slice(0, 5);
-
-  const handleRelax = async (criterionId: string | number) => {
-    try {
-      await dataProvider.relaxLearnedCriterion(criterionId as number);
-      void refetchCriteria();
-      queryClient.invalidateQueries({
-        queryKey: ["role_brief_learned_criteria", dealId],
-      });
-    } catch {
-      toast.error("Couldn't relax that criterion");
-    }
-  };
-
-  const handleRefineSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!refineText.trim()) return;
-    onRefine(refineText.trim());
-    setRefineText("");
-  };
-
-  const dealRecord = deal as unknown as Record<string, unknown> | undefined;
 
   return (
     <div className="flex flex-col h-full">
@@ -1514,86 +1686,69 @@ const RoleMemoryPanel = ({
           </p>
         </div>
 
-        <Separator />
-
-        {/* Active learned criteria */}
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
-            Active criteria
-          </p>
-          {activeCriteria.length === 0 ? (
-            <p className="text-xs text-muted-foreground">
-              None yet — calibrate to learn.
-            </p>
-          ) : (
-            <ul className="space-y-1.5">
-              {activeCriteria.map((c) => (
-                <li
-                  key={c.id as string}
-                  className="flex items-start gap-1.5 group"
-                >
-                  <span className="flex-1 text-xs leading-snug">
-                    {c.label as string}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => handleRelax(c.id as number)}
-                    className="shrink-0 text-xs text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity"
-                    title="Relax this criterion"
-                  >
-                    Relax
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-
-        {/* T6: Search Intent block — rendered from deal.role_brief_search_intent
-            (inline here inside the RoleMemoryPanel section, not a separate file).
-            SearchIntentDisplay lives at src/components/atomic-crm/roles/SearchIntentDisplay.tsx. */}
+        {/* T6: Search Intent block — rendered from deal.role_brief_search_intent.
+            Switches between read-only SearchIntentDisplay and editable SearchIntentEditor. */}
         {deal !== undefined && (
           <>
             <Separator />
             <div>
-              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
-                Sourcing understanding
-              </p>
-              {deal?.role_brief_search_intent?.current ? (
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Sourcing criteria
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setEditingIntent((v) => !v)}
+                  className="text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+                  aria-label={
+                    editingIntent ? "Close editor" : "Edit sourcing criteria"
+                  }
+                >
+                  {editingIntent ? "Close" : "Edit"}
+                </button>
+              </div>
+              {editingIntent ? (
+                <SearchIntentEditor
+                  initialConditions={
+                    deal.role_brief_search_intent?.current?.conditions ?? []
+                  }
+                  initialUnenforceable={
+                    deal.role_brief_search_intent?.current
+                      ?.unenforceable_constraints ?? []
+                  }
+                  saveLabel="Save"
+                  saving={intentSaving}
+                  onSave={async (conditions, unenforced) => {
+                    if (!deal?.id) return;
+                    setIntentSaving(true);
+                    try {
+                      await dataProvider.saveSearchIntent(
+                        deal.id,
+                        conditions,
+                        unenforced,
+                      );
+                      await queryClient.invalidateQueries({
+                        queryKey: ["deals", String(deal.id)],
+                      });
+                      setEditingIntent(false);
+                    } catch {
+                      // error shown by dataProvider
+                    } finally {
+                      setIntentSaving(false);
+                    }
+                  }}
+                />
+              ) : deal?.role_brief_search_intent?.current ? (
                 <SearchIntentDisplay
                   current={deal.role_brief_search_intent.current}
                   history={deal.role_brief_search_intent.history ?? []}
                 />
               ) : (
                 <p className="text-xs text-muted-foreground">
-                  Sourcing understanding will appear here after the first
-                  search.
+                  No sourcing criteria yet. Click Edit to add chips, or start
+                  sourcing to auto-generate them.
                 </p>
               )}
-            </div>
-          </>
-        )}
-
-        {/* Role must-haves from deal */}
-        {((dealRecord?.must_have_keywords as string[] | undefined) ?? [])
-          .length > 0 && (
-          <>
-            <Separator />
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
-                Must-haves
-              </p>
-              <div className="flex flex-wrap gap-1">
-                {(dealRecord!.must_have_keywords as string[]).map((k) => (
-                  <Badge
-                    key={k}
-                    variant="outline"
-                    className="text-xs py-0 break-words max-w-full"
-                  >
-                    {k}
-                  </Badge>
-                ))}
-              </div>
             </div>
           </>
         )}
@@ -1658,28 +1813,12 @@ const RoleMemoryPanel = ({
 
         <Separator />
 
-        {/* Refine input */}
+        {/* Refine hint — use the command bar below to adjust search criteria */}
         <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
-            Refine ideal candidate
+          <p className="text-xs text-muted-foreground">
+            To refine your search criteria, use the command bar — type what you
+            want to add, change, or exclude.
           </p>
-          <form onSubmit={handleRefineSubmit} className="flex flex-col gap-2">
-            <Textarea
-              placeholder="e.g. Must have led a team, fintech background preferred…"
-              rows={3}
-              className="text-xs resize-none"
-              value={refineText}
-              onChange={(e) => setRefineText(e.target.value)}
-            />
-            <Button
-              type="submit"
-              size="sm"
-              className="self-start text-xs"
-              disabled={!refineText.trim() || commandBusy}
-            >
-              Update criteria
-            </Button>
-          </form>
         </div>
       </div>
     </div>

@@ -1,0 +1,408 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`crustdataIntentValidator corpus — snapshot > 01-mid-level-seniority-require 1`] = `
+{
+  "filters": {
+    "conditions": [
+      {
+        "conditions": [
+          {
+            "field": "experience.employment_details.current.seniority_level",
+            "type": "(.)",
+            "value": "Mid Level",
+          },
+          {
+            "field": "experience.employment_details.current.seniority_level",
+            "type": "(.)",
+            "value": "Intermediate",
+          },
+          {
+            "field": "experience.employment_details.current.seniority_level",
+            "type": "(.)",
+            "value": "Mid-Level",
+          },
+        ],
+        "op": "or",
+      },
+    ],
+    "op": "and",
+  },
+  "unenforceable": [],
+}
+`;
+
+exports[`crustdataIntentValidator corpus — snapshot > 02-mid-level-year-range-phrasing 1`] = `
+{
+  "filters": {
+    "conditions": [
+      {
+        "conditions": [
+          {
+            "field": "experience.employment_details.current.seniority_level",
+            "type": "(.)",
+            "value": "Mid Level",
+          },
+          {
+            "field": "experience.employment_details.current.seniority_level",
+            "type": "(.)",
+            "value": "Intermediate",
+          },
+          {
+            "field": "experience.employment_details.current.seniority_level",
+            "type": "(.)",
+            "value": "Mid-Level",
+          },
+        ],
+        "op": "or",
+      },
+    ],
+    "op": "and",
+  },
+  "unenforceable": [],
+}
+`;
+
+exports[`crustdataIntentValidator corpus — snapshot > 03-unrecognized-seniority-unenforceable 1`] = `
+{
+  "filters": null,
+  "unenforceable": [
+    {
+      "description": "Require seniority: "Growthleader III"",
+      "reason": "Seniority phrase "Growthleader III" not yet in taxonomy — filtered out, added to review queue. Add an alias row to taxonomies/seniority.ts to fix for all JDs.",
+    },
+  ],
+}
+`;
+
+exports[`crustdataIntentValidator corpus — snapshot > 04-india-country-exclude 1`] = `
+{
+  "filters": {
+    "conditions": [
+      {
+        "field": "basic_profile.location.country",
+        "type": "(!)",
+        "value": "India",
+      },
+    ],
+    "op": "and",
+  },
+  "unenforceable": [],
+}
+`;
+
+exports[`crustdataIntentValidator corpus — snapshot > 05-san-francisco-city-require 1`] = `
+{
+  "filters": {
+    "conditions": [
+      {
+        "field": "basic_profile.location.city",
+        "type": "(.)",
+        "value": "San Francisco",
+      },
+    ],
+    "op": "and",
+  },
+  "unenforceable": [],
+}
+`;
+
+exports[`crustdataIntentValidator corpus — snapshot > 06-unknown-location-unenforceable 1`] = `
+{
+  "filters": null,
+  "unenforceable": [
+    {
+      "description": "Require location: "Silicon Tropics"",
+      "reason": "Location "Silicon Tropics" could not be resolved as a known country or city. Add an alias row to taxonomies/location.ts to fix for all JDs.",
+    },
+  ],
+}
+`;
+
+exports[`crustdataIntentValidator corpus — snapshot > 07-senior-seniority-require 1`] = `
+{
+  "filters": {
+    "conditions": [
+      {
+        "conditions": [
+          {
+            "field": "experience.employment_details.current.seniority_level",
+            "type": "(.)",
+            "value": "Senior",
+          },
+          {
+            "field": "experience.employment_details.current.seniority_level",
+            "type": "(.)",
+            "value": "Sr.",
+          },
+        ],
+        "op": "or",
+      },
+    ],
+    "op": "and",
+  },
+  "unenforceable": [],
+}
+`;
+
+exports[`crustdataIntentValidator corpus — snapshot > 08-lead-maps-to-staff 1`] = `
+{
+  "filters": {
+    "conditions": [
+      {
+        "conditions": [
+          {
+            "field": "experience.employment_details.current.seniority_level",
+            "type": "(.)",
+            "value": "Staff",
+          },
+          {
+            "field": "experience.employment_details.current.seniority_level",
+            "type": "(.)",
+            "value": "Staff Engineer",
+          },
+          {
+            "field": "experience.employment_details.current.seniority_level",
+            "type": "(.)",
+            "value": "L5",
+          },
+          {
+            "field": "experience.employment_details.current.seniority_level",
+            "type": "(.)",
+            "value": "Senior Staff",
+          },
+          {
+            "field": "experience.employment_details.current.seniority_level",
+            "type": "(.)",
+            "value": "Tech Lead",
+          },
+          {
+            "field": "experience.employment_details.current.seniority_level",
+            "type": "(.)",
+            "value": "Lead",
+          },
+        ],
+        "op": "or",
+      },
+    ],
+    "op": "and",
+  },
+  "unenforceable": [],
+}
+`;
+
+exports[`crustdataIntentValidator corpus — snapshot > 09-gcc-country-excludes 1`] = `
+{
+  "filters": {
+    "conditions": [
+      {
+        "field": "basic_profile.location.country",
+        "type": "(!)",
+        "value": "United Arab Emirates",
+      },
+    ],
+    "op": "and",
+  },
+  "unenforceable": [
+    {
+      "description": "Exclude location: "Saudi Arabia"",
+      "reason": "Location "Saudi Arabia" could not be resolved as a known country or city. Add an alias row to taxonomies/location.ts to fix for all JDs.",
+    },
+  ],
+}
+`;
+
+exports[`crustdataIntentValidator corpus — snapshot > 10-faang-company-exclude 1`] = `
+{
+  "filters": {
+    "conditions": [
+      {
+        "field": "experience.employment_details.current.company_name",
+        "type": "(!)",
+        "value": "Facebook",
+      },
+      {
+        "field": "experience.employment_details.current.company_name",
+        "type": "(!)",
+        "value": "Meta",
+      },
+      {
+        "field": "experience.employment_details.current.company_name",
+        "type": "(!)",
+        "value": "Apple",
+      },
+      {
+        "field": "experience.employment_details.current.company_name",
+        "type": "(!)",
+        "value": "Amazon",
+      },
+      {
+        "field": "experience.employment_details.current.company_name",
+        "type": "(!)",
+        "value": "Netflix",
+      },
+      {
+        "field": "experience.employment_details.current.company_name",
+        "type": "(!)",
+        "value": "Google",
+      },
+    ],
+    "op": "and",
+  },
+  "unenforceable": [],
+}
+`;
+
+exports[`crustdataIntentValidator corpus — snapshot > 11-tiered-preference-jd 1`] = `
+{
+  "filters": {
+    "conditions": [
+      {
+        "field": "skills.professional_network_skills",
+        "type": "(.)",
+        "value": "Python",
+      },
+      {
+        "conditions": [
+          {
+            "field": "experience.employment_details.current.seniority_level",
+            "type": "(.)",
+            "value": "Senior",
+          },
+          {
+            "field": "experience.employment_details.current.seniority_level",
+            "type": "(.)",
+            "value": "Sr.",
+          },
+        ],
+        "op": "or",
+      },
+      {
+        "field": "basic_profile.location.city",
+        "type": "(.)",
+        "value": "New York",
+      },
+    ],
+    "op": "and",
+  },
+  "unenforceable": [
+    {
+      "description": "Prefer skill: "Kubernetes"",
+      "reason": "Crustdata only supports hard AND/OR filters; 'prefer' (soft/ranking) cannot be expressed as a filter. This will inform why-fit scoring instead.",
+    },
+    {
+      "description": "Prefer skill: "AWS"",
+      "reason": "Crustdata only supports hard AND/OR filters; 'prefer' (soft/ranking) cannot be expressed as a filter. This will inform why-fit scoring instead.",
+    },
+  ],
+}
+`;
+
+exports[`crustdataIntentValidator corpus — snapshot > 12-remote-location-require 1`] = `
+{
+  "filters": {
+    "conditions": [
+      {
+        "field": "basic_profile.location.country",
+        "type": "=",
+        "value": "Remote",
+      },
+    ],
+    "op": "and",
+  },
+  "unenforceable": [],
+}
+`;
+
+exports[`crustdataIntentValidator corpus — snapshot > 13-company-exclude-survives-pipeline 1`] = `
+{
+  "filters": {
+    "conditions": [
+      {
+        "field": "experience.employment_details.current.title",
+        "type": "(.)",
+        "value": "Software Engineer",
+      },
+      {
+        "field": "experience.employment_details.current.company_name",
+        "type": "(!)",
+        "value": "Cognizant",
+      },
+      {
+        "field": "experience.employment_details.current.company_name",
+        "type": "(!)",
+        "value": "TCS",
+      },
+    ],
+    "op": "and",
+  },
+  "unenforceable": [],
+}
+`;
+
+exports[`crustdataIntentValidator corpus — snapshot > 14-title-exclude-survives-pipeline 1`] = `
+{
+  "filters": {
+    "conditions": [
+      {
+        "field": "experience.employment_details.current.title",
+        "type": "(.)",
+        "value": "Data Scientist",
+      },
+      {
+        "field": "experience.employment_details.current.title",
+        "type": "(!)",
+        "value": "Manager",
+      },
+    ],
+    "op": "and",
+  },
+  "unenforceable": [],
+}
+`;
+
+exports[`crustdataIntentValidator corpus — snapshot > 15-multi-location-sf-austin 1`] = `
+{
+  "filters": {
+    "conditions": [
+      {
+        "field": "experience.employment_details.current.title",
+        "type": "(.)",
+        "value": "Software Engineer",
+      },
+      {
+        "field": "basic_profile.location.city",
+        "type": "(.)",
+        "value": "San Francisco",
+      },
+      {
+        "field": "basic_profile.location.city",
+        "type": "(.)",
+        "value": "Austin",
+      },
+    ],
+    "op": "and",
+  },
+  "unenforceable": [],
+}
+`;
+
+exports[`crustdataIntentValidator corpus — snapshot > 16-remote-only-no-city-filter 1`] = `
+{
+  "filters": {
+    "conditions": [
+      {
+        "field": "experience.employment_details.current.title",
+        "type": "(.)",
+        "value": "Backend Engineer",
+      },
+    ],
+    "op": "and",
+  },
+  "unenforceable": [
+    {
+      "description": "Require (other): "remote"",
+      "reason": "Condition category 'other' cannot be mapped to a Crustdata field.",
+    },
+  ],
+}
+`;

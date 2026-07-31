@@ -32,6 +32,7 @@ import {
   parseLocationForFilter,
   extractCanonicalCountry,
 } from "../_shared/crustdataClient.ts";
+import { normalizeLinkedinUrl } from "../_shared/normalizeLinkedinUrl.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY");
@@ -416,7 +417,7 @@ Deno.serve(async (req: Request) => {
     const seen = new Set<string>();
     const merged: RawCandidate[] = [];
     for (const c of [...benchCandidates, ...rawCandidates]) {
-      const key = c.linkedin_url || c.id;
+      const key = (normalizeLinkedinUrl(c.linkedin_url) ?? c.id) || c.id;
       if (seen.has(key)) continue;
       seen.add(key);
       merged.push(c);
@@ -432,7 +433,7 @@ Deno.serve(async (req: Request) => {
       );
       crustdataNote = crustdataResult.note;
       for (const c of crustdataResult.candidates) {
-        const key = c.linkedin_url || c.id;
+        const key = (normalizeLinkedinUrl(c.linkedin_url) ?? c.id) || c.id;
         if (seen.has(key)) continue;
         seen.add(key);
         merged.push(c);
@@ -511,8 +512,22 @@ Deno.serve(async (req: Request) => {
       // non-fatal
     }
 
+    // Second-pass content-fingerprint dedup: catches the same person appearing
+    // with different IDs and different linkedin URL formats.  Key = normalized
+    // name + company (lowercase).  Skip profiles where both are absent.
+    const seenContent = new Set<string>();
+    const dedupedMerged = merged.filter((c) => {
+      const name = (c.full_name ?? "").toLowerCase().trim();
+      const company = (c.job_company_name ?? "").toLowerCase().trim();
+      if (!name && !company) return true; // can't fingerprint → keep
+      const fp = `${name}|${company}`;
+      if (seenContent.has(fp)) return false;
+      seenContent.add(fp);
+      return true;
+    });
+
     const ranked = await rankCandidates(
-      merged,
+      dedupedMerged,
       roleBrief,
       authHeader,
       storedSearchIntent,
@@ -525,7 +540,7 @@ Deno.serve(async (req: Request) => {
     await upsertCacheRow(
       deal_id,
       {
-        payload: merged,
+        payload: dedupedMerged,
         ranked,
         cursor: 0,
         negative_reasons: [],
@@ -537,7 +552,7 @@ Deno.serve(async (req: Request) => {
 
     const cacheForBatch: CacheRow = {
       deal_id,
-      payload: merged,
+      payload: dedupedMerged,
       ranked,
       cursor: 0,
       negative_reasons: [],

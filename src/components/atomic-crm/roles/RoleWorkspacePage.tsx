@@ -7,6 +7,10 @@ import {
   Archive,
   ChevronLeft,
   ChevronRight,
+  Link2,
+  MoreHorizontal,
+  PauseCircle,
+  PlayCircle,
   Settings,
   Sparkles,
   Upload,
@@ -32,6 +36,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
@@ -653,6 +664,9 @@ const RoleWorkspaceContent = ({ dealId }: { dealId: string }) => {
               actionBusy={approvalBusy || commandBusy}
               onCalibrationYes={handleCalibrationYes}
               onCalibrationNo={handleCalibrationNo}
+              hideCardTurns={
+                lastBatch !== null && lastBatch.candidates.length > 0
+              }
             />
           </div>
 
@@ -966,6 +980,12 @@ const RoleWorkspaceHeader = ({
     }
   };
 
+  const stateText = deal.sourcing_paused
+    ? "Paused"
+    : hasSearchRun
+      ? "Actively searching"
+      : "Ready to search";
+
   return (
     <div className="flex items-start justify-between gap-3">
       <div className="min-w-0">
@@ -976,14 +996,7 @@ const RoleWorkspaceHeader = ({
           <Badge variant="outline" className="text-xs">
             {findDealLabel(dealStages, deal.stage)}
           </Badge>
-          {deal.sourcing_paused && (
-            <Badge
-              variant="secondary"
-              className="text-xs text-amber-700 bg-amber-100 border-amber-200"
-            >
-              Sourcing paused
-            </Badge>
-          )}
+          <span className="text-xs">{stateText}</span>
           {deal.expected_closing_date &&
             isValid(new Date(deal.expected_closing_date)) && (
               <span>
@@ -994,89 +1007,86 @@ const RoleWorkspaceHeader = ({
       </div>
 
       <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
-        {/* Add N confident candidates — only when cache has unreviewed people */}
+        {/* Situational: add N confident candidates when cache has unreviewed */}
         {nConfident > 0 && (
           <Button
             size="sm"
+            variant="outline"
             onClick={onAddNConfident}
             disabled={commandBusy}
             className="text-xs"
           >
             <Sparkles className="h-3.5 w-3.5 mr-1" />
-            Add {nConfident} confident candidate{nConfident === 1 ? "" : "s"}
+            Add {nConfident} candidate{nConfident === 1 ? "" : "s"}
           </Button>
         )}
 
-        {/* Continue search — shown when any search has run */}
+        {/* Situational: continue / show more when a search has run */}
         {hasSearchRun && (
           <Button
             size="sm"
-            variant={hasCacheToken ? "default" : "outline"}
+            variant="outline"
             onClick={onContinueSearch}
             disabled={commandBusy}
             className="text-xs"
           >
             <Sparkles className="h-3.5 w-3.5 mr-1" />
-            {hasCacheToken ? "Show more candidates" : "Continue search"}
+            {hasCacheToken ? "Show more" : "Continue search"}
           </Button>
         )}
 
-        {/* Add candidates */}
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={onAddCandidates}
-          className="text-xs"
-        >
+        {/* Primary CTA — always visible */}
+        <Button size="sm" onClick={onAddCandidates} className="text-xs">
           <UserPlus className="h-3.5 w-3.5 mr-1" />
           Add candidates
         </Button>
 
-        {/* Pause / Resume sourcing */}
-        <Button
-          size="sm"
-          variant={deal.sourcing_paused ? "destructive" : "ghost"}
-          onClick={onToggleSourcingPause}
-          className="text-xs px-2"
-          title={deal.sourcing_paused ? "Resume sourcing" : "Pause sourcing"}
-        >
-          {deal.sourcing_paused ? "Resume sourcing" : "Pause sourcing"}
-        </Button>
-
-        {/* Copy application link */}
-        {deal.public_application_token && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleCopyApplicationLink}
-            className="text-xs"
-          >
-            {linkCopied ? "Copied!" : "Copy link"}
-          </Button>
-        )}
-
-        {/* Role settings */}
-        <Button
-          variant="ghost"
-          size="sm"
-          aria-label="Role settings"
-          onClick={onSettings}
-          className="px-2"
-        >
-          <Settings className="h-4 w-4" />
-        </Button>
-
-        {/* Archive role */}
-        <Button
-          variant="ghost"
-          size="sm"
-          aria-label="Archive role"
-          onClick={onArchive}
-          className="px-2 text-muted-foreground hover:text-destructive"
-          title="Archive role"
-        >
-          <Archive className="h-4 w-4" />
-        </Button>
+        {/* Overflow menu — secondary actions */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label="More options"
+              className="px-2"
+            >
+              <MoreHorizontal className="h-4 w-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-48">
+            <DropdownMenuItem onClick={onToggleSourcingPause}>
+              {deal.sourcing_paused ? (
+                <>
+                  <PlayCircle className="h-4 w-4 mr-2" />
+                  Resume sourcing
+                </>
+              ) : (
+                <>
+                  <PauseCircle className="h-4 w-4 mr-2" />
+                  Pause sourcing
+                </>
+              )}
+            </DropdownMenuItem>
+            {deal.public_application_token && (
+              <DropdownMenuItem onClick={handleCopyApplicationLink}>
+                <Link2 className="h-4 w-4 mr-2" />
+                {linkCopied ? "Copied!" : "Copy application link"}
+              </DropdownMenuItem>
+            )}
+            <DropdownMenuItem onClick={onSettings}>
+              <Settings className="h-4 w-4 mr-2" />
+              Role settings
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onClick={onArchive}
+              className="text-destructive focus:text-destructive"
+            >
+              <Archive className="h-4 w-4 mr-2" />
+              Archive role
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </div>
   );
@@ -1606,8 +1616,6 @@ const RoleMemoryPanel = ({
     }
   };
 
-  const dealRecord = deal as unknown as Record<string, unknown> | undefined;
-
   return (
     <div className="flex flex-col h-full">
       {/* Panel header */}
@@ -1735,30 +1743,6 @@ const RoleMemoryPanel = ({
                   sourcing to auto-generate them.
                 </p>
               )}
-            </div>
-          </>
-        )}
-
-        {/* Role must-haves from deal */}
-        {((dealRecord?.must_have_keywords as string[] | undefined) ?? [])
-          .length > 0 && (
-          <>
-            <Separator />
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
-                Must-haves
-              </p>
-              <div className="flex flex-wrap gap-1">
-                {(dealRecord!.must_have_keywords as string[]).map((k) => (
-                  <Badge
-                    key={k}
-                    variant="outline"
-                    className="text-xs py-0 break-words max-w-full"
-                  >
-                    {k}
-                  </Badge>
-                ))}
-              </div>
             </div>
           </>
         )}
